@@ -33,3 +33,6 @@ yarn-error.log*
 .vscode/
 *.swp
 *.tsbuildinfo
+
+# Claude Code session metadata (per-machine, not for the repo)
+.claude/
