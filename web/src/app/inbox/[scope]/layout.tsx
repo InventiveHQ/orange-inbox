@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import { listDomainsForUser, listMailboxesForUser, listThreads } from "@/lib/queries";
 import { listIdentities } from "@/lib/identities";
@@ -18,11 +19,13 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, mailboxes, identities] = await Promise.all([
+  const [domains, mailboxes, identities, cookieStore] = await Promise.all([
     listDomainsForUser(user.id),
     listMailboxesForUser(user.id),
     listIdentities(user.id),
+    cookies(),
   ]);
+  const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
 
   // Validate the scope: "all", "drafts", "contacts", "templates", or a mailbox
   // the user has access to. Anything else falls back to "all" rather than
@@ -47,7 +50,12 @@ export default async function InboxLayout({
     return (
       <ComposeProvider identities={identities}>
         <div className="flex h-screen">
-          <Sidebar domains={[]} mailboxes={[]} scope={effectiveScope} />
+          <Sidebar
+            domains={[]}
+            mailboxes={[]}
+            scope={effectiveScope}
+            initialCollapsed={sidebarCollapsed}
+          />
           <FirstMailboxPrompt />
         </div>
       </ComposeProvider>
@@ -66,7 +74,12 @@ export default async function InboxLayout({
   return (
     <ComposeProvider identities={identities}>
       <div className="flex h-screen">
-        <Sidebar domains={domains} mailboxes={mailboxes} scope={effectiveScope} />
+        <Sidebar
+          domains={domains}
+          mailboxes={mailboxes}
+          scope={effectiveScope}
+          initialCollapsed={sidebarCollapsed}
+        />
         {!isFullPage && (
           <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
             <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
