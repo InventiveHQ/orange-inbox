@@ -1,21 +1,34 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
+import { listMailboxesForUser } from "@/lib/queries";
 import { searchThreads, type SearchResult } from "@/lib/search";
 import { formatThreadDate, senderLabel } from "@/lib/format";
 import SearchBar from "@/components/SearchBar";
 
 interface Props {
-  searchParams: Promise<{ q?: string | string[] }>;
+  searchParams: Promise<{ q?: string | string[]; scope?: string | string[] }>;
 }
 
 export default async function SearchPage(props: Props) {
   const sp = await props.searchParams;
   const q = typeof sp.q === "string" ? sp.q : "";
+  const rawScope = typeof sp.scope === "string" ? sp.scope : "";
 
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const results = q.trim() ? await searchThreads(user.id, q) : [];
+  const mailboxes = await listMailboxesForUser(user.id);
+  // Reject scope IDs the user can't read — fall back to "all".
+  const scope = mailboxes.some(m => m.id === rawScope) ? rawScope : "all";
+  const searchMailboxes = mailboxes.map(mb => ({
+    id: mb.id,
+    local_part: mb.local_part,
+    domain_name: mb.domain_name,
+  }));
+
+  const results = q.trim()
+    ? await searchThreads(user.id, q, scope === "all" ? {} : { mailboxId: scope })
+    : [];
 
   return (
     <div className="flex flex-col h-screen">
@@ -27,7 +40,7 @@ export default async function SearchPage(props: Props) {
           ← Inbox
         </Link>
         <div className="flex-1 max-w-2xl">
-          <SearchBar defaultQuery={q} />
+          <SearchBar defaultQuery={q} defaultScope={scope} mailboxes={searchMailboxes} />
         </div>
       </header>
 

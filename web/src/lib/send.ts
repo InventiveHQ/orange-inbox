@@ -1,4 +1,5 @@
 import { getDb, getEnv } from "./db";
+import { htmlToText, looksLikeHtml } from "./html-text";
 import { findIdentity, fullAddress, type Identity } from "./identities";
 import { recordSendRecipients } from "./contacts";
 import {
@@ -107,13 +108,15 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     }
   }
 
-  // Recipient-side rendering is much nicer when an HTML alternative ships
-  // alongside the text — paragraph breaks, line wraps, and plain links
-  // render properly instead of looking like notepad output. We auto-build a
-  // safe HTML version from the plain-text body (escape, p-wrap on blank
-  // lines, linkify URLs) so the user gets this for free without a WYSIWYG
-  // editor in the composer.
-  const html = buildHtmlFromText(input.body);
+  // The composer (Lexical) ships HTML; legacy plain-text drafts/templates may
+  // still arrive as raw text. We send a multipart/alternative either way:
+  //   - HTML body → derive plain text via htmlToText() for the text part,
+  //     wrap fragment in a minimal <html><body> shell for client rendering.
+  //   - Plain-text body → escape + linkify + paragraph-wrap into HTML.
+  // Either way the recipient sees something reasonable in any client.
+  const isHtml = looksLikeHtml(input.body);
+  const textBody = isHtml ? htmlToText(input.body) : input.body;
+  const html = isHtml ? wrapHtmlFragment(input.body) : buildHtmlFromText(input.body);
 
   const sendBuilder = {
     from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
@@ -121,7 +124,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     cc: input.cc?.length ? input.cc : undefined,
     bcc: input.bcc?.length ? input.bcc : undefined,
     subject: input.subject || "(no subject)",
-    text: input.body,
+    text: textBody,
     html,
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
@@ -152,7 +155,8 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     cc: input.cc ?? [],
     bcc: input.bcc ?? [],
     subject: input.subject,
-    text: input.body,
+    text: textBody,
+    html: isHtml ? input.body : null,
     headers,
     sentAt: now,
   };
@@ -164,7 +168,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   const threadId = parentMessage?.thread_id ?? crypto.randomUUID();
   const isNewThread = !parentMessage;
   const subjectNormalized = normalizeSubject(input.subject);
-  const snippet = input.body.replace(/\s+/g, " ").trim().slice(0, 200);
+  const snippet = textBody.replace(/\s+/g, " ").trim().slice(0, 200);
 
   // Pick the mail DB this message lands in:
   //   - reply: same DB as the parent thread (resolved via thread_locations,
@@ -225,7 +229,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
         now,
         snippet,
         rawKey,
-        input.body,
+        textBody,
         userId,
       ),
   );
@@ -359,6 +363,16 @@ async function loadReplyParent(parentId: string | undefined): Promise<ParentInfo
     }
   }
   return { parentMessage: null, parentReferences: [] };
+}
+
+// Wrap an editor-emitted HTML fragment in a minimal <html><body> shell so
+// recipient clients have a self-contained document. Lexical produces a
+// fragment of <p>/<ul>/<ol>/<a>/<b>/<i> elements without any document chrome.
+function wrapHtmlFragment(fragment: string): string {
+  return `<!DOCTYPE html>
+<html><body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111;line-height:1.45;">
+${fragment}
+</body></html>`;
 }
 
 // Build an HTML alternative from the plain-text body. Steps:

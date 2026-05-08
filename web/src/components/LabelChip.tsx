@@ -1,6 +1,5 @@
-// Pure-presentation chip used in ThreadList and ManageLabelsDialog. Color
-// can be any CSS color string the API accepts; null falls back to a neutral
-// tint that adapts to dark mode.
+// Pure-presentation chip. Color can be any CSS color string the API accepts;
+// null falls back to a neutral tint that adapts to dark mode.
 
 interface Props {
   name: string;

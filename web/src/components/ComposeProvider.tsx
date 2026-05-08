@@ -14,6 +14,8 @@ import { useRouter } from "next/navigation";
 import type { Identity } from "@/lib/identities";
 import type { ContactRow } from "@/lib/contacts";
 import type { TemplateRow } from "@/lib/templates";
+import { looksLikeHtml } from "@/lib/html-text";
+import RichTextEditor from "./RichTextEditor";
 
 export interface ComposeOpenArgs {
   replyToMessageId?: string;
@@ -38,24 +40,26 @@ interface ComposeCtx {
   open: (args?: ComposeOpenArgs) => void;
 }
 
-// The composer is text-only, so we coerce mailbox.signature_html (HTML) into
-// readable plain text. Drops tags and decodes the most common entities.
-function stripHtmlToText(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+// Wrap a plain-text fragment as an HTML <p> block, preserving newlines as
+// <br>. Used so legacy plain-text drafts/prefills load cleanly into the
+// rich-text editor.
+function plainTextToHtml(text: string): string {
+  if (!text) return "";
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped
+    .split(/\n{2,}/)
+    .map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+// Coerce arbitrary input (HTML or plain text) into HTML so it can be loaded
+// into the Lexical editor uniformly.
+function toHtml(input: string): string {
+  if (!input) return "";
+  return looksLikeHtml(input) ? input : plainTextToHtml(input);
 }
 
 function formatBytes(n: number): string {
@@ -119,14 +123,15 @@ function ComposeModal({
 }) {
   const router = useRouter();
   const initial = useMemo(() => pickInitialIdentity(identities, args), [identities, args]);
-  // Initial body = bodyPrefill + the chosen identity's signature (when set).
-  // Body state is only seeded once — switching the From identity mid-compose
-  // won't swap the signature (v1 limitation).
-  const initialBody = useMemo(() => {
-    const prefill = args.bodyPrefill ?? "";
-    const sig = initial?.signature_html ? stripHtmlToText(initial.signature_html) : "";
-    if (!sig) return prefill;
-    return prefill ? `${prefill}\n\n-- \n${sig}` : `\n\n-- \n${sig}`;
+  // Initial body (HTML) = prefill HTML + the chosen identity's signature
+  // separator + signature_html. Body state is only seeded once — switching
+  // From mid-compose won't swap the signature (v1 limitation).
+  const initialBodyHtml = useMemo(() => {
+    const prefillHtml = toHtml(args.bodyPrefill ?? "");
+    const sig = initial?.signature_html ?? "";
+    if (!sig) return prefillHtml;
+    const sepAndSig = `<p>-- </p>${sig}`;
+    return prefillHtml ? `${prefillHtml}<p><br></p>${sepAndSig}` : `<p><br></p>${sepAndSig}`;
   }, [args.bodyPrefill, initial]);
 
   const [fromId, setFromId] = useState(initial?.mailbox_id ?? "");
@@ -134,7 +139,13 @@ function ComposeModal({
   const [cc, setCc] = useState((args.ccAddrs ?? []).join(", "));
   const [showCc, setShowCc] = useState((args.ccAddrs ?? []).length > 0);
   const [subject, setSubject] = useState(args.subject ?? "");
-  const [body, setBody] = useState(initialBody);
+  // bodyHtml is what we send + persist; bodyText is the live plain-text
+  // projection used for "is empty?" gating. Editor seeds from `seedHtml`,
+  // and bumping `seedKey` resets it (used by template insertion).
+  const [bodyHtml, setBodyHtml] = useState(initialBodyHtml);
+  const [bodyText, setBodyText] = useState("");
+  const [seedHtml, setSeedHtml] = useState(initialBodyHtml);
+  const [seedKey, setSeedKey] = useState(0);
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -178,7 +189,7 @@ function ComposeModal({
     to.trim() !== "" ||
     cc.trim() !== "" ||
     subject.trim() !== "" ||
-    body.trim() !== "";
+    bodyText.trim() !== "";
 
   function payload() {
     return {
@@ -186,7 +197,7 @@ function ComposeModal({
       to: splitList(to),
       cc: splitList(cc),
       subject,
-      body,
+      body: bodyHtml,
       reply_to_message_id: args.replyToMessageId ?? null,
     };
   }
@@ -231,7 +242,7 @@ function ComposeModal({
       setError("Add at least one recipient");
       return;
     }
-    if (!body.trim()) {
+    if (!bodyText.trim()) {
       setError("Body can't be empty");
       return;
     }
@@ -245,7 +256,7 @@ function ComposeModal({
           to: toList,
           cc: ccList.length ? ccList : undefined,
           subject,
-          body,
+          body: bodyHtml,
           reply_to_message_id: args.replyToMessageId,
           draft_id: draftId ?? undefined,
           attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
@@ -314,7 +325,7 @@ function ComposeModal({
       setError("Add at least one recipient");
       return;
     }
-    if (!body.trim()) {
+    if (!bodyText.trim()) {
       setError("Body can't be empty");
       return;
     }
@@ -331,7 +342,7 @@ function ComposeModal({
           to: toList,
           cc: ccList.length ? ccList : undefined,
           subject,
-          body,
+          body: bodyHtml,
           reply_to_message_id: args.replyToMessageId,
           draft_id: draftId ?? undefined,
           attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
@@ -360,10 +371,11 @@ function ComposeModal({
       subject,
     };
     if (t.subject_template) setSubject(fillTemplate(t.subject_template, ctx));
-    setBody(prev => {
-      const filled = fillTemplate(t.body_template, ctx);
-      return prev.trim() ? `${prev}\n\n${filled}` : filled;
-    });
+    const filledHtml = toHtml(fillTemplate(t.body_template, ctx));
+    const next = bodyHtml.trim() ? `${bodyHtml}<p><br></p>${filledHtml}` : filledHtml;
+    setSeedHtml(next);
+    setBodyHtml(next);
+    setSeedKey(k => k + 1);
   }
 
   if (minimized) {
@@ -452,13 +464,18 @@ function ComposeModal({
         </Field>
       </div>
 
-      <textarea
-        value={body}
-        onChange={e => setBody(e.target.value)}
-        rows={12}
-        placeholder="Write your message…"
-        className="block w-full px-4 py-3 bg-transparent border-t border-neutral-200 dark:border-neutral-800 focus:outline-none resize-none text-sm leading-relaxed"
-      />
+      <div className="border-t border-neutral-200 dark:border-neutral-800">
+        <RichTextEditor
+          initialHtml={seedHtml}
+          resetKey={seedKey}
+          minHeight={220}
+          placeholder="Write your message…"
+          onChange={(html, text) => {
+            setBodyHtml(html);
+            setBodyText(text);
+          }}
+        />
+      </div>
 
       {(attachments.length > 0 || uploadError) && (
         <div className="px-4 py-2 border-t border-neutral-200 dark:border-neutral-800 space-y-2">

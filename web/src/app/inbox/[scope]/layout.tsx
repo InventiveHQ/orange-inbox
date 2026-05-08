@@ -28,17 +28,19 @@ export default async function InboxLayout({
   ]);
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
 
-  // Validate the scope: "all", "drafts", "contacts", "templates", or a mailbox
-  // the user has access to. Anything else falls back to "all" rather than
-  // 404'ing the layout.
-  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates"]);
+  // Validate the scope: "all", "drafts", "contacts", "templates", "settings",
+  // or a mailbox the user has access to. Anything else falls back to "all"
+  // rather than 404'ing the layout.
+  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates", "settings"]);
   const isValidScope = SPECIAL_SCOPES.has(scope) || mailboxes.some(mb => mb.id === scope);
   const effectiveScope = isValidScope ? scope : "all";
 
   const isDrafts = effectiveScope === "drafts";
-  // Contacts and templates use the full main area — no middle column, no
-  // thread/draft fetch needed.
-  const isFullPage = effectiveScope === "contacts" || effectiveScope === "templates";
+  // Full-page scopes own the main area — no middle column, no thread/draft fetch.
+  const isFullPage =
+    effectiveScope === "contacts" ||
+    effectiveScope === "templates" ||
+    effectiveScope === "settings";
   const mailboxId =
     effectiveScope === "all" || isDrafts || isFullPage ? undefined : effectiveScope;
 
@@ -47,19 +49,21 @@ export default async function InboxLayout({
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
 
-  if (domains.length === 0) {
+  if (domains.length === 0 && effectiveScope !== "settings") {
     return (
       <ComposeProvider identities={identities}>
-        <div className="flex flex-col h-screen">
-          <TopBar />
-          <div className="flex flex-1 min-h-0">
-            <Sidebar
-              domains={[]}
-              mailboxes={[]}
-              scope={effectiveScope}
-              initialCollapsed={sidebarCollapsed}
-            />
-            <FirstMailboxPrompt />
+        <div className="flex h-screen">
+          <Sidebar
+            domains={[]}
+            mailboxes={[]}
+            scope={effectiveScope}
+            initialCollapsed={sidebarCollapsed}
+          />
+          <div className="flex flex-col flex-1 min-w-0">
+            <TopBar mailboxes={[]} scope={effectiveScope} />
+            <div className="flex flex-1 min-h-0">
+              <FirstMailboxPrompt />
+            </div>
           </div>
         </div>
       </ComposeProvider>
@@ -75,45 +79,59 @@ export default async function InboxLayout({
           return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
         })();
 
+  const searchMailboxes = mailboxes.map(mb => ({
+    id: mb.id,
+    local_part: mb.local_part,
+    domain_name: mb.domain_name,
+  }));
+
   return (
     <ComposeProvider identities={identities}>
-      <div className="flex flex-col h-screen">
-        <TopBar />
-        <div className="flex flex-1 min-h-0">
-          <Sidebar
-            domains={domains}
-            mailboxes={mailboxes}
-            scope={effectiveScope}
-            initialCollapsed={sidebarCollapsed}
-          />
-          {!isFullPage && (
-            <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
-              <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-                {scopeLabel}
-              </header>
-              {isDrafts ? (
-                <DraftsList drafts={drafts} />
-              ) : (
-                <ThreadList
-                  threads={threads}
-                  scope={effectiveScope}
-                  showDomain={effectiveScope === "all"}
-                />
-              )}
-            </section>
-          )}
-          <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+      <div className="flex h-screen">
+        <Sidebar
+          domains={domains}
+          mailboxes={mailboxes}
+          scope={effectiveScope}
+          initialCollapsed={sidebarCollapsed}
+        />
+        <div className="flex flex-col flex-1 min-w-0">
+          <TopBar mailboxes={searchMailboxes} scope={effectiveScope} />
+          <div className="flex flex-1 min-h-0">
+            {!isFullPage && (
+              <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
+                <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
+                  {scopeLabel}
+                </header>
+                {isDrafts ? (
+                  <DraftsList drafts={drafts} />
+                ) : (
+                  <ThreadList
+                    threads={threads}
+                    scope={effectiveScope}
+                    showDomain={effectiveScope === "all"}
+                  />
+                )}
+              </section>
+            )}
+            <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+          </div>
         </div>
       </div>
     </ComposeProvider>
   );
 }
 
-function TopBar() {
+interface SearchMailbox {
+  id: string;
+  local_part: string;
+  domain_name: string;
+}
+
+function TopBar({ mailboxes, scope }: { mailboxes: SearchMailbox[]; scope: string }) {
   return (
     <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-4 py-2">
       <div className="mx-auto max-w-3xl">
-        <SearchBar />
+        <SearchBar mailboxes={mailboxes} defaultScope={scope} />
       </div>
     </div>
   );
@@ -140,10 +158,11 @@ function FirstMailboxPrompt() {
     <div className="flex-1 flex items-center justify-center text-center px-6">
       <div className="max-w-md">
         <h2 className="text-lg font-semibold mb-2">Add your first mail domain</h2>
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          Use the “+ Add mail domain” button in the sidebar. Adding a domain creates a
-          default catch-all mailbox you own. Once Email Routing on that domain points at
-          the orange-inbox-email Worker, mail starts landing here.
+        <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
+          Open <a href="/inbox/settings" className="text-[var(--color-brand)] underline">Settings</a> to
+          add a mail domain. Adding a domain creates a default catch-all mailbox you own. Once
+          Email Routing on that domain points at the orange-inbox-email Worker, mail starts
+          landing here.
         </p>
       </div>
     </div>

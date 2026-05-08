@@ -3,11 +3,9 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
-import AddDomainButton from "./AddDomainButton";
 import AddMailboxButton from "./AddMailboxButton";
 import CapacityIndicator from "./CapacityIndicator";
 import ComposeButton from "./ComposeButton";
-import ManageLabelsButton from "./ManageLabelsButton";
 import ManageMailboxButton from "./ManageMailboxButton";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
@@ -104,6 +102,13 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           icon={<ScheduledIcon />}
           collapsed={collapsed}
         />
+        <SpecialLink
+          href="/inbox/settings"
+          label="Settings"
+          active={scope === "settings"}
+          icon={<SettingsIcon />}
+          collapsed={collapsed}
+        />
 
         {domains.map(d => {
           const list = byDomain.get(d.name) ?? [];
@@ -138,13 +143,6 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
       <div className="border-t border-neutral-200 dark:border-neutral-800">
         <CapacityIndicator collapsed={collapsed} />
       </div>
-
-      {!collapsed && (
-        <div className="p-2 border-t border-neutral-200 dark:border-neutral-800 space-y-1">
-          <ManageLabelsButton />
-          <AddDomainButton />
-        </div>
-      )}
     </aside>
   );
 }
@@ -346,6 +344,14 @@ function ScheduledIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.75 3.5v3.69l2.53 1.46a.75.75 0 1 1-.75 1.3L7.625 9.16A.75.75 0 0 1 7.25 8.5v-4a.75.75 0 0 1 1.5 0Z" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M9.405 1.05a.75.75 0 0 0-.81 0l-.97.583a.75.75 0 0 1-.69.045l-1.05-.45a.75.75 0 0 0-.79.146l-.834.835a.75.75 0 0 1-.598.218l-1.13-.084a.75.75 0 0 0-.79.554l-.314 1.087a.75.75 0 0 1-.45.5l-1.04.42a.75.75 0 0 0-.45.79l.187 1.115a.75.75 0 0 1-.146.62l-.69.89a.75.75 0 0 0 0 .91l.69.89a.75.75 0 0 1 .146.62l-.187 1.115a.75.75 0 0 0 .45.79l1.04.42a.75.75 0 0 1 .45.5l.314 1.087a.75.75 0 0 0 .79.554l1.13-.084a.75.75 0 0 1 .598.218l.834.835a.75.75 0 0 0 .79.146l1.05-.45a.75.75 0 0 1 .69.045l.97.583a.75.75 0 0 0 .81 0l.97-.583a.75.75 0 0 1 .69-.045l1.05.45a.75.75 0 0 0 .79-.146l.834-.835a.75.75 0 0 1 .598-.218l1.13.084a.75.75 0 0 0 .79-.554l.314-1.087a.75.75 0 0 1 .45-.5l1.04-.42a.75.75 0 0 0 .45-.79l-.187-1.115a.75.75 0 0 1 .146-.62l.69-.89a.75.75 0 0 0 0-.91l-.69-.89a.75.75 0 0 1-.146-.62l.187-1.115a.75.75 0 0 0-.45-.79l-1.04-.42a.75.75 0 0 1-.45-.5l-.314-1.087a.75.75 0 0 0-.79-.554l-1.13.084a.75.75 0 0 1-.598-.218l-.834-.835a.75.75 0 0 0-.79-.146l-1.05.45a.75.75 0 0 1-.69-.045l-.97-.583ZM8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
     </svg>
   );
 }

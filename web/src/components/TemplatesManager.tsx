@@ -4,6 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { TemplateRow } from "@/lib/templates";
 import type { Identity } from "@/lib/identities";
+import { htmlToText } from "@/lib/html-text";
+import RichTextEditor from "./RichTextEditor";
 
 interface Props {
   templates: TemplateRow[];
@@ -56,7 +58,7 @@ export default function TemplatesManager({ templates, identities }: Props) {
                   </div>
                 )}
                 <div className="text-xs text-neutral-700 dark:text-neutral-300 line-clamp-2 whitespace-pre-wrap">
-                  {t.body_template}
+                  {htmlToText(t.body_template)}
                 </div>
               </div>
               <div className="flex gap-2 shrink-0">
@@ -259,12 +261,14 @@ function TemplateDialog({
             />
           </Row>
           <Row label="Body">
-            <textarea
-              value={bodyTemplate}
-              onChange={e => setBodyTemplate(e.target.value)}
-              rows={8}
-              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-1 font-mono text-xs"
-            />
+            <div className="rounded-md border border-neutral-300 dark:border-neutral-700 overflow-hidden">
+              <RichTextEditor
+                initialHtml={editing?.body_template ?? ""}
+                placeholder="Write the template body…"
+                minHeight={180}
+                onChange={html => setBodyTemplate(html)}
+              />
+            </div>
           </Row>
           <div className="text-[11px] text-neutral-500">{PLACEHOLDER_HINT}</div>
           {error && <div className="text-xs text-red-600">{error}</div>}
