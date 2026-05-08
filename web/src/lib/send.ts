@@ -2,13 +2,18 @@ import { createMimeMessage } from "mimetext";
 import { getDb, getEnv } from "./db";
 import { findIdentity, fullAddress, type Identity } from "./identities";
 
-// `cloudflare:email` is a Workers-runtime built-in. If imported at the top
-// level, Next.js tries to load it during build-time page data collection and
-// crashes (Node can't resolve it). Concatenating the specifier defeats Turbopack's
-// static analysis so the import only runs in the Worker context.
+// `cloudflare:email` is a Workers-runtime built-in. We need it at runtime only:
+//   - At build time, Next.js's page-data collector runs in Node and can't resolve it.
+//   - In the OpenNext bundle, a plain `await import(specifier)` gets compiled to
+//     `require()`, which Workers doesn't support for runtime built-ins.
+// `new Function("return import(...)")` keeps the import opaque to the bundler
+// (the specifier is just a string inside the closure), so it survives bundling
+// as a real ESM dynamic import that the Workers runtime resolves at request time.
+const importCloudflareEmail = new Function('return import("cloudflare:email")') as () => Promise<
+  typeof import("cloudflare:email")
+>;
 async function getEmailMessageCtor(): Promise<typeof import("cloudflare:email").EmailMessage> {
-  const spec = "cloudflare" + ":email";
-  const mod = (await import(/* @vite-ignore */ spec)) as typeof import("cloudflare:email");
+  const mod = await importCloudflareEmail();
   return mod.EmailMessage;
 }
 
