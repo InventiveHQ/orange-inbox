@@ -43,6 +43,15 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
                 >
                   {sender}
                 </span>
+                {t.starred === 1 && (
+                  <span
+                    className="shrink-0 text-xs text-yellow-500"
+                    aria-label="Starred"
+                    title="Starred"
+                  >
+                    ★
+                  </span>
+                )}
                 <span className="shrink-0 text-xs text-neutral-500">{formatThreadDate(t.last_message_at)}</span>
               </div>
               <div className={`truncate text-sm ${isUnread ? "font-medium" : "text-neutral-700 dark:text-neutral-300"}`}>

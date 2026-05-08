@@ -33,6 +33,17 @@ export async function storeMessage(
     customMetadata: { mailbox: recipient.mailboxId, messageId },
   });
 
+  // If the message has an HTML body, store it alongside the raw .eml in R2.
+  // The DB row keeps the key; the body itself can be huge, so it lives in R2.
+  let htmlR2Key: string | null = null;
+  if (parsed.html) {
+    htmlR2Key = `mailbox/${recipient.mailboxId}/${messageId}.html`;
+    await env.RAW_MAIL.put(htmlR2Key, parsed.html, {
+      httpMetadata: { contentType: "text/html" },
+      customMetadata: { mailbox: recipient.mailboxId, messageId },
+    });
+  }
+
   const attachmentInserts: Array<{ id: string; r2Key: string; a: ParsedMessage["attachments"][number] }> = [];
   for (const a of parsed.attachments) {
     const id = crypto.randomUUID();
@@ -63,8 +74,8 @@ export async function storeMessage(
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
-          subject, date, snippet, raw_r2_key, text_body, read, starred)
-         VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+          subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred)
+         VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
       )
       .bind(
         messageId,
@@ -82,6 +93,7 @@ export async function storeMessage(
         dateSeconds,
         parsed.snippet,
         rawKey,
+        htmlR2Key,
         parsed.text ?? null,
       ),
   );
