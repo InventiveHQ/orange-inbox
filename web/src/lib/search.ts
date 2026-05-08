@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { getActiveMailDbs } from "./mail-db";
 
 export interface SearchResult {
   // Thread fields — enough to render a result row that links to the thread.
@@ -47,9 +48,6 @@ function sanitiseQuery(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  // Conservative "safe" character set. Lower-case and upper-case letters,
-  // digits, whitespace, and a handful of punctuation that's harmless inside
-  // a bare FTS5 query.
   const SAFE_RE = /^[\p{L}\p{N}\s\-_.@]+$/u;
   if (SAFE_RE.test(trimmed)) {
     return trimmed;
@@ -63,89 +61,153 @@ function sanitiseQuery(raw: string): string | null {
   return tokens.join(" ");
 }
 
-interface Row {
-  thread_id: string;
-  subject_normalized: string;
-  last_message_at: number;
-  mailbox_id: string;
-  mailbox_local_part: string;
-  domain_name: string;
+interface MailDbHit {
   message_id: string;
-  message_subject: string | null;
+  thread_id: string;
+  mailbox_id: string;
   from_addr: string;
   from_name: string | null;
+  message_subject: string | null;
+  message_date: number;
   match_snippet: string;
 }
 
+// Fan-out search across every active mail DB. Each DB runs its own FTS
+// query (snippet() restricted to a sub-select against messages_fts only —
+// see comment in searchOneDb for the FTS5 "must-be-outermost" gotcha).
+//
+// Visibility is enforced *after* the fan-out via a single control-DB query
+// that joins user_mailbox_access — D1 has no cross-DB joins, so we can't
+// JOIN that into the FTS query directly. Same for thread metadata
+// (subject_normalized, last_message_at) which now lives on threads_index
+// in the control DB.
+//
+// For single-DB deploys this is one parallel call to one DB plus two small
+// control-DB lookups — same cost as the old single-query path, give or take.
 export async function searchThreads(
   userId: string,
   query: string,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; mailboxId?: string } = {},
 ): Promise<SearchResult[]> {
   const match = sanitiseQuery(query);
   if (!match) return [];
 
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const mailDbs = await getActiveMailDbs();
 
+  // Per-DB FTS query. Pull `limit * 4` from each so per-thread dedup +
+  // visibility filtering still leaves enough rows.
+  const perDbLimit = limit * 4;
+  const hitsPerDb = await Promise.all(
+    mailDbs.map(({ db }) => searchOneDb(db, match, perDbLimit, opts.mailboxId)),
+  );
+
+  // Merge + sort by message_date desc.
+  const allHits = hitsPerDb.flat().sort((a, b) => b.message_date - a.message_date);
+  if (allHits.length === 0) return [];
+
+  // Resolve mailbox + domain labels and visibility from control DB. One
+  // query, keyed by the mailbox_ids that came back from the fan-out, gates
+  // visibility (only return hits on mailboxes the user can read) and gives
+  // us mailbox_local_part / domain_name without per-row lookups.
+  const mailboxIds = Array.from(new Set(allHits.map(h => h.mailbox_id)));
+  const mbPlaceholders = mailboxIds.map(() => "?").join(",");
+  const { results: mbRows } = await getDb()
+    .prepare(
+      `SELECT mb.id, mb.local_part, d.name AS domain_name
+         FROM mailboxes mb
+         INNER JOIN domains d ON d.id = mb.domain_id
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = mb.id
+        WHERE uma.user_id = ?
+          AND mb.id IN (${mbPlaceholders})`,
+    )
+    .bind(userId, ...mailboxIds)
+    .all<{ id: string; local_part: string; domain_name: string }>();
+  const mailboxMap = new Map((mbRows ?? []).map(m => [m.id, m]));
+
+  // Thread metadata from threads_index (control DB).
+  const threadIds = Array.from(new Set(allHits.map(h => h.thread_id)));
+  const tiPlaceholders = threadIds.map(() => "?").join(",");
+  const { results: tiRows } = await getDb()
+    .prepare(
+      `SELECT thread_id, subject_normalized, last_message_at
+         FROM threads_index
+        WHERE thread_id IN (${tiPlaceholders})`,
+    )
+    .bind(...threadIds)
+    .all<{ thread_id: string; subject_normalized: string; last_message_at: number }>();
+  const tiMap = new Map((tiRows ?? []).map(t => [t.thread_id, t]));
+
+  const seen = new Set<string>();
+  const out: SearchResult[] = [];
+  for (const h of allHits) {
+    if (seen.has(h.thread_id)) continue;
+    const mb = mailboxMap.get(h.mailbox_id);
+    if (!mb) continue; // mailbox not accessible to this user — drop the hit
+    const ti = tiMap.get(h.thread_id);
+    if (!ti) continue; // orphan hit (thread_index missing) — skip
+    seen.add(h.thread_id);
+    out.push({
+      thread_id: h.thread_id,
+      subject_normalized: ti.subject_normalized,
+      last_message_at: ti.last_message_at,
+      mailbox_id: h.mailbox_id,
+      mailbox_local_part: mb.local_part,
+      domain_name: mb.domain_name,
+      message_id: h.message_id,
+      message_subject: h.message_subject,
+      from_addr: h.from_addr,
+      from_name: h.from_name,
+      match_snippet: h.match_snippet,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+async function searchOneDb(
+  db: D1Database,
+  match: string,
+  limit: number,
+  mailboxId: string | undefined,
+): Promise<MailDbHit[]> {
   // FTS5 auxiliary functions like snippet() require messages_fts to be the
-  // *outermost* table reference in the SELECT they live in. Wrapping the FTS
-  // query in a CTE and then joining/aggregating from it triggers
+  // outermost source in the SELECT they live in. We keep the FTS query in a
+  // standalone subquery (only source = messages_fts) and join messages
+  // outside — this is the only structure that doesn't trip
   // "D1_ERROR: unable to use function snippet in the requested context".
-  // So we keep snippet() in an inner subquery whose only source is
-  // messages_fts, then join everything else outside.
-  //
-  // Per-thread dedup (one row per thread, latest match wins) is done in JS
-  // after the fact — keeps the SQL FTS5-clean and avoids GROUP BY across the
-  // join.
-  //
-  // snippet() args:
-  //   index column = -1  (search all indexed columns)
-  //   start/end   = <mark>...</mark>  (we control these literals; no other
-  //                                    HTML appears in snippet's output, so
-  //                                    dangerouslySetInnerHTML is safe)
-  //   ellipsis    = …
-  //   tokens      = 12
+  const mailboxFilter = mailboxId ? "AND m.mailbox_id = ?3" : "";
   const sql = `
     SELECT
       m.id          AS message_id,
       m.thread_id   AS thread_id,
+      m.mailbox_id  AS mailbox_id,
       m.from_addr   AS from_addr,
       m.from_name   AS from_name,
       m.subject     AS message_subject,
       m.date        AS message_date,
-      hit.match_snippet,
-      t.subject_normalized,
-      t.last_message_at,
-      mb.id          AS mailbox_id,
-      mb.local_part  AS mailbox_local_part,
-      d.name         AS domain_name
+      hit.match_snippet
     FROM (
       SELECT rowid,
              snippet(messages_fts, -1, '<mark>', '</mark>', '…', 12) AS match_snippet
         FROM messages_fts
-       WHERE messages_fts MATCH ?2
+       WHERE messages_fts MATCH ?1
     ) AS hit
-    INNER JOIN messages m          ON m.rowid = hit.rowid
-    INNER JOIN threads t           ON t.id = m.thread_id
-    INNER JOIN mailboxes mb        ON mb.id = t.mailbox_id
-    INNER JOIN domains d           ON d.id = mb.domain_id
-    INNER JOIN user_mailbox_access uma
-            ON uma.mailbox_id = t.mailbox_id AND uma.user_id = ?1
+    INNER JOIN messages m ON m.rowid = hit.rowid
+    WHERE 1=1 ${mailboxFilter}
     ORDER BY m.date DESC
-    LIMIT ?3
+    LIMIT ?2
   `;
-
-  const { results } = await getDb()
-    .prepare(sql)
-    .bind(userId, match, limit * 4) // pull a few extra so per-thread dedup still leaves `limit` rows
-    .all<Row & { message_date: number }>();
-  const seen = new Set<string>();
-  const out: SearchResult[] = [];
-  for (const r of results ?? []) {
-    if (seen.has(r.thread_id)) continue;
-    seen.add(r.thread_id);
-    out.push(r);
-    if (out.length >= limit) break;
+  const stmt = mailboxId
+    ? db.prepare(sql).bind(match, limit, mailboxId)
+    : db.prepare(sql).bind(match, limit);
+  try {
+    const { results } = await stmt.all<MailDbHit>();
+    return results ?? [];
+  } catch (e) {
+    // One DB hiccup shouldn't kill the whole search. Log and skip — the
+    // user gets results from the other active DBs.
+    console.error("search fan-out: per-DB query failed", e);
+    return [];
   }
-  return out;
 }

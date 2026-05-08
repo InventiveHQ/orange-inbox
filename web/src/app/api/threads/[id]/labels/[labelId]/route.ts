@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { canApplyLabelToThread } from "@/lib/labels";
+import { getMailDbForThread } from "@/lib/mail-db";
 
 export async function DELETE(
   _req: NextRequest,
@@ -17,14 +18,25 @@ export async function DELETE(
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    await getDb()
-      .prepare(
-        `DELETE FROM message_labels
-          WHERE label_id = ?1
-            AND message_id IN (SELECT id FROM messages WHERE thread_id = ?2)`,
-      )
-      .bind(labelId, threadId)
-      .run();
+    const mailDb = await getMailDbForThread(threadId);
+    const controlDb = getDb();
+
+    // Drop per-message rows (mail DB) and the listing-cache row (control).
+    // Done in parallel; no dependency between them.
+    await Promise.all([
+      mailDb
+        .prepare(
+          `DELETE FROM message_labels
+            WHERE label_id = ?1
+              AND message_id IN (SELECT id FROM messages WHERE thread_id = ?2)`,
+        )
+        .bind(labelId, threadId)
+        .run(),
+      controlDb
+        .prepare("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = ?")
+        .bind(threadId, labelId)
+        .run(),
+    ]);
 
     return NextResponse.json({ ok: true });
   } catch (e) {

@@ -15,7 +15,9 @@ and want a real inbox UI instead of forwarding everything to a third party.
 - A standalone **Email Worker** that Cloudflare Email Routing dispatches each
   inbound message to. It parses MIME, writes raw bytes to R2, and inserts
   thread/message rows into D1.
-- **D1** for metadata, **R2** for raw `.eml` and attachments, **KV** for drafts.
+- **D1** for metadata (a primary "control" DB plus zero-or-more "mail" DBs
+  that the primary fills up into — see [Storage and overflow](#storage-and-overflow)),
+  **R2** for raw `.eml` and attachments.
 - Outbound mail uses the
   [`send_email` binding](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/),
   so SPF/DKIM/DMARC are managed by Cloudflare.
@@ -196,6 +198,44 @@ appears at the top of the list.
 `./scripts/setup.sh` is the same command for first-time setup and for
 updates: it skips resource creation if things already exist and just
 applies any new migrations and redeploys both Workers.
+
+## Storage and overflow
+
+A fresh deploy uses a single D1 database for everything — the simple,
+zero-config path. D1 tops out at 10 GB per database, so for a heavy mail
+account that fills up over time. orange-inbox handles this by **adding
+overflow databases** when the primary nears capacity:
+
+- The primary DB always holds control-plane state (users, mailboxes,
+  drafts, contacts, templates, labels, the mail-DB registry, the inbox
+  listing index). Bounded data; never moves.
+- Each thread is **pinned** at creation time to whichever mail DB had
+  capacity. Replies on that thread always route back to the same DB so
+  threading never fragments.
+- Two soft levers per DB:
+  - **Soft cap** (default 8 GB): once crossed, no *new* threads route
+    here. Existing threads keep flowing in.
+  - **Hard cap** (default 9.5 GB): once crossed, no writes accepted.
+    The 1.5 GB cushion is your "expand before this fills" budget.
+- A capacity bar in the bottom-left of the sidebar tracks usage live;
+  it turns amber at 80 % of soft, red at soft, dark-red at hard.
+
+Adding overflow capacity is one command:
+
+```sh
+./scripts/provision-overflow.sh --count 5      # adds 5 mail DBs (≈ 40 GB extra)
+cd web && npm run deploy
+cd ../email-worker && npx wrangler deploy
+```
+
+The script creates each D1, applies the mail-plane bootstrap schema,
+patches `wrangler.jsonc` in both workers, and registers the new DBs in
+the primary's `mail_dbs` table. The redeploy is required — until then
+the new bindings aren't part of the runtime environment.
+
+Full details — schema, routing rules, per-DB capacity tuning,
+manual `byte_estimate` refresh — live in
+[`db/MAIL_DBS.md`](./db/MAIL_DBS.md).
 
 ## Roadmap
 

@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { canApplyLabelToThread, listThreadLabels } from "@/lib/labels";
+import { getMailDbForThread } from "@/lib/mail-db";
 
-// Thread-level labels: the schema stores label↔message rows, but Gmail-style
-// labels are conceptually thread-scoped, so applying a label here inserts
-// one message_labels row per message in the thread (and removing in the
-// sibling DELETE handler nukes them all). Listing dedupes the same way.
+// Thread-level labels: the per-message message_labels rows live in the
+// thread's mail DB (one per message in the thread), and a denormalised
+// (thread_id, label_id) row lives in the control-DB thread_labels table so
+// the inbox listing can show label chips with one SQL.
+//
+// Apply / remove must update both: mail DB for accuracy on individual
+// messages, control for listing speed.
 
 export async function GET(
   _req: NextRequest,
@@ -17,12 +21,15 @@ export async function GET(
     const { id: threadId } = await ctx.params;
 
     // Confirm the user can see this thread before exposing its labels.
+    // threads_index lives in control alongside user_mailbox_access, so this
+    // is a single control-DB query (unlike the old version that joined
+    // against mail-DB threads).
     const access = await getDb()
       .prepare(
         `SELECT 1
-           FROM threads t
-           INNER JOIN user_mailbox_access uma ON uma.mailbox_id = t.mailbox_id
-          WHERE t.id = ? AND uma.user_id = ?
+           FROM threads_index ti
+           INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
+          WHERE ti.thread_id = ? AND uma.user_id = ?
           LIMIT 1`,
       )
       .bind(threadId, user.id)
@@ -56,14 +63,28 @@ export async function POST(
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    // Insert one row per message; INSERT OR IGNORE so re-applying is a no-op.
-    await getDb()
-      .prepare(
-        `INSERT OR IGNORE INTO message_labels (message_id, label_id)
-           SELECT m.id, ?1 FROM messages m WHERE m.thread_id = ?2`,
-      )
-      .bind(labelId, threadId)
-      .run();
+    const mailDb = await getMailDbForThread(threadId);
+    const controlDb = getDb();
+
+    // Per-message rows in the thread's mail DB, plus the denormalised
+    // (thread, label) row in control's thread_labels — used by the listing
+    // query to render label chips without a cross-DB JOIN.
+    await Promise.all([
+      mailDb
+        .prepare(
+          `INSERT OR IGNORE INTO message_labels (message_id, label_id)
+             SELECT m.id, ?1 FROM messages m WHERE m.thread_id = ?2`,
+        )
+        .bind(labelId, threadId)
+        .run(),
+      controlDb
+        .prepare(
+          `INSERT INTO thread_labels (thread_id, label_id) VALUES (?, ?)
+           ON CONFLICT (thread_id, label_id) DO NOTHING`,
+        )
+        .bind(threadId, labelId)
+        .run(),
+    ]);
 
     return NextResponse.json({ ok: true });
   } catch (e) {

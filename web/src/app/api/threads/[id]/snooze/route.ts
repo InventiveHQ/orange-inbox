@@ -7,8 +7,10 @@ interface Body {
   snoozed_until?: number;
 }
 
-// POST { snoozed_until: <unix seconds> } — sets thread.snoozed_until.
-// Caller must have any access role on the thread's mailbox.
+// POST { snoozed_until: <unix seconds> } — sets threads_index.snoozed_until.
+// Caller must have any access role on the thread's mailbox. The mail-DB
+// threads.snoozed_until column is left alone; source of truth for listing /
+// snooze-clearing is the control-DB threads_index now.
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
@@ -28,7 +30,7 @@ export async function POST(
       return NextResponse.json({ error: "snoozed_until must be in the future" }, { status: 400 });
     }
     await getDb()
-      .prepare("UPDATE threads SET snoozed_until = ? WHERE id = ?")
+      .prepare("UPDATE threads_index SET snoozed_until = ? WHERE thread_id = ?")
       .bind(until, id)
       .run();
     return NextResponse.json({ ok: true, snoozed_until: until });
@@ -49,7 +51,7 @@ export async function DELETE(
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     await getDb()
-      .prepare("UPDATE threads SET snoozed_until = NULL WHERE id = ?")
+      .prepare("UPDATE threads_index SET snoozed_until = NULL WHERE thread_id = ?")
       .bind(id)
       .run();
     return NextResponse.json({ ok: true });

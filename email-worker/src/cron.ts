@@ -1,12 +1,18 @@
+import { getActiveMailDbs } from "./mail-db";
 import type { Env } from "./types";
 
 // Scheduled tasks run every minute (see wrangler.jsonc triggers.crons).
-// We do three things, each idempotent and safe to skip on transient errors:
-//   1. Clear `threads.snoozed_until` for threads whose snooze has elapsed.
+// We do these things, each idempotent and safe to skip on transient errors:
+//   1. Clear `threads_index.snoozed_until` for threads whose snooze has
+//      elapsed (post-overflow this is the source of truth for listing —
+//      mail-DB threads.snoozed_until is no longer authoritative).
 //   2. Dispatch due `scheduled_messages` rows by calling the web worker's
 //      internal dispatcher via the WEB service binding.
-//   3. Sweep `temp_uploads` rows older than 24h (and their R2 blobs) so
-//      we don't accumulate orphaned upload bytes.
+//   3. Sweep `temp_uploads` rows older than 24h (and their R2 blobs).
+//   4. Process the r2_tombstones queue (delete R2 keys, then drop the row).
+//   5. Refresh `mail_dbs.byte_estimate` once per CAPACITY_REFRESH_EVERY_TICKS
+//      ticks so the sidebar capacity bar tracks reality. Done sparingly
+//      because it scans every active mail DB.
 //
 // Each step caps how many rows it processes per tick — a one-minute window
 // shouldn't produce a 30-second run if a backlog appears.
@@ -15,19 +21,31 @@ const DISPATCH_BATCH = 25;
 const TEMP_UPLOADS_TTL_S = 60 * 60 * 24; // 24h
 const TEMP_UPLOADS_BATCH = 50;
 const R2_TOMBSTONE_BATCH = 50;
+// Refresh capacity stats every ~30 minutes. The query SUMs LENGTH(text_body)
+// across every messages row in every active mail DB; cheap individually but
+// don't run it every minute.
+const CAPACITY_REFRESH_EVERY_TICKS = 30;
 
 export async function runCron(env: Env, ctx: ExecutionContext): Promise<void> {
   ctx.waitUntil(unsnoozeDueThreads(env));
   ctx.waitUntil(dispatchDueScheduled(env));
   ctx.waitUntil(sweepTempUploads(env));
   ctx.waitUntil(sweepR2Tombstones(env));
+
+  // Stagger the capacity refresh by minute-of-hour so we don't run it on
+  // every tick. With CAPACITY_REFRESH_EVERY_TICKS=30 this fires twice per
+  // hour at minute-of-hour {0..29 ... 0} mod 30, which is good enough.
+  const minuteOfHour = new Date().getUTCMinutes();
+  if (minuteOfHour % CAPACITY_REFRESH_EVERY_TICKS === 0) {
+    ctx.waitUntil(refreshMailDbCapacity(env));
+  }
 }
 
 async function unsnoozeDueThreads(env: Env): Promise<void> {
   try {
     const res = await env.DB
       .prepare(
-        `UPDATE threads
+        `UPDATE threads_index
             SET snoozed_until = NULL
           WHERE snoozed_until IS NOT NULL
             AND snoozed_until <= unixepoch()`,
@@ -38,6 +56,41 @@ async function unsnoozeDueThreads(env: Env): Promise<void> {
     }
   } catch (e) {
     console.error("cron: unsnooze failed", e);
+  }
+}
+
+// Approximate per-mail-DB size by summing text_body lengths. Real D1 file
+// size includes index overhead, FTS index, and SQLite internals — so we
+// fudge upward by 1.5× to pad against under-counting (better the bar shows
+// "fuller than reality" than "emptier"). Kept rough on purpose; the user
+// only needs accuracy at the soft-cap warning threshold, not byte-exact
+// numbers.
+async function refreshMailDbCapacity(env: Env): Promise<void> {
+  try {
+    const dbs = await getActiveMailDbs(env);
+    for (const { id, db } of dbs) {
+      try {
+        const row = await db
+          .prepare(
+            `SELECT COALESCE(SUM(LENGTH(text_body)), 0) AS bytes_text,
+                    COALESCE(SUM(size), 0)              AS bytes_attach
+               FROM messages m
+               LEFT JOIN attachments a ON a.message_id = m.id`,
+          )
+          .first<{ bytes_text: number; bytes_attach: number }>();
+        const raw = (row?.bytes_text ?? 0) + (row?.bytes_attach ?? 0);
+        const fudged = Math.floor(raw * 1.5);
+        await env.DB
+          .prepare("UPDATE mail_dbs SET byte_estimate = ? WHERE id = ?")
+          .bind(fudged, id)
+          .run();
+        console.log(`cron: capacity ${id} bytes=${fudged} (raw=${raw})`);
+      } catch (e) {
+        console.error(`cron: capacity refresh ${id} failed`, e);
+      }
+    }
+  } catch (e) {
+    console.error("cron: capacity refresh failed", e);
   }
 }
 

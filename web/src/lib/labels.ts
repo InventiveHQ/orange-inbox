@@ -43,16 +43,17 @@ export interface ThreadLabel {
   color: string | null;
 }
 
-// Labels applied to a single thread (via any of its messages). Distinct so
-// the same label appearing on multiple messages collapses into one row.
+// Labels applied to a single thread. Reads the denormalised thread_labels
+// cache in the control DB (maintained alongside per-message message_labels
+// writes by the apply/remove routes) — so this stays a single control-DB
+// query no matter which mail DB the thread's messages live in.
 export async function listThreadLabels(threadId: string): Promise<ThreadLabel[]> {
   const { results } = await getDb()
     .prepare(
-      `SELECT DISTINCT l.id, l.name, l.color
-         FROM labels l
-         INNER JOIN message_labels ml ON ml.label_id = l.id
-         INNER JOIN messages m ON m.id = ml.message_id
-        WHERE m.thread_id = ?
+      `SELECT l.id, l.name, l.color
+         FROM thread_labels tl
+         INNER JOIN labels l ON l.id = tl.label_id
+        WHERE tl.thread_id = ?
         ORDER BY l.name`,
     )
     .bind(threadId)
@@ -60,26 +61,21 @@ export async function listThreadLabels(threadId: string): Promise<ThreadLabel[]>
   return results ?? [];
 }
 
-// Single-query label fetch for an entire thread list. Used by ThreadList
-// rendering when the per-thread labels haven't been folded into the main
-// listThreads aggregate (e.g. callers that pre-loaded threads elsewhere).
+// Single-query label fetch for an entire thread list. Like listThreadLabels,
+// reads exclusively from the control-DB thread_labels cache.
 export async function bulkLoadThreadLabels(
   threadIds: string[],
 ): Promise<Map<string, ThreadLabel[]>> {
   const out = new Map<string, ThreadLabel[]>();
   if (threadIds.length === 0) return out;
 
-  // D1 supports up to ~100 bound params per statement comfortably. The
-  // inbox list is capped at 200 elsewhere, but bulkLoad callers will
-  // typically be under that.
   const placeholders = threadIds.map(() => "?").join(",");
   const { results } = await getDb()
     .prepare(
-      `SELECT DISTINCT m.thread_id AS thread_id, l.id, l.name, l.color
-         FROM labels l
-         INNER JOIN message_labels ml ON ml.label_id = l.id
-         INNER JOIN messages m ON m.id = ml.message_id
-        WHERE m.thread_id IN (${placeholders})
+      `SELECT tl.thread_id AS thread_id, l.id, l.name, l.color
+         FROM thread_labels tl
+         INNER JOIN labels l ON l.id = tl.label_id
+        WHERE tl.thread_id IN (${placeholders})
         ORDER BY l.name`,
     )
     .bind(...threadIds)
@@ -112,6 +108,9 @@ export async function canManageLabel(
 // True if the user may apply this label to this thread. Requires:
 //   1. some access role on the thread's mailbox, AND
 //   2. the label is global OR scoped to the same mailbox as the thread.
+//
+// Uses threads_index (control DB) instead of the mail-DB threads table so
+// this stays a single control-DB query post-overflow.
 export async function canApplyLabelToThread(
   userId: string,
   labelId: string,
@@ -119,14 +118,14 @@ export async function canApplyLabelToThread(
 ): Promise<boolean> {
   const row = await getDb()
     .prepare(
-      `SELECT t.mailbox_id AS thread_mailbox_id,
-              l.mailbox_id AS label_mailbox_id,
-              uma.user_id AS access_user
-         FROM threads t
+      `SELECT ti.mailbox_id AS thread_mailbox_id,
+              l.mailbox_id  AS label_mailbox_id,
+              uma.user_id   AS access_user
+         FROM threads_index ti
          LEFT JOIN labels l ON l.id = ?2
          LEFT JOIN user_mailbox_access uma
-           ON uma.mailbox_id = t.mailbox_id AND uma.user_id = ?1
-        WHERE t.id = ?3`,
+           ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?1
+        WHERE ti.thread_id = ?3`,
     )
     .bind(userId, labelId, threadId)
     .first<{
