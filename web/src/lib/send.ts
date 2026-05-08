@@ -1,21 +1,12 @@
-import { createMimeMessage } from "mimetext";
 import { getDb, getEnv } from "./db";
 import { findIdentity, fullAddress, type Identity } from "./identities";
 
-// `cloudflare:email` is a Workers-runtime built-in. We need it at runtime only:
-//   - At build time, Next.js's page-data collector runs in Node and can't resolve it.
-//   - In the OpenNext bundle, a plain `await import(specifier)` gets compiled to
-//     `require()`, which Workers doesn't support for runtime built-ins.
-// `new Function("return import(...)")` keeps the import opaque to the bundler
-// (the specifier is just a string inside the closure), so it survives bundling
-// as a real ESM dynamic import that the Workers runtime resolves at request time.
-const importCloudflareEmail = new Function('return import("cloudflare:email")') as () => Promise<
-  typeof import("cloudflare:email")
->;
-async function getEmailMessageCtor(): Promise<typeof import("cloudflare:email").EmailMessage> {
-  const mod = await importCloudflareEmail();
-  return mod.EmailMessage;
-}
+// Cloudflare's send_email binding has a structured-builder overload, so we
+// don't need the `cloudflare:email` runtime module or mimetext at all — the
+// binding builds MIME for us. Avoiding `cloudflare:email` also dodges a chain
+// of bundler issues (esbuild can't resolve the Workers built-in, dynamic
+// import gets compiled to require, code-from-strings is forbidden in the
+// isolate, etc).
 
 export interface SendInput {
   fromMailboxId: string;
@@ -25,6 +16,9 @@ export interface SendInput {
   subject: string;
   body: string;
   replyToMessageId?: string;
+  // If set, the draft is deleted in the same batch as the message insert.
+  // The route validates ownership before passing it in.
+  draftId?: string;
 }
 
 export interface SendResult {
@@ -60,33 +54,52 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   const fromAddr = fullAddress(identity);
   const fromName = identity.display_name?.trim() || undefined;
 
-  const msg = createMimeMessage();
-  msg.setSender(fromName ? { name: fromName, addr: fromAddr } : fromAddr);
-  msg.setTo(input.to);
-  if (input.cc?.length) msg.setCc(input.cc);
-  if (input.bcc?.length) msg.setBcc(input.bcc);
-  msg.setSubject(input.subject || "(no subject)");
-  msg.setHeader("Message-ID", messageIdHeader);
-  msg.setHeader("Date", new Date(now * 1000).toUTCString());
+  // RFC chain headers — kept on outbound so reply threads in the recipient's
+  // client stay intact.
+  const headers: Record<string, string> = {
+    "Message-ID": messageIdHeader,
+    Date: new Date(now * 1000).toUTCString(),
+  };
   if (parentMessage) {
-    msg.setHeader("In-Reply-To", parentMessage.message_id_header);
-    const chain = [...parentReferences, parentMessage.message_id_header].join(" ");
-    msg.setHeader("References", chain);
-  }
-  msg.addMessage({ contentType: "text/plain", data: input.body });
-
-  const raw = msg.asRaw();
-
-  // Send to each recipient — Cloudflare's send_email binding is per-recipient.
-  const EmailMessage = await getEmailMessageCtor();
-  for (const to of [...input.to, ...(input.cc ?? []), ...(input.bcc ?? [])]) {
-    await env.EMAIL.send(new EmailMessage(fromAddr, to, raw));
+    headers["In-Reply-To"] = parentMessage.message_id_header;
+    headers["References"] = [...parentReferences, parentMessage.message_id_header].join(" ");
   }
 
-  // Persist the sent copy so it shows up in the thread reader.
-  const rawKey = `mailbox/${identity.mailbox_id}/${messageId}.eml`;
-  await env.RAW_MAIL.put(rawKey, raw, {
-    httpMetadata: { contentType: "message/rfc822" },
+  try {
+    await env.EMAIL.send({
+      from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
+      to: input.to,
+      cc: input.cc?.length ? input.cc : undefined,
+      bcc: input.bcc?.length ? input.bcc : undefined,
+      subject: input.subject || "(no subject)",
+      text: input.body,
+      headers,
+    });
+  } catch (e) {
+    // Surface Cloudflare's actual rejection reason (e.g. "destination address
+    // not verified", "sender not authorised") instead of swallowing it as a
+    // generic 500. The route handler turns SendError into a 400 with body.
+    const detail = e instanceof Error ? e.message : String(e);
+    throw new SendError("send_failed", `Cloudflare rejected the send: ${detail}`);
+  }
+
+  // Persist a structured archive of what we sent. The send_email binding
+  // doesn't return the raw MIME it built, so we save the structured fields
+  // as JSON for debuggability — the schema's raw_r2_key column wants a
+  // non-null path either way.
+  const rawKey = `mailbox/${identity.mailbox_id}/${messageId}.json`;
+  const archive = {
+    from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
+    to: input.to,
+    cc: input.cc ?? [],
+    bcc: input.bcc ?? [],
+    subject: input.subject,
+    text: input.body,
+    headers,
+    sentAt: now,
+  };
+  await env.RAW_MAIL.put(rawKey, JSON.stringify(archive), {
+    httpMetadata: { contentType: "application/json" },
     customMetadata: { mailbox: identity.mailbox_id, messageId, direction: "outbound" },
   });
 
@@ -95,7 +108,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   const subjectNormalized = normalizeSubject(input.subject);
   const snippet = input.body.replace(/\s+/g, " ").trim().slice(0, 200);
 
-  const stmts = [];
+  const stmts: D1PreparedStatement[] = [];
   if (isNewThread) {
     stmts.push(
       db
@@ -150,6 +163,14 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
       )
       .bind(now, threadId),
   );
+
+  if (input.draftId) {
+    stmts.push(
+      db
+        .prepare("DELETE FROM drafts WHERE id = ? AND user_id = ?")
+        .bind(input.draftId, userId),
+    );
+  }
 
   await db.batch(stmts);
 
