@@ -102,13 +102,6 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           icon={<ScheduledIcon />}
           collapsed={collapsed}
         />
-        <SpecialLink
-          href="/inbox/settings"
-          label="Settings"
-          active={scope === "settings"}
-          icon={<SettingsIcon />}
-          collapsed={collapsed}
-        />
 
         {domains.map(d => {
           const list = byDomain.get(d.name) ?? [];
@@ -142,6 +135,40 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
 
       <div className="border-t border-neutral-200 dark:border-neutral-800">
         <CapacityIndicator collapsed={collapsed} />
+      </div>
+
+      {/*
+        Settings sits at the bottom of the drawer — common Gmail/Slack
+        pattern, and an out-of-the-way home for things you only touch
+        occasionally (mailbox access, signatures, labels, domains).
+      */}
+      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2">
+        {collapsed ? (
+          <Link
+            href="/inbox/settings"
+            title="Settings"
+            aria-label="Settings"
+            className={`flex items-center justify-center w-10 h-10 mx-auto rounded-md ${
+              scope === "settings"
+                ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
+                : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            }`}
+          >
+            <SettingsIcon />
+          </Link>
+        ) : (
+          <Link
+            href="/inbox/settings"
+            className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm ${
+              scope === "settings"
+                ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
+                : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            }`}
+          >
+            <SettingsIcon />
+            <span className="truncate">Settings</span>
+          </Link>
+        )}
       </div>
     </aside>
   );

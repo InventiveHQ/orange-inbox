@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
@@ -35,6 +35,7 @@ export default function SettingsManager({ domains, initialLabels, ownedIdentitie
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl px-6 py-6 space-y-10">
           <MailDomainsSection domains={domains} />
+          <MailboxAccessSection identities={ownedIdentities} />
           <SignaturesSection identities={ownedIdentities} />
           <LabelsSection initialLabels={initialLabels} />
         </div>
@@ -120,6 +121,233 @@ function SignatureEditor({ identity }: { identity: Identity }) {
         minHeight={120}
         onChange={next => setHtml(next)}
       />
+    </div>
+  );
+}
+
+interface Member {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: "owner" | "member" | "reader";
+  created_at: number;
+}
+const MEMBER_ROLES: Member["role"][] = ["owner", "member", "reader"];
+
+function MailboxAccessSection({ identities }: { identities: Identity[] }) {
+  // One row per mailbox the current user owns. Each row lazily fetches its
+  // member list the first time the row mounts so the page paints fast even
+  // for accounts with many mailboxes.
+  return (
+    <section>
+      <SectionHeader
+        title="Mailbox access"
+        description="Invite collaborators (e.g. a contractor working on a single mailbox) and pick their role: owner, member (read + send), or reader (read-only). They sign in via Cloudflare Access — make sure your Access policy allows their email."
+      />
+      {identities.length === 0 ? (
+        <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500">
+          You don&apos;t own any mailboxes yet.
+        </div>
+      ) : (
+        <ul className="space-y-4">
+          {identities.map(i => (
+            <li key={i.mailbox_id}>
+              <MailboxAccessRow identity={i} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function MailboxAccessRow({ identity }: { identity: Identity }) {
+  const mailboxId = identity.mailbox_id;
+  const label = `${identity.local_part}@${identity.domain_name}`;
+
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<Member["role"]>("member");
+  const [isPending, startTransition] = useTransition();
+
+  async function refresh() {
+    setLoadError(null);
+    const res = await fetch(`/api/mailboxes/${mailboxId}/members`);
+    if (!res.ok) {
+      setLoadError(`Failed to load members (${res.status})`);
+      return;
+    }
+    const json = (await res.json()) as { members: Member[] };
+    setMembers(json.members);
+  }
+
+  useEffect(() => {
+    // Initial member-list fetch when this mailbox row mounts. Inlined so the
+    // useEffect doesn't depend on a `refresh` closure (which would either
+    // need useCallback wrapping or eslint disables).
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/mailboxes/${mailboxId}/members`);
+        if (cancelled) return;
+        if (!res.ok) {
+          setLoadError(`Failed to load members (${res.status})`);
+          return;
+        }
+        const json = (await res.json()) as { members: Member[] };
+        if (!cancelled) setMembers(json.members);
+      } catch {
+        if (!cancelled) setLoadError("Failed to load members");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mailboxId]);
+
+  function invite() {
+    setActionError(null);
+    if (!inviteEmail.trim()) {
+      setActionError("Email required");
+      return;
+    }
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${mailboxId}/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setActionError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      setInviteEmail("");
+      setInviteRole("member");
+      await refresh();
+    });
+  }
+
+  function changeRole(userId: string, role: Member["role"]) {
+    setActionError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${mailboxId}/members/${userId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setActionError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      await refresh();
+    });
+  }
+
+  function remove(userId: string) {
+    setActionError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${mailboxId}/members/${userId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setActionError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      await refresh();
+    });
+  }
+
+  return (
+    <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
+      <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium truncate">
+        {label}
+      </div>
+
+      <div className="px-3 py-2">
+        {loadError && <div className="text-xs text-red-600 mb-1">{loadError}</div>}
+        {members === null && !loadError && (
+          <div className="text-xs text-neutral-500">Loading…</div>
+        )}
+        {members && members.length === 0 && (
+          <div className="text-xs text-neutral-500">Just you.</div>
+        )}
+        {members && members.length > 0 && (
+          <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {members.map(m => (
+              <li key={m.user_id} className="py-1.5 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm truncate">{m.display_name || m.email}</div>
+                  {m.display_name && (
+                    <div className="text-[11px] text-neutral-500 truncate">{m.email}</div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <select
+                    value={m.role}
+                    onChange={e => changeRole(m.user_id, e.target.value as Member["role"])}
+                    disabled={isPending}
+                    className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-xs px-1.5 py-0.5"
+                  >
+                    {MEMBER_ROLES.map(r => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => remove(m.user_id)}
+                    disabled={isPending}
+                    className="rounded-md px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="px-3 py-2 border-t border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5">
+        <input
+          type="email"
+          placeholder="contractor@example.com"
+          value={inviteEmail}
+          onChange={e => setInviteEmail(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter") invite();
+          }}
+          className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+        />
+        <select
+          value={inviteRole}
+          onChange={e => setInviteRole(e.target.value as Member["role"])}
+          className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-1 text-sm"
+        >
+          {MEMBER_ROLES.map(r => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={invite}
+          disabled={isPending}
+          className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+        >
+          Invite
+        </button>
+      </div>
+      {actionError && (
+        <div className="px-3 pb-2 text-xs text-red-600">{actionError}</div>
+      )}
     </div>
   );
 }
