@@ -1,7 +1,16 @@
-import { EmailMessage } from "cloudflare:email";
 import { createMimeMessage } from "mimetext";
 import { getDb, getEnv } from "./db";
 import { findIdentity, fullAddress, type Identity } from "./identities";
+
+// `cloudflare:email` is a Workers-runtime built-in. If imported at the top
+// level, Next.js tries to load it during build-time page data collection and
+// crashes (Node can't resolve it). Concatenating the specifier defeats Turbopack's
+// static analysis so the import only runs in the Worker context.
+async function getEmailMessageCtor(): Promise<typeof import("cloudflare:email").EmailMessage> {
+  const spec = "cloudflare" + ":email";
+  const mod = (await import(/* @vite-ignore */ spec)) as typeof import("cloudflare:email");
+  return mod.EmailMessage;
+}
 
 export interface SendInput {
   fromMailboxId: string;
@@ -64,6 +73,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   const raw = msg.asRaw();
 
   // Send to each recipient — Cloudflare's send_email binding is per-recipient.
+  const EmailMessage = await getEmailMessageCtor();
   for (const to of [...input.to, ...(input.cc ?? []), ...(input.bcc ?? [])]) {
     await env.EMAIL.send(new EmailMessage(fromAddr, to, raw));
   }
