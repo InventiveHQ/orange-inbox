@@ -7,6 +7,17 @@ import { getDb } from "./db";
 // Auto-add on send writes shared rows. Manual add via the contacts page can
 // pick either visibility.
 
+// Lifecycle pipeline. NULL means "unset" — we never default new rows into a
+// stage so the picker shows the user's actual choice.
+export const CONTACT_STAGES = [
+  "lead",
+  "contacted",
+  "qualified",
+  "customer",
+  "lost",
+] as const;
+export type ContactStage = (typeof CONTACT_STAGES)[number];
+
 export interface ContactRow {
   id: string;
   mailbox_id: string;
@@ -14,6 +25,14 @@ export interface ContactRow {
   email: string;
   name: string | null;
   notes: string | null;
+  company: string | null;
+  title: string | null;
+  phone: string | null;
+  website: string | null;
+  linkedin: string | null;
+  address: string | null;
+  stage: ContactStage | null;
+  tags: string[];
   send_count: number;
   receive_count: number;
   first_seen_at: number;
@@ -31,7 +50,29 @@ export interface ContactInput {
   email: string;
   name?: string | null;
   notes?: string | null;
+  company?: string | null;
+  title?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  linkedin?: string | null;
+  address?: string | null;
+  stage?: ContactStage | null;
+  tags?: string[];
   shared: boolean;
+}
+
+export interface ContactPatch {
+  name?: string | null;
+  notes?: string | null;
+  email?: string;
+  company?: string | null;
+  title?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  linkedin?: string | null;
+  address?: string | null;
+  stage?: ContactStage | null;
+  tags?: string[];
 }
 
 // Lists everything the user can see in a mailbox (or across all their
@@ -53,6 +94,8 @@ export async function listContactsForUser(
   const { results } = await getDb()
     .prepare(
       `SELECT c.id, c.mailbox_id, c.user_id, c.email, c.name, c.notes,
+              c.company, c.title, c.phone, c.website, c.linkedin, c.address,
+              c.stage, c.tags_json,
               c.send_count, c.receive_count, c.first_seen_at, c.last_seen_at,
               CASE WHEN c.user_id IS NULL THEN 'shared' ELSE 'personal' END AS scope,
               d.name AS domain_name, mb.local_part
@@ -64,7 +107,90 @@ export async function listContactsForUser(
         ORDER BY c.last_seen_at DESC, c.email`,
     )
     .bind(...binds)
-    .all<ContactWithMailbox>();
+    .all<ContactWireRow & { domain_name: string; local_part: string }>();
+  return (results ?? []).map(row => ({ ...parseWireRow(row), domain_name: row.domain_name, local_part: row.local_part }));
+}
+
+// Single-contact load for the detail page. Auth scoped: returns null if the
+// caller doesn't have access to the row's mailbox or it's someone else's
+// personal contact.
+export async function getContactForUser(
+  userId: string,
+  contactId: string,
+): Promise<ContactWithMailbox | null> {
+  const row = await getDb()
+    .prepare(
+      `SELECT c.id, c.mailbox_id, c.user_id, c.email, c.name, c.notes,
+              c.company, c.title, c.phone, c.website, c.linkedin, c.address,
+              c.stage, c.tags_json,
+              c.send_count, c.receive_count, c.first_seen_at, c.last_seen_at,
+              CASE WHEN c.user_id IS NULL THEN 'shared' ELSE 'personal' END AS scope,
+              d.name AS domain_name, mb.local_part
+         FROM contacts c
+         INNER JOIN mailboxes mb ON mb.id = c.mailbox_id
+         INNER JOIN domains d ON d.id = mb.domain_id
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = c.mailbox_id
+        WHERE c.id = ? AND uma.user_id = ?
+          AND (c.user_id IS NULL OR c.user_id = ?)`,
+    )
+    .bind(contactId, userId, userId)
+    .first<ContactWireRow & { domain_name: string; local_part: string }>();
+  if (!row) return null;
+  return { ...parseWireRow(row), domain_name: row.domain_name, local_part: row.local_part };
+}
+
+export interface ContactThreadRow {
+  thread_id: string;
+  subject_normalized: string;
+  last_message_at: number;
+  message_count: number;
+  unread_count: number;
+  domain_name: string;
+  mailbox_id: string;
+  mailbox_local_part: string;
+  last_subject: string | null;
+  last_snippet: string | null;
+}
+
+// Cross-mailbox thread history for a contact: every thread (in mailboxes the
+// user can read) where this email appears as sender or recipient. The
+// to_json/cc_json columns are JSON blobs so we use a LIKE on the lowercased
+// `"addr":"<email>"` substring — quoted to avoid prefix collisions.
+export async function listThreadsForContactEmail(
+  userId: string,
+  email: string,
+  limit = 50,
+): Promise<ContactThreadRow[]> {
+  const lim = Math.min(Math.max(limit, 1), 200);
+  const lc = email.toLowerCase();
+  const jsonNeedle = `%"${lc.replace(/"/g, '""')}"%`;
+  const { results } = await getDb()
+    .prepare(
+      `SELECT t.id AS thread_id, t.subject_normalized, t.last_message_at,
+              t.message_count, t.unread_count,
+              d.name AS domain_name,
+              mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
+              (SELECT subject  FROM messages WHERE thread_id = t.id ORDER BY date DESC LIMIT 1) AS last_subject,
+              (SELECT snippet  FROM messages WHERE thread_id = t.id ORDER BY date DESC LIMIT 1) AS last_snippet
+         FROM threads t
+         INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
+         INNER JOIN domains d ON d.id = mb.domain_id
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = t.mailbox_id
+        WHERE uma.user_id = ?
+          AND EXISTS (
+            SELECT 1 FROM messages m
+             WHERE m.thread_id = t.id
+               AND (
+                 LOWER(m.from_addr) = ?
+                 OR LOWER(COALESCE(m.to_json,'')) LIKE ?
+                 OR LOWER(COALESCE(m.cc_json,'')) LIKE ?
+               )
+          )
+        ORDER BY t.last_message_at DESC
+        LIMIT ?`,
+    )
+    .bind(userId, lc, jsonNeedle, jsonNeedle, lim)
+    .all<ContactThreadRow>();
   return results ?? [];
 }
 
@@ -83,6 +209,8 @@ export async function searchContacts(
     const { results } = await getDb()
       .prepare(
         `SELECT id, mailbox_id, user_id, email, name, notes,
+                company, title, phone, website, linkedin, address,
+                stage, tags_json,
                 send_count, receive_count, first_seen_at, last_seen_at,
                 CASE WHEN user_id IS NULL THEN 'shared' ELSE 'personal' END AS scope
            FROM contacts
@@ -91,13 +219,15 @@ export async function searchContacts(
           LIMIT ?`,
       )
       .bind(mailboxId, userId, lim)
-      .all<ContactRow>();
-    return results ?? [];
+      .all<ContactWireRow>();
+    return (results ?? []).map(parseWireRow);
   }
   const like = `%${q}%`;
   const { results } = await getDb()
     .prepare(
       `SELECT id, mailbox_id, user_id, email, name, notes,
+              company, title, phone, website, linkedin, address,
+              stage, tags_json,
               send_count, receive_count, first_seen_at, last_seen_at,
               CASE WHEN user_id IS NULL THEN 'shared' ELSE 'personal' END AS scope
          FROM contacts
@@ -107,8 +237,8 @@ export async function searchContacts(
         LIMIT ?`,
     )
     .bind(mailboxId, userId, like, like, `${q}%`, lim)
-    .all<ContactRow>();
-  return results ?? [];
+    .all<ContactWireRow>();
+  return (results ?? []).map(parseWireRow);
 }
 
 export async function createContact(
@@ -128,8 +258,9 @@ export async function createContact(
     await getDb()
       .prepare(
         `INSERT INTO contacts
-           (id, mailbox_id, user_id, email, email_lc, name, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (id, mailbox_id, user_id, email, email_lc, name, notes,
+            company, title, phone, website, linkedin, address, stage, tags_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id,
@@ -139,6 +270,14 @@ export async function createContact(
         emailLc,
         input.name?.trim() || null,
         input.notes?.trim() || null,
+        input.company?.trim() || null,
+        input.title?.trim() || null,
+        input.phone?.trim() || null,
+        input.website?.trim() || null,
+        input.linkedin?.trim() || null,
+        input.address?.trim() || null,
+        normalizeStage(input.stage),
+        serializeTags(input.tags),
       )
       .run();
   } catch (e) {
@@ -154,20 +293,33 @@ export async function createContact(
 export async function updateContact(
   userId: string,
   contactId: string,
-  patch: { name?: string | null; notes?: string | null; email?: string },
+  patch: ContactPatch,
 ): Promise<boolean> {
   const c = await loadContactForUser(userId, contactId);
   if (!c) return false;
 
   const sets: string[] = [];
   const binds: unknown[] = [];
-  if (patch.name !== undefined) {
-    sets.push("name = ?");
-    binds.push(patch.name == null ? null : String(patch.name).trim() || null);
+  const setStr = (col: string, v: string | null | undefined) => {
+    if (v === undefined) return;
+    sets.push(`${col} = ?`);
+    binds.push(v == null ? null : String(v).trim() || null);
+  };
+  setStr("name", patch.name);
+  setStr("notes", patch.notes);
+  setStr("company", patch.company);
+  setStr("title", patch.title);
+  setStr("phone", patch.phone);
+  setStr("website", patch.website);
+  setStr("linkedin", patch.linkedin);
+  setStr("address", patch.address);
+  if (patch.stage !== undefined) {
+    sets.push("stage = ?");
+    binds.push(normalizeStage(patch.stage));
   }
-  if (patch.notes !== undefined) {
-    sets.push("notes = ?");
-    binds.push(patch.notes == null ? null : String(patch.notes).trim() || null);
+  if (patch.tags !== undefined) {
+    sets.push("tags_json = ?");
+    binds.push(serializeTags(patch.tags));
   }
   if (patch.email !== undefined) {
     const email = String(patch.email).trim();
@@ -227,10 +379,57 @@ export async function recordSendRecipients(
   if (stmts.length > 0) await db.batch(stmts);
 }
 
+// Wire shape for everything we read out of the contacts table — JSON-encoded
+// fields land here and get inflated by `parseWireRow`.
+interface ContactWireRow extends Omit<ContactRow, "tags" | "stage"> {
+  stage: string | null;
+  tags_json: string | null;
+}
+
+function parseWireRow(row: ContactWireRow): ContactRow {
+  let tags: string[] = [];
+  if (row.tags_json) {
+    try {
+      const parsed = JSON.parse(row.tags_json);
+      if (Array.isArray(parsed)) {
+        tags = parsed.filter((t): t is string => typeof t === "string");
+      }
+    } catch {
+      tags = [];
+    }
+  }
+  const { tags_json: _t, stage, ...rest } = row;
+  void _t;
+  return {
+    ...rest,
+    stage: CONTACT_STAGES.includes(stage as ContactStage) ? (stage as ContactStage) : null,
+    tags,
+  };
+}
+
+function serializeTags(tags: string[] | undefined): string | null {
+  if (!tags) return null;
+  const cleaned = Array.from(
+    new Set(
+      tags
+        .map(t => (typeof t === "string" ? t.trim() : ""))
+        .filter(t => t.length > 0 && t.length <= 40),
+    ),
+  );
+  return cleaned.length === 0 ? null : JSON.stringify(cleaned);
+}
+
+function normalizeStage(stage: ContactStage | null | undefined): string | null {
+  if (stage == null) return null;
+  return CONTACT_STAGES.includes(stage) ? stage : null;
+}
+
 async function loadContactForUser(userId: string, contactId: string): Promise<ContactRow | null> {
   const row = await getDb()
     .prepare(
       `SELECT c.id, c.mailbox_id, c.user_id, c.email, c.name, c.notes,
+              c.company, c.title, c.phone, c.website, c.linkedin, c.address,
+              c.stage, c.tags_json,
               c.send_count, c.receive_count, c.first_seen_at, c.last_seen_at,
               CASE WHEN c.user_id IS NULL THEN 'shared' ELSE 'personal' END AS scope
          FROM contacts c
@@ -239,8 +438,8 @@ async function loadContactForUser(userId: string, contactId: string): Promise<Co
           AND (c.user_id IS NULL OR c.user_id = ?)`,
     )
     .bind(contactId, userId, userId)
-    .first<ContactRow>();
-  return row ?? null;
+    .first<ContactWireRow>();
+  return row ? parseWireRow(row) : null;
 }
 
 async function canReadMailbox(userId: string, mailboxId: string): Promise<boolean> {

@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
 import AddDomainButton from "./AddDomainButton";
 import AddMailboxButton from "./AddMailboxButton";
+import CapacityIndicator from "./CapacityIndicator";
 import ComposeButton from "./ComposeButton";
 import ManageLabelsButton from "./ManageLabelsButton";
 import ManageMailboxButton from "./ManageMailboxButton";
@@ -133,6 +134,10 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           );
         })}
       </nav>
+
+      <div className="border-t border-neutral-200 dark:border-neutral-800">
+        <CapacityIndicator collapsed={collapsed} />
+      </div>
 
       {!collapsed && (
         <div className="p-2 border-t border-neutral-200 dark:border-neutral-800 space-y-1">

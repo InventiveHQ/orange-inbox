@@ -1,9 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { ContactWithMailbox } from "@/lib/contacts";
+import {
+  CONTACT_STAGES,
+  type ContactStage,
+  type ContactWithMailbox,
+} from "@/lib/contacts";
 import type { Identity } from "@/lib/identities";
+import ContactStageBadge from "./ContactStageBadge";
+import ContactTagPills from "./ContactTagPills";
 
 interface Props {
   contacts: ContactWithMailbox[];
@@ -18,13 +25,25 @@ interface Props {
 // reloading by calling /api/contacts and then router.refresh().
 export default function ContactsManager({ contacts, identities, filter }: Props) {
   const router = useRouter();
-  const [editing, setEditing] = useState<ContactWithMailbox | null>(null);
   const [creating, setCreating] = useState(false);
+  const [stageFilter, setStageFilter] = useState<"all" | ContactStage | "none">("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
+
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of contacts) for (const t of c.tags) s.add(t);
+    return Array.from(s).sort();
+  }, [contacts]);
 
   const filtered = useMemo(() => {
-    if (filter === "all") return contacts;
-    return contacts.filter(c => c.mailbox_id === filter);
-  }, [contacts, filter]);
+    return contacts.filter(c => {
+      if (filter !== "all" && c.mailbox_id !== filter) return false;
+      if (stageFilter === "none" && c.stage !== null) return false;
+      if (stageFilter !== "all" && stageFilter !== "none" && c.stage !== stageFilter) return false;
+      if (tagFilter !== "all" && !c.tags.includes(tagFilter)) return false;
+      return true;
+    });
+  }, [contacts, filter, stageFilter, tagFilter]);
 
   function setFilter(next: string) {
     const url = new URL(window.location.href);
@@ -35,21 +54,42 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
-        <div className="flex items-center gap-3">
-          <h1 className="text-base font-semibold">Contacts</h1>
-          <select
+      <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-base font-semibold mr-2">Contacts</h1>
+          <FilterSelect
+            label="Mailbox"
             value={filter}
-            onChange={e => setFilter(e.target.value)}
-            className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-sm px-2 py-1"
-          >
-            <option value="all">All mailboxes</option>
-            {identities.map(i => (
-              <option key={i.mailbox_id} value={i.mailbox_id}>
-                {i.local_part}@{i.domain_name}
-              </option>
-            ))}
-          </select>
+            onChange={setFilter}
+            options={[
+              { value: "all", label: "All mailboxes" },
+              ...identities.map(i => ({
+                value: i.mailbox_id,
+                label: `${i.local_part}@${i.domain_name}`,
+              })),
+            ]}
+          />
+          <FilterSelect
+            label="Stage"
+            value={stageFilter}
+            onChange={v => setStageFilter(v as typeof stageFilter)}
+            options={[
+              { value: "all", label: "All stages" },
+              { value: "none", label: "No stage" },
+              ...CONTACT_STAGES.map(s => ({ value: s, label: stageLabel(s) })),
+            ]}
+          />
+          {allTags.length > 0 && (
+            <FilterSelect
+              label="Tag"
+              value={tagFilter}
+              onChange={setTagFilter}
+              options={[
+                { value: "all", label: "All tags" },
+                ...allTags.map(t => ({ value: t, label: t })),
+              ]}
+            />
+          )}
         </div>
         <button
           type="button"
@@ -63,49 +103,52 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
 
       {filtered.length === 0 ? (
         <div className="flex-1 flex items-center justify-center text-sm text-neutral-500 px-6 text-center">
-          No contacts in this view yet. They&apos;ll be added automatically when you send mail.
+          {contacts.length === 0
+            ? "No contacts in this view yet. They'll be added automatically when you send mail."
+            : "No contacts match these filters."}
         </div>
       ) : (
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800">
           {filtered.map(c => (
             <li
               key={c.id}
-              className="flex items-center justify-between gap-3 px-6 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-900/40"
+              className="hover:bg-neutral-50 dark:hover:bg-neutral-900/40"
             >
-              <div className="min-w-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="font-medium truncate">
-                    {c.name ?? c.email}
-                  </span>
-                  <span className="text-[10px] uppercase tracking-wider text-neutral-500">
-                    {c.scope}
-                  </span>
-                </div>
-                {c.name && (
-                  <div className="text-sm text-neutral-700 dark:text-neutral-300 truncate">
-                    {c.email}
+              <Link
+                href={`/inbox/contacts/${c.id}`}
+                className="flex items-center justify-between gap-3 px-6 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium truncate">
+                      {c.name ?? c.email}
+                    </span>
+                    {c.stage && <ContactStageBadge stage={c.stage} />}
+                    <span className="text-[10px] uppercase tracking-wider text-neutral-500">
+                      {c.scope}
+                    </span>
                   </div>
-                )}
-                <div className="text-xs text-neutral-500">
-                  {c.local_part}@{c.domain_name} · sent {c.send_count} ·{" "}
-                  {c.last_seen_at ? new Date(c.last_seen_at * 1000).toLocaleDateString() : "—"}
-                </div>
-                {c.notes && (
-                  <div className="text-xs text-neutral-500 mt-0.5 line-clamp-2">
-                    {c.notes}
+                  {c.name && (
+                    <div className="text-sm text-neutral-700 dark:text-neutral-300 truncate">
+                      {c.email}
+                    </div>
+                  )}
+                  {(c.company || c.title) && (
+                    <div className="text-xs text-neutral-600 dark:text-neutral-400 truncate">
+                      {[c.title, c.company].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                  {c.tags.length > 0 && (
+                    <div className="mt-1">
+                      <ContactTagPills tags={c.tags} />
+                    </div>
+                  )}
+                  <div className="text-xs text-neutral-500 mt-0.5">
+                    {c.local_part}@{c.domain_name} · sent {c.send_count} ·{" "}
+                    {c.last_seen_at ? new Date(c.last_seen_at * 1000).toLocaleDateString() : "—"}
                   </div>
-                )}
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setEditing(c)}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                >
-                  Edit
-                </button>
-                <DeleteContactButton id={c.id} />
-              </div>
+                </div>
+              </Link>
             </li>
           ))}
         </ul>
@@ -118,62 +161,51 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
           onClose={() => setCreating(false)}
         />
       )}
-      {editing && (
-        <ContactDialog
-          identities={identities}
-          editing={editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
     </div>
   );
 }
 
-function DeleteContactButton({ id }: { id: string }) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-  const [confirming, setConfirming] = useState(false);
-
-  function doDelete() {
-    startTransition(async () => {
-      const res = await fetch(`/api/contacts/${id}`, { method: "DELETE" });
-      if (res.ok) router.refresh();
-      setConfirming(false);
-    });
-  }
-  if (confirming) {
-    return (
-      <div className="flex gap-1">
-        <button
-          type="button"
-          onClick={() => setConfirming(false)}
-          className="rounded-md px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={doDelete}
-          disabled={isPending}
-          className="rounded-md bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
-        >
-          {isPending ? "Deleting…" : "Confirm"}
-        </button>
-      </div>
-    );
-  }
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
   return (
-    <button
-      type="button"
-      onClick={() => setConfirming(true)}
-      className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
-    >
-      Delete
-    </button>
+    <label className="flex items-center gap-1.5 text-xs text-neutral-500">
+      <span className="uppercase tracking-wider">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-sm px-2 py-1 text-neutral-900 dark:text-neutral-100"
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
-function ContactDialog({
+export function stageLabel(s: ContactStage): string {
+  switch (s) {
+    case "lead":       return "Lead";
+    case "contacted":  return "Contacted";
+    case "qualified":  return "Qualified";
+    case "customer":   return "Customer";
+    case "lost":       return "Lost";
+  }
+}
+
+// Reused by the detail page for inline edits.
+export function ContactDialog({
   identities,
   editing,
   defaultMailboxId,
@@ -191,27 +223,50 @@ function ContactDialog({
   const [email, setEmail] = useState(editing?.email ?? "");
   const [name, setName] = useState(editing?.name ?? "");
   const [notes, setNotes] = useState(editing?.notes ?? "");
+  const [company, setCompany] = useState(editing?.company ?? "");
+  const [title, setTitle] = useState(editing?.title ?? "");
+  const [phone, setPhone] = useState(editing?.phone ?? "");
+  const [website, setWebsite] = useState(editing?.website ?? "");
+  const [linkedin, setLinkedin] = useState(editing?.linkedin ?? "");
+  const [address, setAddress] = useState(editing?.address ?? "");
+  const [stage, setStage] = useState<ContactStage | "">(editing?.stage ?? "");
+  const [tagsText, setTagsText] = useState(editing?.tags.join(", ") ?? "");
   const [shared, setShared] = useState(editing ? editing.scope === "shared" : true);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function save() {
     setError(null);
+    const tags = tagsText
+      .split(",")
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
+    const payload = {
+      name: name || null,
+      notes: notes || null,
+      company: company || null,
+      title: title || null,
+      phone: phone || null,
+      website: website || null,
+      linkedin: linkedin || null,
+      address: address || null,
+      stage: stage || null,
+      tags,
+    };
     startTransition(async () => {
       const res = editing
         ? await fetch(`/api/contacts/${editing.id}`, {
             method: "PATCH",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ name: name || null, notes: notes || null, email }),
+            body: JSON.stringify({ ...payload, email }),
           })
         : await fetch("/api/contacts", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
+              ...payload,
               mailbox_id: mailboxId,
               email,
-              name: name || null,
-              notes: notes || null,
               shared,
             }),
           });
@@ -232,12 +287,12 @@ function ContactDialog({
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="w-full max-w-md rounded-lg bg-white dark:bg-neutral-950 shadow-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden"
+        className="w-full max-w-lg rounded-lg bg-white dark:bg-neutral-950 shadow-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden flex flex-col max-h-[90vh]"
       >
         <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
           {editing ? "Edit contact" : "New contact"}
         </header>
-        <div className="px-4 py-3 space-y-3 text-sm">
+        <div className="px-4 py-3 space-y-3 text-sm overflow-y-auto">
           {!editing && (
             <Row label="Mailbox">
               <select
@@ -254,19 +309,51 @@ function ContactDialog({
             </Row>
           )}
           <Row label="Email">
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-1"
-            />
+            <TextInput type="email" value={email} onChange={setEmail} />
           </Row>
           <Row label="Name">
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
+            <TextInput value={name} onChange={setName} />
+          </Row>
+          <Row label="Company">
+            <TextInput value={company} onChange={setCompany} />
+          </Row>
+          <Row label="Title">
+            <TextInput value={title} onChange={setTitle} />
+          </Row>
+          <Row label="Stage">
+            <select
+              value={stage}
+              onChange={e => setStage(e.target.value as ContactStage | "")}
               className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-1"
+            >
+              <option value="">— none —</option>
+              {CONTACT_STAGES.map(s => (
+                <option key={s} value={s}>{stageLabel(s)}</option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Tags">
+            <TextInput
+              value={tagsText}
+              onChange={setTagsText}
+              placeholder="comma, separated"
+            />
+          </Row>
+          <Row label="Phone">
+            <TextInput value={phone} onChange={setPhone} />
+          </Row>
+          <Row label="Website">
+            <TextInput value={website} onChange={setWebsite} placeholder="https://" />
+          </Row>
+          <Row label="LinkedIn">
+            <TextInput value={linkedin} onChange={setLinkedin} placeholder="https://linkedin.com/in/..." />
+          </Row>
+          <Row label="Address">
+            <textarea
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+              rows={2}
+              className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-1 resize-none"
             />
           </Row>
           <Row label="Notes">
@@ -310,6 +397,28 @@ function ContactDialog({
         </footer>
       </div>
     </div>
+  );
+}
+
+function TextInput({
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-1"
+    />
   );
 }
 

@@ -32,7 +32,7 @@ export default function SearchBar({ defaultQuery = "", placeholder = "Search mai
         e.preventDefault();
         submit();
       }}
-      className="w-full"
+      className="flex w-full items-stretch gap-2"
     >
       <label className="sr-only" htmlFor="orange-search-input">
         Search mail
@@ -43,8 +43,14 @@ export default function SearchBar({ defaultQuery = "", placeholder = "Search mai
         value={value}
         onChange={e => setValue(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:border-[var(--color-brand)] focus:outline-none"
+        className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:border-[var(--color-brand)] focus:outline-none"
       />
+      <button
+        type="submit"
+        className="shrink-0 rounded-md bg-[var(--color-brand)] px-4 text-sm font-medium text-white hover:opacity-90"
+      >
+        Search
+      </button>
     </form>
   );
 }

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
-import { ContactError, createContact, listContactsForUser } from "@/lib/contacts";
+import {
+  CONTACT_STAGES,
+  ContactError,
+  ContactStage,
+  createContact,
+  listContactsForUser,
+} from "@/lib/contacts";
 
 export async function GET(req: NextRequest) {
   try {
@@ -18,6 +24,14 @@ interface PostBody {
   email?: string;
   name?: string | null;
   notes?: string | null;
+  company?: string | null;
+  title?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  linkedin?: string | null;
+  address?: string | null;
+  stage?: string | null;
+  tags?: unknown;
   shared?: boolean;
 }
 
@@ -37,6 +51,14 @@ export async function POST(req: NextRequest) {
       email: b.email,
       name: b.name ?? null,
       notes: b.notes ?? null,
+      company: b.company ?? null,
+      title: b.title ?? null,
+      phone: b.phone ?? null,
+      website: b.website ?? null,
+      linkedin: b.linkedin ?? null,
+      address: b.address ?? null,
+      stage: parseStage(b.stage),
+      tags: parseTags(b.tags),
       shared: b.shared !== false,
     });
     return NextResponse.json({ id }, { status: 201 });
@@ -54,4 +76,15 @@ export function errorResponse(e: unknown): NextResponse {
   }
   console.error(e);
   return NextResponse.json({ error: "internal_error" }, { status: 500 });
+}
+
+export function parseStage(v: unknown): ContactStage | null {
+  if (v == null || v === "") return null;
+  if (typeof v !== "string") return null;
+  return (CONTACT_STAGES as readonly string[]).includes(v) ? (v as ContactStage) : null;
+}
+
+export function parseTags(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((t): t is string => typeof t === "string");
 }

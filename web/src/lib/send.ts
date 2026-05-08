@@ -1,6 +1,13 @@
 import { getDb, getEnv } from "./db";
 import { findIdentity, fullAddress, type Identity } from "./identities";
 import { recordSendRecipients } from "./contacts";
+import {
+  getActiveMailDbs,
+  getMailDbForNewThread,
+  getMailDbForThread,
+  registerThreadLocation,
+  upsertThreadIndex,
+} from "./mail-db";
 
 // Cloudflare's send_email binding has a structured-builder overload, so we
 // don't need the `cloudflare:email` runtime module or mimetext at all — the
@@ -39,7 +46,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   if (input.to.length === 0) throw new SendError("invalid", "At least one recipient is required.");
 
   const env = getEnv();
-  const db = getDb();
+  const controlDb = getDb();
 
   const { parentMessage, parentReferences } = await loadReplyParent(input.replyToMessageId);
   if (parentMessage && parentMessage.mailbox_id !== identity.mailbox_id) {
@@ -73,10 +80,11 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   // Resolve attachment uploads: validate ownership, pull bytes from R2, build
   // the EmailAttachment array. Done here (not in a helper) so a missing /
   // not-owned id surfaces a precise SendError before we touch the binding.
+  // temp_uploads lives in the control DB.
   const attachments: EmailAttachment[] = [];
   if (input.attachmentIds?.length) {
     for (const uploadId of input.attachmentIds) {
-      const upload = await db
+      const upload = await controlDb
         .prepare(
           "SELECT id, filename, content_type, size, r2_key FROM temp_uploads WHERE id = ? AND user_id = ?",
         )
@@ -158,10 +166,30 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   const subjectNormalized = normalizeSubject(input.subject);
   const snippet = input.body.replace(/\s+/g, " ").trim().slice(0, 200);
 
-  const stmts: D1PreparedStatement[] = [];
+  // Pick the mail DB this message lands in:
+  //   - reply: same DB as the parent thread (resolved via thread_locations,
+  //     defaulting to 'primary' when unset).
+  //   - new thread: emptiest active DB under its soft cap (or under hard cap
+  //     in degraded mode). Record the location so subsequent replies route
+  //     back to the same DB.
+  let mailDb: D1Database;
+  let mailDbId: string;
+  if (parentMessage) {
+    mailDb = await getMailDbForThread(threadId);
+    // We don't currently know which mail_db_id this maps to without an extra
+    // query, but we don't need it for the upsert — threads_index already has
+    // the right mail_db_id from when the thread was created.
+    mailDbId = ""; // unused below; threads_index upsert will look it up if needed
+  } else {
+    const picked = await getMailDbForNewThread();
+    mailDb = picked.db;
+    mailDbId = picked.mailDbId;
+  }
+
+  const mailStmts: D1PreparedStatement[] = [];
   if (isNewThread) {
-    stmts.push(
-      db
+    mailStmts.push(
+      mailDb
         .prepare(
           `INSERT INTO threads (id, mailbox_id, subject_normalized, last_message_at, message_count, unread_count)
            VALUES (?, ?, ?, ?, 0, 0)`,
@@ -170,8 +198,8 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     );
   }
 
-  stmts.push(
-    db
+  mailStmts.push(
+    mailDb
       .prepare(
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
@@ -202,9 +230,12 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
       ),
   );
 
-  // Outbound messages count toward message_count but never toward unread_count.
-  stmts.push(
-    db
+  // Keep the mail-DB threads.message_count / last_message_at in sync. Source
+  // of truth for *listing* now lives on threads_index in control, but we
+  // still update the mail-DB row so internal joins (e.g. the next reply
+  // looking up the parent message) see fresh data.
+  mailStmts.push(
+    mailDb
       .prepare(
         `UPDATE threads
            SET message_count = message_count + 1,
@@ -214,9 +245,42 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
       .bind(now, threadId),
   );
 
+  await mailDb.batch(mailStmts);
+
+  // Now the control-side bookkeeping. If anything below fails the message is
+  // already on its way (sent + persisted + in mail DB); we just log so the
+  // sweeper can reconcile.
+  if (isNewThread) {
+    try {
+      await registerThreadLocation(threadId, mailDbId);
+    } catch (err) {
+      console.error("registerThreadLocation failed", err);
+    }
+  }
+
+  try {
+    await upsertThreadIndex({
+      threadId,
+      mailboxId: identity.mailbox_id,
+      mailDbId: mailDbId || "primary", // unused on UPDATE; new threads get the picked id
+      subjectNormalized,
+      lastMessageAt: now,
+      unreadDelta: 0, // outbound is never unread
+      lastMessageId: messageId,
+      lastSubject: input.subject || null,
+      lastFromAddr: fromAddr,
+      lastFromName: fromName ?? null,
+      lastSnippet: snippet,
+      createdAt: isNewThread ? now : undefined,
+    });
+  } catch (err) {
+    console.error("upsertThreadIndex failed", err);
+  }
+
+  const controlStmts: D1PreparedStatement[] = [];
   if (input.draftId) {
-    stmts.push(
-      db
+    controlStmts.push(
+      controlDb
         .prepare("DELETE FROM drafts WHERE id = ? AND user_id = ?")
         .bind(input.draftId, userId),
     );
@@ -227,16 +291,15 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   // orphans, and removing them in the hot send path would double the work.
   if (input.attachmentIds?.length) {
     const placeholders = input.attachmentIds.map(() => "?").join(",");
-    stmts.push(
-      db
+    controlStmts.push(
+      controlDb
         .prepare(
           `DELETE FROM temp_uploads WHERE user_id = ? AND id IN (${placeholders})`,
         )
         .bind(userId, ...input.attachmentIds),
     );
   }
-
-  await db.batch(stmts);
+  if (controlStmts.length > 0) await controlDb.batch(controlStmts);
 
   // Auto-add recipients to the mailbox's shared contact list. Best-effort —
   // a contact-store hiccup must never make a successful send look failed.
@@ -267,24 +330,35 @@ interface ParentInfo {
 
 async function loadReplyParent(parentId: string | undefined): Promise<ParentInfo> {
   if (!parentId) return { parentMessage: null, parentReferences: [] };
-  const row = await getDb()
-    .prepare(
-      `SELECT id, thread_id, mailbox_id, message_id_header, references_chain
-         FROM messages WHERE id = ?`,
-    )
-    .bind(parentId)
-    .first<{
-      id: string;
-      thread_id: string;
-      mailbox_id: string;
-      message_id_header: string;
-      references_chain: string | null;
-    }>();
-  if (!row) return { parentMessage: null, parentReferences: [] };
-  const parentReferences = row.references_chain
-    ? row.references_chain.split(/\s+/).filter(Boolean)
-    : [];
-  return { parentMessage: row, parentReferences };
+  // Replies can target a message in any mail DB. We don't have a global
+  // (message_id → mail_db_id) index — that would be another denormalised
+  // table maintained on every write — so we fan out across active mail DBs
+  // and take the first hit. For single-DB deploys that's exactly one query
+  // against primary; for multi-DB deploys it's at most N queries (and N is
+  // typically 1–5 since each DB holds 8 GiB).
+  const dbs = await getActiveMailDbs();
+  for (const { db } of dbs) {
+    const row = await db
+      .prepare(
+        `SELECT id, thread_id, mailbox_id, message_id_header, references_chain
+           FROM messages WHERE id = ?`,
+      )
+      .bind(parentId)
+      .first<{
+        id: string;
+        thread_id: string;
+        mailbox_id: string;
+        message_id_header: string;
+        references_chain: string | null;
+      }>();
+    if (row) {
+      const parentReferences = row.references_chain
+        ? row.references_chain.split(/\s+/).filter(Boolean)
+        : [];
+      return { parentMessage: row, parentReferences };
+    }
+  }
+  return { parentMessage: null, parentReferences: [] };
 }
 
 // Build an HTML alternative from the plain-text body. Steps:

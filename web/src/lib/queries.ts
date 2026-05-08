@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { getMailDbForThread } from "./mail-db";
 
 export interface DomainRow {
   id: string;
@@ -92,6 +93,12 @@ interface ThreadListRow extends Omit<ThreadListItem, "labels"> {
 // a single mailbox; absence means "everything I can see" (the All inboxes
 // view). Joining user_mailbox_access enforces visibility, so an unauthorised
 // mailboxId silently returns empty.
+//
+// This reads exclusively from the control DB (`threads_index` + `thread_labels`
+// + `mailboxes` + `domains` + `user_mailbox_access`). The actual messages live
+// in whichever mail DB the thread was created in (resolved per-thread via
+// `thread_locations`); listing never has to fan out across mail DBs because
+// every field needed for a row in the inbox view is denormalised here.
 export async function listThreads(
   userId: string,
   opts: { mailboxId?: string; limit?: number } = {},
@@ -102,52 +109,54 @@ export async function listThreads(
   // don't want to show those rows — hence the explicit `> unixepoch()` check.
   const where = [
     "uma.user_id = ?",
-    "t.archived = 0",
-    "(t.snoozed_until IS NULL OR t.snoozed_until <= unixepoch())",
+    "ti.archived = 0",
+    "(ti.snoozed_until IS NULL OR ti.snoozed_until <= unixepoch())",
   ];
   const binds: unknown[] = [userId];
 
   if (opts.mailboxId) {
-    where.push("t.mailbox_id = ?");
+    where.push("ti.mailbox_id = ?");
     binds.push(opts.mailboxId);
   }
 
-  // Labels per thread come from a correlated subquery that aggregates the
-  // distinct labels attached to any message in the thread. Using a
-  // correlated subquery (vs. a LEFT JOIN + GROUP BY) keeps the rest of the
-  // shape unchanged and dodges duplicating the aggregate columns.
+  // Labels per thread come from `thread_labels` (the cache maintained by the
+  // label-apply path). Aggregated via JSON_GROUP_ARRAY to keep the row shape
+  // flat — same wire format as before.
   const sql = `
     SELECT
-      t.id, t.subject_normalized, t.last_message_at, t.message_count,
-      t.unread_count, t.starred, t.archived,
-      d.id AS domain_id, d.name AS domain_name,
-      mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
-      m.subject AS last_subject,
-      m.from_addr AS last_from_addr,
-      m.from_name AS last_from_name,
-      m.snippet AS last_snippet,
+      ti.thread_id AS id,
+      ti.subject_normalized,
+      ti.last_message_at,
+      ti.message_count,
+      ti.unread_count,
+      ti.starred,
+      ti.archived,
+      d.id   AS domain_id,
+      d.name AS domain_name,
+      mb.id  AS mailbox_id,
+      mb.local_part AS mailbox_local_part,
+      ti.last_subject   AS last_subject,
+      ti.last_from_addr AS last_from_addr,
+      ti.last_from_name AS last_from_name,
+      ti.last_snippet   AS last_snippet,
       (
         SELECT JSON_GROUP_ARRAY(
-                 JSON_OBJECT('id', tl.id, 'name', tl.name, 'color', tl.color)
+                 JSON_OBJECT('id', l.id, 'name', l.name, 'color', l.color)
                )
           FROM (
-            SELECT DISTINCT l.id AS id, l.name AS name, l.color AS color
-              FROM labels l
-              INNER JOIN message_labels ml ON ml.label_id = l.id
-              INNER JOIN messages mm ON mm.id = ml.message_id
-             WHERE mm.thread_id = t.id
+            SELECT l.id, l.name, l.color
+              FROM thread_labels tl
+              INNER JOIN labels l ON l.id = tl.label_id
+             WHERE tl.thread_id = ti.thread_id
              ORDER BY l.name
-          ) AS tl
+          ) AS l
       ) AS labels_json
-    FROM threads t
-    INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
-    INNER JOIN domains d ON d.id = mb.domain_id
-    INNER JOIN user_mailbox_access uma ON uma.mailbox_id = t.mailbox_id
-    LEFT JOIN messages m ON m.id = (
-      SELECT id FROM messages WHERE thread_id = t.id ORDER BY date DESC LIMIT 1
-    )
+    FROM threads_index ti
+    INNER JOIN mailboxes mb ON mb.id = ti.mailbox_id
+    INNER JOIN domains d   ON d.id = mb.domain_id
+    INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
     WHERE ${where.join(" AND ")}
-    ORDER BY t.last_message_at DESC
+    ORDER BY ti.last_message_at DESC
     LIMIT ?
   `;
   binds.push(limit);
@@ -221,45 +230,78 @@ export interface ThreadMessage {
   attachments: AttachmentRow[];
 }
 
+// The thread head (visibility check + listing-style fields) comes from the
+// control DB — `threads_index` already has everything the reader header
+// needs, and joining mailboxes/domains/uma there enforces access.
+//
+// Messages and attachments live in the thread's mail DB, which we resolve
+// via `thread_locations` (defaulting to 'primary' when no row exists). The
+// `users` join — needed for `sent_by_email/display_name` on outbound
+// messages — happens in the control DB after the message rows come back,
+// rather than as a JOIN, since users live in control and messages don't.
 export async function getThreadDetail(userId: string, threadId: string): Promise<ThreadDetail | null> {
   const head = await getDb()
     .prepare(
-      `SELECT t.id, t.subject_normalized, t.last_message_at, t.message_count,
-              t.unread_count, t.starred, t.archived, t.snoozed_until,
-              d.name AS domain_name, mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
+      `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
+              ti.message_count, ti.unread_count, ti.starred, ti.archived,
+              ti.snoozed_until,
+              d.name AS domain_name,
+              mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role
-         FROM threads t
-         INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
+         FROM threads_index ti
+         INNER JOIN mailboxes mb ON mb.id = ti.mailbox_id
          INNER JOIN domains d ON d.id = mb.domain_id
-         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = t.mailbox_id
-        WHERE t.id = ? AND uma.user_id = ?`,
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
+        WHERE ti.thread_id = ? AND uma.user_id = ?`,
     )
     .bind(threadId, userId)
     .first<ThreadDetail["thread"]>();
   if (!head) return null;
 
-  // Wire format from D1 — attachments load separately and get bucketed in.
-  type MessageRow = Omit<ThreadMessage, "attachments">;
+  const mailDb = await getMailDbForThread(threadId);
 
-  const { results } = await getDb()
+  // Mail-DB row shape — sent_by_user_id stays here; we resolve it to email +
+  // display_name via a follow-up control-DB lookup since users live there.
+  type RawMessageRow = Omit<ThreadMessage, "attachments" | "sent_by_email" | "sent_by_display_name"> & {
+    sent_by_user_id: string | null;
+  };
+
+  const { results } = await mailDb
     .prepare(
       `SELECT m.id, m.message_id_header, m.direction, m.from_addr, m.from_name,
               m.to_json, m.cc_json, m.subject, m.date, m.snippet, m.text_body,
-              m.html_r2_key, m.read, m.starred,
-              u.email AS sent_by_email, u.display_name AS sent_by_display_name
+              m.html_r2_key, m.read, m.starred, m.sent_by_user_id
          FROM messages m
-         LEFT JOIN users u ON u.id = m.sent_by_user_id
         WHERE m.thread_id = ?
         ORDER BY m.date ASC`,
     )
     .bind(threadId)
-    .all<MessageRow>();
+    .all<RawMessageRow>();
 
   const messageRows = results ?? [];
 
+  // Resolve sent_by_user_id → email/display_name via the control DB. Done
+  // with a single `WHERE id IN (...)` query rather than N+1.
+  const senderIds = Array.from(
+    new Set(messageRows.map(m => m.sent_by_user_id).filter((x): x is string => !!x)),
+  );
+  const senderMap = new Map<string, { email: string | null; display_name: string | null }>();
+  if (senderIds.length > 0) {
+    const placeholders = senderIds.map(() => "?").join(",");
+    const { results: userRows } = await getDb()
+      .prepare(
+        `SELECT id, email, display_name FROM users WHERE id IN (${placeholders})`,
+      )
+      .bind(...senderIds)
+      .all<{ id: string; email: string | null; display_name: string | null }>();
+    for (const u of userRows ?? []) {
+      senderMap.set(u.id, { email: u.email, display_name: u.display_name });
+    }
+  }
+
   // One round-trip for all attachments in the thread; bucket by message_id.
   // Avoids an N+1 across messages without joining/duplicating message columns.
-  const { results: attachmentRows } = await getDb()
+  const { results: attachmentRows } = await mailDb
     .prepare(
       `SELECT a.id, a.message_id, a.filename, a.content_type, a.size, a.inline_cid
          FROM attachments a
@@ -277,10 +319,17 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     else attachmentsByMessage.set(a.message_id, [a]);
   }
 
-  const messages: ThreadMessage[] = messageRows.map(m => ({
-    ...m,
-    attachments: attachmentsByMessage.get(m.id) ?? [],
-  }));
+  const messages: ThreadMessage[] = messageRows.map(m => {
+    const sender = m.sent_by_user_id ? senderMap.get(m.sent_by_user_id) ?? null : null;
+    const { sent_by_user_id: _drop, ...rest } = m;
+    void _drop;
+    return {
+      ...rest,
+      sent_by_email: sender?.email ?? null,
+      sent_by_display_name: sender?.display_name ?? null,
+      attachments: attachmentsByMessage.get(m.id) ?? [],
+    };
+  });
 
   return { thread: head, messages };
 }

@@ -20,6 +20,8 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
   const [appliedIds, setAppliedIds] = useState<Set<string> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -85,6 +87,49 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
     });
   }
 
+  async function createAndApply() {
+    const name = newName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const createRes = await fetch("/api/labels", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, color: null }),
+      });
+      const createJson = (await createRes.json().catch(() => ({}))) as {
+        label?: Label;
+        error?: string;
+      };
+      if (!createRes.ok || !createJson.label) {
+        setError(createJson.error ?? `Failed (${createRes.status})`);
+        return;
+      }
+      const label = createJson.label;
+      const applyRes = await fetch(`/api/threads/${threadId}/labels`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ label_id: label.id }),
+      });
+      if (!applyRes.ok) {
+        const b = (await applyRes.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${applyRes.status})`);
+        return;
+      }
+      setAvailable(prev => (prev ? [...prev, label] : [label]));
+      setAppliedIds(prev => {
+        const next = new Set(prev ?? []);
+        next.add(label.id);
+        return next;
+      });
+      setNewName("");
+      router.refresh();
+    } finally {
+      setCreating(false);
+    }
+  }
+
   return (
     <div ref={containerRef} className="relative">
       <button
@@ -112,7 +157,7 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
           )}
           {available && available.length === 0 && (
             <div className="px-3 py-2 text-xs text-neutral-500">
-              No labels yet. Create one from the sidebar.
+              No labels yet. Create one below.
             </div>
           )}
           {available && available.length > 0 && (
@@ -144,6 +189,33 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
                 );
               })}
             </ul>
+          )}
+          {available !== null && (
+            <div className="border-t border-neutral-200 dark:border-neutral-800 p-2 flex items-center gap-1.5">
+              <input
+                type="text"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void createAndApply();
+                  }
+                }}
+                placeholder="New label"
+                maxLength={64}
+                disabled={creating}
+                className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-60"
+              />
+              <button
+                type="button"
+                onClick={() => void createAndApply()}
+                disabled={creating || !newName.trim()}
+                className="rounded-md bg-[var(--color-brand)] px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+              >
+                Create
+              </button>
+            </div>
           )}
         </div>
       )}

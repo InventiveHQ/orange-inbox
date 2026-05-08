@@ -1,3 +1,4 @@
+import { getActiveMailDbs } from "./mail-db";
 import type { Env, ParsedMessage } from "./types";
 
 export interface ThreadMatch {
@@ -37,29 +38,37 @@ export async function findOrCreateThread(
   const subjectNormalized = normalizeSubject(msg.subject);
 
   const candidates = dedupe([...msg.references, msg.inReplyTo].filter((x): x is string => !!x));
+  // Threading lookups have to span every mail DB — the parent message could
+  // live anywhere. Fan out across active DBs and take the first hit.
+  const mailDbs = await getActiveMailDbs(env);
+
   if (candidates.length > 0) {
     const placeholders = candidates.map(() => "?").join(",");
-    const hit = await env.DB
-      .prepare(
-        `SELECT thread_id FROM messages
-         WHERE mailbox_id = ? AND message_id_header IN (${placeholders})
-         LIMIT 1`,
-      )
-      .bind(mailboxId, ...candidates)
-      .first<{ thread_id: string }>();
-    if (hit) return { threadId: hit.thread_id, isNew: false, subjectNormalized };
+    for (const { db } of mailDbs) {
+      const hit = await db
+        .prepare(
+          `SELECT thread_id FROM messages
+           WHERE mailbox_id = ? AND message_id_header IN (${placeholders})
+           LIMIT 1`,
+        )
+        .bind(mailboxId, ...candidates)
+        .first<{ thread_id: string }>();
+      if (hit) return { threadId: hit.thread_id, isNew: false, subjectNormalized };
+    }
   }
 
   const cutoff = Math.floor(Date.now() / 1000) - SUBJECT_FALLBACK_WINDOW_S;
-  const subjMatch = await env.DB
-    .prepare(
-      `SELECT id FROM threads
-       WHERE mailbox_id = ? AND subject_normalized = ? AND last_message_at >= ?
-       ORDER BY last_message_at DESC LIMIT 1`,
-    )
-    .bind(mailboxId, subjectNormalized, cutoff)
-    .first<{ id: string }>();
-  if (subjMatch) return { threadId: subjMatch.id, isNew: false, subjectNormalized };
+  for (const { db } of mailDbs) {
+    const subjMatch = await db
+      .prepare(
+        `SELECT id FROM threads
+         WHERE mailbox_id = ? AND subject_normalized = ? AND last_message_at >= ?
+         ORDER BY last_message_at DESC LIMIT 1`,
+      )
+      .bind(mailboxId, subjectNormalized, cutoff)
+      .first<{ id: string }>();
+    if (subjMatch) return { threadId: subjMatch.id, isNew: false, subjectNormalized };
+  }
 
   return { threadId: crypto.randomUUID(), isNew: true, subjectNormalized };
 }

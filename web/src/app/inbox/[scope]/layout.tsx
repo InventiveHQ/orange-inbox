@@ -7,6 +7,7 @@ import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
+import SearchBar from "@/components/SearchBar";
 
 export default async function InboxLayout({
   children,
@@ -49,14 +50,17 @@ export default async function InboxLayout({
   if (domains.length === 0) {
     return (
       <ComposeProvider identities={identities}>
-        <div className="flex h-screen">
-          <Sidebar
-            domains={[]}
-            mailboxes={[]}
-            scope={effectiveScope}
-            initialCollapsed={sidebarCollapsed}
-          />
-          <FirstMailboxPrompt />
+        <div className="flex flex-col h-screen">
+          <TopBar />
+          <div className="flex flex-1 min-h-0">
+            <Sidebar
+              domains={[]}
+              mailboxes={[]}
+              scope={effectiveScope}
+              initialCollapsed={sidebarCollapsed}
+            />
+            <FirstMailboxPrompt />
+          </div>
         </div>
       </ComposeProvider>
     );
@@ -73,32 +77,45 @@ export default async function InboxLayout({
 
   return (
     <ComposeProvider identities={identities}>
-      <div className="flex h-screen">
-        <Sidebar
-          domains={domains}
-          mailboxes={mailboxes}
-          scope={effectiveScope}
-          initialCollapsed={sidebarCollapsed}
-        />
-        {!isFullPage && (
-          <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
-            <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-              {scopeLabel}
-            </header>
-            {isDrafts ? (
-              <DraftsList drafts={drafts} />
-            ) : (
-              <ThreadList
-                threads={threads}
-                scope={effectiveScope}
-                showDomain={effectiveScope === "all"}
-              />
-            )}
-          </section>
-        )}
-        <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+      <div className="flex flex-col h-screen">
+        <TopBar />
+        <div className="flex flex-1 min-h-0">
+          <Sidebar
+            domains={domains}
+            mailboxes={mailboxes}
+            scope={effectiveScope}
+            initialCollapsed={sidebarCollapsed}
+          />
+          {!isFullPage && (
+            <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
+              <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
+                {scopeLabel}
+              </header>
+              {isDrafts ? (
+                <DraftsList drafts={drafts} />
+              ) : (
+                <ThreadList
+                  threads={threads}
+                  scope={effectiveScope}
+                  showDomain={effectiveScope === "all"}
+                />
+              )}
+            </section>
+          )}
+          <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+        </div>
       </div>
     </ComposeProvider>
+  );
+}
+
+function TopBar() {
+  return (
+    <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-4 py-2">
+      <div className="mx-auto max-w-3xl">
+        <SearchBar />
+      </div>
+    </div>
   );
 }
 

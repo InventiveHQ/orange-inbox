@@ -1,3 +1,9 @@
+import {
+  getMailDbForNewThread,
+  getMailDbForThread,
+  registerThreadLocation,
+  upsertThreadIndex,
+} from "./mail-db";
 import type { Env, ParsedMessage } from "./types";
 import type { Recipient } from "./route";
 import type { ThreadMatch } from "./thread";
@@ -15,8 +21,33 @@ export async function storeMessage(
   parsed: ParsedMessage,
   rawBytes: ArrayBuffer,
 ): Promise<StoreResult> {
-  // Idempotency: if this Message-ID is already stored for this mailbox, bail.
-  const existing = await env.DB
+  // Resolve which mail DB this message should land in. New threads pick the
+  // emptiest DB under its soft cap (or hard cap in degraded mode); existing
+  // threads route to whichever DB the thread is pinned to.
+  let mailDb: D1Database;
+  let mailDbId: string;
+  if (thread.isNew) {
+    const picked = await getMailDbForNewThread(env);
+    if (!picked) {
+      // Every mail DB is over its hard cap and we have nowhere to put this.
+      // Reject so Cloudflare retries / requeues the inbound — better than
+      // silently dropping it.
+      throw new Error(
+        "all mail DBs are at hard cap; provision an overflow DB before continuing",
+      );
+    }
+    mailDb = picked.db;
+    mailDbId = picked.mailDbId;
+  } else {
+    mailDb = await getMailDbForThread(env, thread.threadId);
+    mailDbId = ""; // not needed for upsertThreadIndex on UPDATE branch
+  }
+
+  // Idempotency: if this Message-ID is already stored for this mailbox in
+  // the target mail DB, bail. (We're past the threading step, so the right
+  // mail DB to check is the one we're about to write to — same DB the
+  // existing message would live in if it's a true duplicate.)
+  const existing = await mailDb
     .prepare("SELECT id, thread_id FROM messages WHERE mailbox_id = ? AND message_id_header = ?")
     .bind(recipient.mailboxId, parsed.messageId)
     .first<{ id: string; thread_id: string }>();
@@ -59,7 +90,7 @@ export async function storeMessage(
 
   if (thread.isNew) {
     stmts.push(
-      env.DB
+      mailDb
         .prepare(
           `INSERT INTO threads (id, mailbox_id, subject_normalized, last_message_at, message_count, unread_count)
            VALUES (?, ?, ?, ?, 0, 0)`,
@@ -69,7 +100,7 @@ export async function storeMessage(
   }
 
   stmts.push(
-    env.DB
+    mailDb
       .prepare(
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
@@ -100,7 +131,7 @@ export async function storeMessage(
 
   for (const { id, r2Key, a } of attachmentInserts) {
     stmts.push(
-      env.DB
+      mailDb
         .prepare(
           `INSERT INTO attachments (id, message_id, filename, content_type, size, inline_cid, r2_key)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -109,10 +140,12 @@ export async function storeMessage(
     );
   }
 
-  // Bump thread counters and last_message_at. Always +1; the new-thread INSERT
-  // above seeds counters at 0 so a newly created thread ends up at 1/1.
+  // Bump thread counters on the mail-DB threads row. Source of truth for the
+  // listing UI is threads_index in control (upserted just below); this keeps
+  // the local thread row consistent so internal joins (next reply lookup,
+  // etc.) see fresh data.
   stmts.push(
-    env.DB
+    mailDb
       .prepare(
         `UPDATE threads
            SET message_count = message_count + 1,
@@ -123,7 +156,37 @@ export async function storeMessage(
       .bind(dateSeconds, thread.threadId),
   );
 
-  await env.DB.batch(stmts);
+  await mailDb.batch(stmts);
+
+  // Control-side bookkeeping. Independent of the mail batch — failures here
+  // mean the message is still on disk and visible via the next read; we just
+  // log so a sweeper can reconcile.
+  if (thread.isNew) {
+    try {
+      await registerThreadLocation(env, thread.threadId, mailDbId);
+    } catch (err) {
+      console.error("registerThreadLocation failed", err);
+    }
+  }
+
+  try {
+    await upsertThreadIndex(env, {
+      threadId: thread.threadId,
+      mailboxId: recipient.mailboxId,
+      mailDbId: mailDbId || "primary",
+      subjectNormalized: thread.subjectNormalized,
+      lastMessageAt: dateSeconds,
+      unreadDelta: 1, // inbound is always unread
+      lastMessageId: messageId,
+      lastSubject: parsed.subject || null,
+      lastFromAddr: parsed.from.addr,
+      lastFromName: parsed.from.name ?? null,
+      lastSnippet: parsed.snippet,
+      createdAt: thread.isNew ? dateSeconds : undefined,
+    });
+  } catch (err) {
+    console.error("upsertThreadIndex failed", err);
+  }
 
   return { messageId, threadId: thread.threadId, duplicate: false };
 }
