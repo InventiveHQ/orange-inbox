@@ -1,7 +1,9 @@
 import { getCurrentUser } from "@/lib/auth";
 import { listDomainsForUser, listThreads } from "@/lib/queries";
+import { listIdentities } from "@/lib/identities";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
+import ComposeProvider from "@/components/ComposeProvider";
 
 export default async function InboxLayout({
   children,
@@ -14,31 +16,36 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, threads] = await Promise.all([
+  const [domains, threads, identities] = await Promise.all([
     listDomainsForUser(user.id),
     listThreads(user.id, { domainName: scope === "all" ? undefined : scope }),
+    listIdentities(user.id),
   ]);
 
   if (domains.length === 0) {
     return (
-      <div className="flex h-screen">
-        <Sidebar domains={[]} scope={scope} />
-        <FirstDomainPrompt />
-      </div>
+      <ComposeProvider identities={identities}>
+        <div className="flex h-screen">
+          <Sidebar domains={[]} scope={scope} />
+          <FirstDomainPrompt />
+        </div>
+      </ComposeProvider>
     );
   }
 
   return (
-    <div className="flex h-screen">
-      <Sidebar domains={domains} scope={scope} />
-      <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
-        <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-          {scope === "all" ? "All inboxes" : scope}
-        </header>
-        <ThreadList threads={threads} scope={scope} showDomain={scope === "all"} />
-      </section>
-      <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
-    </div>
+    <ComposeProvider identities={identities}>
+      <div className="flex h-screen">
+        <Sidebar domains={domains} scope={scope} />
+        <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
+          <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
+            {scope === "all" ? "All inboxes" : scope}
+          </header>
+          <ThreadList threads={threads} scope={scope} showDomain={scope === "all"} />
+        </section>
+        <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+      </div>
+    </ComposeProvider>
   );
 }
 

@@ -1,22 +1,35 @@
 import type { ThreadDetail, ThreadMessage } from "@/lib/queries";
 import { formatFullDate, senderLabel } from "@/lib/format";
+import ReplyButton from "./ReplyButton";
 
 interface Props {
   detail: ThreadDetail;
+  mailboxId: string;
 }
 
-export default function ThreadView({ detail }: Props) {
+export default function ThreadView({ detail, mailboxId }: Props) {
   const { thread, messages } = detail;
   const subject = messages[0]?.subject || thread.subject_normalized;
+  const lastInbound = [...messages].reverse().find(m => m.direction === "inbound");
 
   return (
     <article className="flex-1 overflow-y-auto">
-      <header className="border-b border-neutral-200 dark:border-neutral-800 px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">{subject}</h1>
-        <div className="mt-1 text-xs text-neutral-500">
-          {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
-          {messages.length === 1 ? "" : "s"}
+      <header className="flex items-start justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 px-6 py-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">{subject}</h1>
+          <div className="mt-1 text-xs text-neutral-500">
+            {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
+            {messages.length === 1 ? "" : "s"}
+          </div>
         </div>
+        {lastInbound && (
+          <ReplyButton
+            replyToMessageId={lastInbound.id}
+            preferredMailboxId={mailboxId}
+            toAddrs={[lastInbound.from_addr]}
+            subject={lastInbound.subject || ""}
+          />
+        )}
       </header>
 
       <div className="divide-y divide-neutral-200 dark:divide-neutral-800">

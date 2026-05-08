@@ -12,5 +12,5 @@ export default async function ThreadPage({
   const user = await requireUser();
   const detail = await getThreadDetail(user.id, threadId);
   if (!detail) notFound();
-  return <ThreadView detail={detail} />;
+  return <ThreadView detail={detail} mailboxId={detail.thread.mailbox_id} />;
 }

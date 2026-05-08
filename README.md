@@ -141,7 +141,7 @@ Then in the Cloudflare dashboard:
 - [x] Stage 1 — Repo scaffold, schema, configs, control-plane / mail-plane split.
 - [x] Stage 2 — Inbound parse + threading.
 - [x] Stage 3 — Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
-- [ ] Stage 4 — Compose + send via `env.EMAIL.send()`.
+- [x] Stage 4 — Compose + send via `env.EMAIL.send()`, identity-aware replies.
 - [ ] Stage 5 — Labels, search, identity-aware replies.
 - [ ] Stage 6 — One-click deploy button + per-domain role management.
 

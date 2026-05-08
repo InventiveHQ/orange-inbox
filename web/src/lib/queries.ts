@@ -91,6 +91,7 @@ export interface ThreadDetail {
     starred: number;
     archived: number;
     domain_name: string;
+    mailbox_id: string;
     mailbox_local_part: string;
   };
   messages: ThreadMessage[];
@@ -117,7 +118,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .prepare(
       `SELECT t.id, t.subject_normalized, t.last_message_at, t.message_count,
               t.unread_count, t.starred, t.archived,
-              d.name AS domain_name, mb.local_part AS mailbox_local_part
+              d.name AS domain_name, mb.id AS mailbox_id, mb.local_part AS mailbox_local_part
          FROM threads t
          INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
          INNER JOIN domains d ON d.id = mb.domain_id

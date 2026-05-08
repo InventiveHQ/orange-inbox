@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { DomainRow } from "@/lib/queries";
 import AddDomainButton from "./AddDomainButton";
+import ComposeButton from "./ComposeButton";
 
 interface Props {
   domains: DomainRow[];
@@ -13,6 +14,10 @@ export default function Sidebar({ domains, scope }: Props) {
       <div className="p-4 flex items-center gap-2">
         <span className="inline-block w-3 h-3 rounded-full bg-[var(--color-brand)]" />
         <span className="font-semibold tracking-tight">orange-inbox</span>
+      </div>
+
+      <div className="px-3 pb-3">
+        <ComposeButton scope={scope} />
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pb-2">
