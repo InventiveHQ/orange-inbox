@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { getThreadDetail } from "@/lib/queries";
+import { tombstoneStatementsForThread } from "@/lib/r2-tombstones";
 import { userCanAccessThread } from "@/lib/threads-mutate";
 
 export async function GET(
@@ -102,9 +103,9 @@ export async function PATCH(
 }
 
 // Hard delete. messages, attachments rows, and message_labels cascade off
-// threads. TODO: orphan cleanup for R2 bytes — raw .eml, html bodies, and
-// attachment blobs are NOT removed by the FK cascade; a sweeper should
-// reconcile R2 keys against surviving rows.
+// threads. R2 bytes (raw .eml, html bodies, attachments) get tombstoned in
+// the same batch as the thread delete; the email-worker cron picks them up
+// and removes them from the buckets.
 export async function DELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
@@ -117,7 +118,11 @@ export async function DELETE(
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    await getDb().prepare("DELETE FROM threads WHERE id = ?").bind(id).run();
+    const db = getDb();
+    await db.batch([
+      ...tombstoneStatementsForThread(id),
+      db.prepare("DELETE FROM threads WHERE id = ?").bind(id),
+    ]);
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (e instanceof UnauthenticatedError) {

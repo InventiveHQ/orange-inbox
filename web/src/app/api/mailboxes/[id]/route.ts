@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { isDomainAdmin, isMailboxOwner } from "@/lib/mailbox-access";
+import { tombstoneStatementsForMailbox } from "@/lib/r2-tombstones";
 
 const LOCAL_PART_RE = /^[a-z0-9._+\-]+$/i;
 
@@ -95,8 +96,9 @@ export async function PATCH(
 }
 
 // Owner of the mailbox or admin of its parent domain may delete it.
-// ON DELETE CASCADE on threads/messages/attachments/access rows handles
-// the rest.
+// ON DELETE CASCADE handles the row tree (threads → messages → attachments
+// → labels). R2 bytes get tombstoned in the same batch; the email-worker
+// cron sweeps them.
 export async function DELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
@@ -111,7 +113,11 @@ export async function DELETE(
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    await getDb().prepare("DELETE FROM mailboxes WHERE id = ?").bind(mailboxId).run();
+    const db = getDb();
+    await db.batch([
+      ...tombstoneStatementsForMailbox(mailboxId),
+      db.prepare("DELETE FROM mailboxes WHERE id = ?").bind(mailboxId),
+    ]);
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (e instanceof UnauthenticatedError) {

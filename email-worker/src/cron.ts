@@ -14,11 +14,13 @@ import type { Env } from "./types";
 const DISPATCH_BATCH = 25;
 const TEMP_UPLOADS_TTL_S = 60 * 60 * 24; // 24h
 const TEMP_UPLOADS_BATCH = 50;
+const R2_TOMBSTONE_BATCH = 50;
 
 export async function runCron(env: Env, ctx: ExecutionContext): Promise<void> {
   ctx.waitUntil(unsnoozeDueThreads(env));
   ctx.waitUntil(dispatchDueScheduled(env));
   ctx.waitUntil(sweepTempUploads(env));
+  ctx.waitUntil(sweepR2Tombstones(env));
 }
 
 async function unsnoozeDueThreads(env: Env): Promise<void> {
@@ -78,6 +80,53 @@ async function dispatchDueScheduled(env: Env): Promise<void> {
     }
   } catch (e) {
     console.error("cron: scheduled scan failed", e);
+  }
+}
+
+async function sweepR2Tombstones(env: Env): Promise<void> {
+  try {
+    const { results } = await env.DB
+      .prepare(
+        `SELECT id, bucket, r2_key FROM r2_tombstones
+          ORDER BY queued_at ASC
+          LIMIT ?`,
+      )
+      .bind(R2_TOMBSTONE_BATCH)
+      .all<{ id: number; bucket: string; r2_key: string }>();
+    if (!results || results.length === 0) return;
+
+    const successful: number[] = [];
+    for (const t of results) {
+      const bucket = t.bucket === "RAW_MAIL" ? env.RAW_MAIL : env.ATTACHMENTS;
+      try {
+        await bucket.delete(t.r2_key);
+        successful.push(t.id);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`cron: r2 tombstone ${t.id} (${t.bucket}/${t.r2_key}) failed`, msg);
+        try {
+          await env.DB
+            .prepare(
+              "UPDATE r2_tombstones SET attempts = attempts + 1, last_error = ? WHERE id = ?",
+            )
+            .bind(msg.slice(0, 500), t.id)
+            .run();
+        } catch (e2) {
+          console.error(`cron: failed to record tombstone error for ${t.id}`, e2);
+        }
+      }
+    }
+
+    if (successful.length > 0) {
+      const placeholders = successful.map(() => "?").join(",");
+      await env.DB
+        .prepare(`DELETE FROM r2_tombstones WHERE id IN (${placeholders})`)
+        .bind(...successful)
+        .run();
+      console.log(`cron: cleared ${successful.length} r2 tombstones`);
+    }
+  } catch (e) {
+    console.error("cron: r2 tombstones sweep failed", e);
   }
 }
 
