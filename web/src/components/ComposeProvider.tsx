@@ -834,7 +834,7 @@ function TemplatePicker({ onPick }: { onPick: (t: TemplateRow) => void }) {
           )}
           {templates !== null && templates.length === 0 && (
             <div className="px-3 py-2 text-sm text-neutral-500">
-              No templates yet. Manage them on the Templates page.
+              No templates yet.
             </div>
           )}
           {templates && templates.length > 0 && (
@@ -867,6 +867,17 @@ function TemplatePicker({ onPick }: { onPick: (t: TemplateRow) => void }) {
                 </li>
               ))}
             </ul>
+          )}
+          {templates !== null && (
+            <div className="border-t border-neutral-200 dark:border-neutral-800">
+              <a
+                href="/inbox/templates"
+                onMouseDown={() => setOpen(false)}
+                className="block px-3 py-2 text-xs text-[var(--color-brand)] hover:bg-neutral-100 dark:hover:bg-neutral-900"
+              >
+                Manage templates →
+              </a>
+            </div>
           )}
         </div>
       )}
@@ -1036,14 +1047,19 @@ function fillTemplate(text: string, c: TemplateContext): string {
   });
 }
 
-// Reply: pick the mailbox that received the original. Compose from /inbox/<domain>:
-// pick that domain's catch-all (or first mailbox). Otherwise: first identity.
+// Reply: pick the mailbox that received the original. Compose with a single
+// mailbox selected: pick that mailbox. Compose from a domain scope: that
+// domain's catch-all (or first mailbox). Otherwise: first identity.
 function pickInitialIdentity(identities: Identity[], args: ComposeOpenArgs): Identity | undefined {
   if (args.preferredMailboxId) {
     const m = identities.find(i => i.mailbox_id === args.preferredMailboxId);
     if (m) return m;
   }
   if (args.preferredScope && args.preferredScope !== "all") {
+    // /inbox/<scope> uses the mailbox id as scope when a single mailbox is
+    // selected; only special scopes like "all"/"drafts" aren't mailbox ids.
+    const byMailbox = identities.find(i => i.mailbox_id === args.preferredScope);
+    if (byMailbox) return byMailbox;
     const inDomain = identities.filter(i => i.domain_name === args.preferredScope);
     if (inDomain.length > 0) {
       return inDomain.find(i => i.is_catch_all === 1) ?? inDomain[0];
