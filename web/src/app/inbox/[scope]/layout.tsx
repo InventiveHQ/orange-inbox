@@ -1,8 +1,10 @@
 import { getCurrentUser } from "@/lib/auth";
 import { listDomainsForUser, listMailboxesForUser, listThreads } from "@/lib/queries";
 import { listIdentities } from "@/lib/identities";
+import { listDraftsForUser } from "@/lib/drafts";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
+import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
 
 export default async function InboxLayout({
@@ -22,13 +24,24 @@ export default async function InboxLayout({
     listIdentities(user.id),
   ]);
 
-  // Validate the scope: "all" or a mailbox the user has access to. Anything
-  // else falls back to "all" rather than 404'ing the layout.
-  const isValidScope = scope === "all" || mailboxes.some(mb => mb.id === scope);
+  // Validate the scope: "all", "drafts", "contacts", "templates", or a mailbox
+  // the user has access to. Anything else falls back to "all" rather than
+  // 404'ing the layout.
+  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates"]);
+  const isValidScope = SPECIAL_SCOPES.has(scope) || mailboxes.some(mb => mb.id === scope);
   const effectiveScope = isValidScope ? scope : "all";
-  const mailboxId = effectiveScope === "all" ? undefined : effectiveScope;
 
-  const threads = await listThreads(user.id, { mailboxId });
+  const isDrafts = effectiveScope === "drafts";
+  // Contacts and templates use the full main area — no middle column, no
+  // thread/draft fetch needed.
+  const isFullPage = effectiveScope === "contacts" || effectiveScope === "templates";
+  const mailboxId =
+    effectiveScope === "all" || isDrafts || isFullPage ? undefined : effectiveScope;
+
+  const [threads, drafts] = await Promise.all([
+    isDrafts || isFullPage ? Promise.resolve([]) : listThreads(user.id, { mailboxId }),
+    isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
+  ]);
 
   if (domains.length === 0) {
     return (
@@ -41,8 +54,9 @@ export default async function InboxLayout({
     );
   }
 
-  const scopeLabel =
-    effectiveScope === "all"
+  const scopeLabel = isDrafts
+    ? "Drafts"
+    : effectiveScope === "all"
       ? "All inboxes"
       : (() => {
           const mb = mailboxes.find(m => m.id === effectiveScope);
@@ -53,16 +67,22 @@ export default async function InboxLayout({
     <ComposeProvider identities={identities}>
       <div className="flex h-screen">
         <Sidebar domains={domains} mailboxes={mailboxes} scope={effectiveScope} />
-        <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
-          <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-            {scopeLabel}
-          </header>
-          <ThreadList
-            threads={threads}
-            scope={effectiveScope}
-            showDomain={effectiveScope === "all"}
-          />
-        </section>
+        {!isFullPage && (
+          <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
+            <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
+              {scopeLabel}
+            </header>
+            {isDrafts ? (
+              <DraftsList drafts={drafts} />
+            ) : (
+              <ThreadList
+                threads={threads}
+                scope={effectiveScope}
+                showDomain={effectiveScope === "all"}
+              />
+            )}
+          </section>
+        )}
         <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
       </div>
     </ComposeProvider>

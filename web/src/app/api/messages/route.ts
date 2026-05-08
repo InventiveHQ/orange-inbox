@@ -10,6 +10,7 @@ interface Body {
   subject?: string;
   body?: string;
   reply_to_message_id?: string;
+  draft_id?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
       subject: b.subject ?? "",
       body: b.body,
       replyToMessageId: b.reply_to_message_id,
+      draftId: b.draft_id,
     });
     return NextResponse.json({ messageId, threadId }, { status: 201 });
   } catch (e) {

@@ -35,6 +35,17 @@ export default function Sidebar({ domains, mailboxes, scope }: Props) {
 
       <nav className="flex-1 overflow-y-auto px-2 pb-2">
         <SidebarLink href="/inbox/all" label="All inboxes" active={scope === "all"} />
+        <SidebarLink href="/inbox/drafts" label="Drafts" active={scope === "drafts"} />
+        <SidebarLink
+          href="/inbox/contacts"
+          label="Contacts"
+          active={scope === "contacts"}
+        />
+        <SidebarLink
+          href="/inbox/templates"
+          label="Templates"
+          active={scope === "templates"}
+        />
 
         {domains.map(d => {
           const list = byDomain.get(d.name) ?? [];

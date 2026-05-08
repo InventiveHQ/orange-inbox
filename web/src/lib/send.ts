@@ -1,5 +1,6 @@
 import { getDb, getEnv } from "./db";
 import { findIdentity, fullAddress, type Identity } from "./identities";
+import { recordSendRecipients } from "./contacts";
 
 // Cloudflare's send_email binding has a structured-builder overload, so we
 // don't need the `cloudflare:email` runtime module or mimetext at all — the
@@ -66,20 +67,26 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     headers["References"] = [...parentReferences, parentMessage.message_id_header].join(" ");
   }
 
+  const sendBuilder = {
+    from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
+    to: input.to,
+    cc: input.cc?.length ? input.cc : undefined,
+    bcc: input.bcc?.length ? input.bcc : undefined,
+    subject: input.subject || "(no subject)",
+    text: input.body,
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  } as const;
   try {
-    await env.EMAIL.send({
-      from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
-      to: input.to,
-      cc: input.cc?.length ? input.cc : undefined,
-      bcc: input.bcc?.length ? input.bcc : undefined,
-      subject: input.subject || "(no subject)",
-      text: input.body,
-      ...(Object.keys(headers).length > 0 ? { headers } : {}),
-    });
+    await env.EMAIL.send(sendBuilder);
   } catch (e) {
-    // Surface Cloudflare's actual rejection reason (e.g. "destination address
-    // not verified", "sender not authorised") instead of swallowing it as a
-    // generic 500. The route handler turns SendError into a 400 with body.
+    // Cloudflare's send_email error strings are sometimes generic ("internal
+    // server error"). Log the full error object — message, name, cause, plus
+    // the request payload that triggered it — so `wrangler tail` shows what
+    // we actually need for diagnosis.
+    console.error("env.EMAIL.send rejected", {
+      error: serializeError(e),
+      builder: { ...sendBuilder, text: `<${sendBuilder.text.length} chars>` },
+    });
     const detail = e instanceof Error ? e.message : String(e);
     throw new SendError("send_failed", `Cloudflare rejected the send: ${detail}`);
   }
@@ -175,6 +182,19 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
 
   await db.batch(stmts);
 
+  // Auto-add recipients to the mailbox's shared contact list. Best-effort —
+  // a contact-store hiccup must never make a successful send look failed.
+  try {
+    const all = [
+      ...input.to,
+      ...(input.cc ?? []),
+      ...(input.bcc ?? []),
+    ].map(email => ({ email }));
+    await recordSendRecipients(identity.mailbox_id, all);
+  } catch (err) {
+    console.error("contact auto-add failed", err);
+  }
+
   return { messageId, threadId };
 }
 
@@ -226,6 +246,22 @@ export class SendError extends Error {
   constructor(public code: string, message: string) {
     super(message);
   }
+}
+
+function serializeError(e: unknown): Record<string, unknown> {
+  if (!(e instanceof Error)) return { value: String(e) };
+  const out: Record<string, unknown> = {
+    name: e.name,
+    message: e.message,
+    stack: e.stack,
+  };
+  // Include enumerable own properties (Cloudflare attaches `cause`, `code`,
+  // sometimes a `response`-like shape).
+  for (const key of Object.keys(e)) {
+    out[key] = (e as unknown as Record<string, unknown>)[key];
+  }
+  if (e.cause !== undefined) out.cause = serializeError(e.cause);
+  return out;
 }
 
 export type { Identity };
