@@ -23,6 +23,24 @@ and want a real inbox UI instead of forwarding everything to a third party.
 Multi-domain is a first-class concern: one deployment can serve mail for many
 domains, with both a unified inbox and per-domain silos.
 
+## Two kinds of domain
+
+orange-inbox separates the **host domain** (where you sign in) from the **mail
+domains** (whose mail you read and send). They don't have to overlap.
+
+| Role | Example | Needs Email Routing? |
+| --- | --- | --- |
+| Host / control-plane domain — where the app is served, where you authenticate via Cloudflare Access | `orangemail.inventivehq.com` | No |
+| Mail-plane domains — Cloudflare Email Routing is enabled on these; the app reads and sends their mail | `glitchreplay.com`, `example.com` | Yes |
+
+You sign in once on the host. From there you add as many mail domains as you
+own, each verified through the Cloudflare API. A single user can have
+different roles per domain (admin on one, reader on another).
+
+Auth on the host is delegated to **Cloudflare Access** — the Worker trusts the
+`Cf-Access-Authenticated-User-Email` header and the signed JWT, so MFA,
+hardware keys, and SSO are all handled for free.
+
 ## Architecture
 
 ```
@@ -105,12 +123,12 @@ Then in the Cloudflare dashboard, point your domain's Email Routing rule at
 
 ## Roadmap
 
-- [x] Stage 1 — Repo scaffold, schema, configs.
+- [x] Stage 1 — Repo scaffold, schema, configs, control-plane / mail-plane split.
 - [ ] Stage 2 — Inbound parse + threading.
-- [ ] Stage 3 — Three-pane read UI + account switcher.
+- [ ] Stage 3 — Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
 - [ ] Stage 4 — Compose + send via `env.EMAIL.send()`.
 - [ ] Stage 5 — Labels, search, identity-aware replies.
-- [ ] Stage 6 — One-click deploy button + setup wizard.
+- [ ] Stage 6 — One-click deploy button + per-domain role management.
 
 ## License
 
