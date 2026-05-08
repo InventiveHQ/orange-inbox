@@ -1,0 +1,60 @@
+import { headers } from "next/headers";
+import { getDb } from "./db";
+
+export interface User {
+  id: string;
+  email: string;
+  display_name: string | null;
+}
+
+const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
+
+// Resolve the current user from the Cloudflare Access JWT/header set by
+// Access in front of the host Worker. In `next dev` (no Access in the loop),
+// fall back to DEV_USER_EMAIL so local development is usable.
+export async function getCurrentUser(): Promise<User | null> {
+  const email = await resolveEmail();
+  if (!email) return null;
+
+  const db = getDb();
+  const existing = await db
+    .prepare("SELECT id, email, display_name FROM users WHERE email = ?")
+    .bind(email)
+    .first<User>();
+  if (existing) {
+    await db.prepare("UPDATE users SET last_seen_at = unixepoch() WHERE id = ?").bind(existing.id).run();
+    return existing;
+  }
+
+  const id = crypto.randomUUID();
+  await db
+    .prepare("INSERT INTO users (id, email, last_seen_at) VALUES (?, ?, unixepoch())")
+    .bind(id, email)
+    .run();
+  return { id, email, display_name: null };
+}
+
+export async function requireUser(): Promise<User> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new UnauthenticatedError();
+  }
+  return user;
+}
+
+export class UnauthenticatedError extends Error {
+  constructor() {
+    super("not authenticated");
+  }
+}
+
+async function resolveEmail(): Promise<string | null> {
+  const h = await headers();
+  const fromAccess = h.get(ACCESS_EMAIL_HEADER);
+  if (fromAccess) return fromAccess.trim().toLowerCase();
+
+  if (process.env.NODE_ENV === "development" && process.env.DEV_USER_EMAIL) {
+    return process.env.DEV_USER_EMAIL.trim().toLowerCase();
+  }
+  return null;
+}

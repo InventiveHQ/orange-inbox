@@ -100,8 +100,14 @@ npm run cf-typegen
 
 ## Development
 
+The Next.js Worker expects a Cloudflare Access-signed identity header
+(`Cf-Access-Authenticated-User-Email`). For `next dev` there's an escape
+hatch: set `DEV_USER_EMAIL` in `web/.dev.vars` and the auth helper will
+treat that as the signed-in user.
+
 ```sh
 cd web
+echo 'DEV_USER_EMAIL=you@yourdomain.com' > .dev.vars
 npm run dev          # Next.js dev server with miniflare-backed bindings
 npm run preview      # OpenNext build + workerd preview (matches prod)
 ```
@@ -111,6 +117,9 @@ cd email-worker
 npm run dev          # local Worker with shared D1/R2
 ```
 
+Open http://localhost:3000 — the app redirects to `/inbox/all` and prompts you
+to add your first mail domain through the sidebar button.
+
 ## Deploy
 
 ```sh
@@ -118,14 +127,20 @@ cd web && npm run deploy
 cd ../email-worker && npm run deploy
 ```
 
-Then in the Cloudflare dashboard, point your domain's Email Routing rule at
-`orange-inbox-email`.
+Then in the Cloudflare dashboard:
+
+1. Point your domain's Email Routing rule at the deployed `orange-inbox-email`
+   Worker. Inbound mail will start landing in D1/R2.
+2. Put **Cloudflare Access** in front of `orange-inbox-web` (Zero Trust →
+   Applications → Add a self-hosted application). Access takes care of MFA,
+   hardware-key login, and SSO; the app trusts the
+   `Cf-Access-Authenticated-User-Email` header it injects.
 
 ## Roadmap
 
 - [x] Stage 1 — Repo scaffold, schema, configs, control-plane / mail-plane split.
-- [ ] Stage 2 — Inbound parse + threading.
-- [ ] Stage 3 — Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
+- [x] Stage 2 — Inbound parse + threading.
+- [x] Stage 3 — Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
 - [ ] Stage 4 — Compose + send via `env.EMAIL.send()`.
 - [ ] Stage 5 — Labels, search, identity-aware replies.
 - [ ] Stage 6 — One-click deploy button + per-domain role management.
