@@ -141,6 +141,15 @@ export interface ThreadDetail {
   messages: ThreadMessage[];
 }
 
+export interface AttachmentRow {
+  id: string;
+  message_id: string;
+  filename: string | null;
+  content_type: string | null;
+  size: number;
+  inline_cid: string | null;
+}
+
 export interface ThreadMessage {
   id: string;
   message_id_header: string;
@@ -153,11 +162,13 @@ export interface ThreadMessage {
   date: number;
   snippet: string | null;
   text_body: string | null;
+  html_r2_key: string | null;
   read: number;
   starred: number;
   // Internal attribution for shared mailboxes — populated for outbound only.
   sent_by_email: string | null;
   sent_by_display_name: string | null;
+  attachments: AttachmentRow[];
 }
 
 export async function getThreadDetail(userId: string, threadId: string): Promise<ThreadDetail | null> {
@@ -176,11 +187,14 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .first<ThreadDetail["thread"]>();
   if (!head) return null;
 
+  // Wire format from D1 — attachments load separately and get bucketed in.
+  type MessageRow = Omit<ThreadMessage, "attachments">;
+
   const { results } = await getDb()
     .prepare(
       `SELECT m.id, m.message_id_header, m.direction, m.from_addr, m.from_name,
               m.to_json, m.cc_json, m.subject, m.date, m.snippet, m.text_body,
-              m.read, m.starred,
+              m.html_r2_key, m.read, m.starred,
               u.email AS sent_by_email, u.display_name AS sent_by_display_name
          FROM messages m
          LEFT JOIN users u ON u.id = m.sent_by_user_id
@@ -188,7 +202,34 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
         ORDER BY m.date ASC`,
     )
     .bind(threadId)
-    .all<ThreadMessage>();
+    .all<MessageRow>();
 
-  return { thread: head, messages: results ?? [] };
+  const messageRows = results ?? [];
+
+  // One round-trip for all attachments in the thread; bucket by message_id.
+  // Avoids an N+1 across messages without joining/duplicating message columns.
+  const { results: attachmentRows } = await getDb()
+    .prepare(
+      `SELECT a.id, a.message_id, a.filename, a.content_type, a.size, a.inline_cid
+         FROM attachments a
+         INNER JOIN messages m ON m.id = a.message_id
+        WHERE m.thread_id = ?
+        ORDER BY a.id ASC`,
+    )
+    .bind(threadId)
+    .all<AttachmentRow>();
+
+  const attachmentsByMessage = new Map<string, AttachmentRow[]>();
+  for (const a of attachmentRows ?? []) {
+    const list = attachmentsByMessage.get(a.message_id);
+    if (list) list.push(a);
+    else attachmentsByMessage.set(a.message_id, [a]);
+  }
+
+  const messages: ThreadMessage[] = messageRows.map(m => ({
+    ...m,
+    attachments: attachmentsByMessage.get(m.id) ?? [],
+  }));
+
+  return { thread: head, messages };
 }
