@@ -1,0 +1,59 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orange-inbox-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-05-08",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "orange-inbox-web"
+    }
+  ],
+
+  // Shared with email-worker. Run `wrangler d1 create orange-inbox` and paste the id.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "orange-inbox",
+      "database_id": "REPLACE_WITH_D1_ID",
+      "migrations_dir": "../db/migrations"
+    }
+  ],
+
+  // Raw .eml messages and attachments. Create with `wrangler r2 bucket create <name>`.
+  "r2_buckets": [
+    {
+      "binding": "RAW_MAIL",
+      "bucket_name": "orange-inbox-raw"
+    },
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "orange-inbox-attachments"
+    }
+  ],
+
+  // Auto-saved compose drafts.
+  "kv_namespaces": [
+    {
+      "binding": "DRAFTS",
+      "id": "REPLACE_WITH_KV_ID"
+    }
+  ],
+
+  // Outbound email. Sender domain must have Email Routing active in your account.
+  // Without `destination_address` / `allowed_destination_addresses` this binding is
+  // unrestricted, so any verified destination works.
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ]
+}

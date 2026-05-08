@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orange-inbox-email",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-08",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Bindings mirror web/wrangler.jsonc so both Workers see the same state.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "orange-inbox",
+      "database_id": "REPLACE_WITH_D1_ID",
+      "migrations_dir": "../db/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "RAW_MAIL",
+      "bucket_name": "orange-inbox-raw"
+    },
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "orange-inbox-attachments"
+    }
+  ]
+}

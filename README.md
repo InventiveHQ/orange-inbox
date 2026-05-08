@@ -1,0 +1,117 @@
+# orange-inbox
+
+A Gmail-like webmail client that runs entirely on Cloudflare. Built for people
+who use [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/)
+and want a real inbox UI instead of forwarding everything to a third party.
+
+> Status: pre-alpha scaffold. The repo lays out the architecture; features are
+> being added in stages.
+
+## What it is
+
+- A **Next.js** app deployed to Cloudflare Workers via
+  [`@opennextjs/cloudflare`](https://opennext.js.org/cloudflare) — serves the
+  three-pane Gmail-style UI and the API for reading/sending mail.
+- A standalone **Email Worker** that Cloudflare Email Routing dispatches each
+  inbound message to. It parses MIME, writes raw bytes to R2, and inserts
+  thread/message rows into D1.
+- **D1** for metadata, **R2** for raw `.eml` and attachments, **KV** for drafts.
+- Outbound mail uses the
+  [`send_email` binding](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/),
+  so SPF/DKIM/DMARC are managed by Cloudflare.
+
+Multi-domain is a first-class concern: one deployment can serve mail for many
+domains, with both a unified inbox and per-domain silos.
+
+## Architecture
+
+```
+                  ┌─────────────────────┐
+   inbound  ─────►│ email-worker        │──► R2 (raw .eml + attachments)
+   (MX → CF)      │  email() handler    │──► D1 (threads + messages)
+                  └─────────────────────┘
+                         shares
+                  ┌─────────────────────┐
+   browser  ◄────►│ web (Next.js +      │──► D1 (read)
+                  │  OpenNext)          │──► R2 (signed URLs)
+                  │  send_email binding │──► outbound SMTP via Cloudflare
+                  └─────────────────────┘
+```
+
+## Layout
+
+```
+orange-inbox/
+├── web/                  Next.js 16 + OpenNext for Cloudflare
+├── email-worker/         Inbound Email Worker (postal-mime → D1/R2)
+├── db/migrations/        D1 SQL migrations (shared by both Workers)
+└── README.md
+```
+
+## Prerequisites
+
+- Node.js 20.9+
+- A Cloudflare account with at least one domain on Email Routing
+- `wrangler login` to authenticate
+
+## Setup
+
+```sh
+# 1. Install
+cd web && npm install
+cd ../email-worker && npm install
+
+# 2. Create the shared D1 database
+cd ../web
+npx wrangler d1 create orange-inbox
+# Paste the database_id into BOTH web/wrangler.jsonc and email-worker/wrangler.jsonc.
+
+# 3. Create R2 buckets and KV namespace
+npx wrangler r2 bucket create orange-inbox-raw
+npx wrangler r2 bucket create orange-inbox-attachments
+npx wrangler kv namespace create DRAFTS
+# Paste the KV id into web/wrangler.jsonc.
+
+# 4. Apply schema
+npx wrangler d1 migrations apply orange-inbox --local
+npx wrangler d1 migrations apply orange-inbox --remote
+
+# 5. Generate binding types (run after wrangler.jsonc changes)
+npm run cf-typegen
+```
+
+## Development
+
+```sh
+cd web
+npm run dev          # Next.js dev server with miniflare-backed bindings
+npm run preview      # OpenNext build + workerd preview (matches prod)
+```
+
+```sh
+cd email-worker
+npm run dev          # local Worker with shared D1/R2
+```
+
+## Deploy
+
+```sh
+cd web && npm run deploy
+cd ../email-worker && npm run deploy
+```
+
+Then in the Cloudflare dashboard, point your domain's Email Routing rule at
+`orange-inbox-email`.
+
+## Roadmap
+
+- [x] Stage 1 — Repo scaffold, schema, configs.
+- [ ] Stage 2 — Inbound parse + threading.
+- [ ] Stage 3 — Three-pane read UI + account switcher.
+- [ ] Stage 4 — Compose + send via `env.EMAIL.send()`.
+- [ ] Stage 5 — Labels, search, identity-aware replies.
+- [ ] Stage 6 — One-click deploy button + setup wizard.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
