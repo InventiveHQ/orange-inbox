@@ -1,23 +1,28 @@
-// Inbound mail handler. Cloudflare Email Routing dispatches each message here.
-// Stage 2 will fill in: postal-mime parse → R2 raw .eml + attachments → D1 thread/message.
-
-interface Env {
-  DB: D1Database;
-  RAW_MAIL: R2Bucket;
-  ATTACHMENTS: R2Bucket;
-}
+import { parseEmail } from "./parse";
+import { resolveRecipient } from "./route";
+import { storeMessage } from "./store";
+import { findOrCreateThread } from "./thread";
+import type { Env } from "./types";
 
 export default {
   async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext) {
-    const rawKey = `incoming/${Date.now()}-${crypto.randomUUID()}.eml`;
-    await env.RAW_MAIL.put(rawKey, message.raw, {
-      customMetadata: {
-        from: message.from,
-        to: message.to,
-        size: String(message.rawSize),
-      },
-    });
+    const recipient = await resolveRecipient(env, message.to);
+    if (!recipient) {
+      message.setReject(`Unknown mailbox: ${message.to}`);
+      return;
+    }
 
-    console.log(`stored ${rawKey} (${message.rawSize} bytes) from=${message.from} to=${message.to}`);
+    // Tee so we can both parse the stream and capture raw bytes for R2.
+    const [forParse, forRaw] = message.raw.tee();
+    const rawBytes = await new Response(forRaw).arrayBuffer();
+
+    const parsed = await parseEmail(forParse);
+    const thread = await findOrCreateThread(env, recipient.mailboxId, parsed);
+    const result = await storeMessage(env, recipient, thread, parsed, rawBytes);
+
+    console.log(
+      `inbound ${result.duplicate ? "(dup)" : "ok"} mailbox=${recipient.mailboxId} ` +
+        `thread=${result.threadId} msg=${result.messageId} from=${parsed.from.addr}`,
+    );
   },
 } satisfies ExportedHandler<Env>;

@@ -84,9 +84,12 @@ CREATE TABLE messages (
   starred            INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE UNIQUE INDEX messages_msgid       ON messages(message_id_header);
-CREATE INDEX        messages_thread_date ON messages(thread_id, date);
-CREATE INDEX        messages_mailbox_date ON messages(mailbox_id, date DESC);
+-- Same Message-ID can legitimately appear in multiple mailboxes when a
+-- message is CC'd to several of our addresses, so the unique constraint is
+-- (mailbox, message-id), not message-id alone.
+CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
+CREATE INDEX        messages_thread_date   ON messages(thread_id, date);
+CREATE INDEX        messages_mailbox_date  ON messages(mailbox_id, date DESC);
 
 -- ----------------------------------------------------------------------------
 -- attachments: one row per file. Bytes live in the ATTACHMENTS R2 bucket.
