@@ -1,17 +1,20 @@
 import Link from "next/link";
-import type { MailboxRow } from "@/lib/queries";
+import type { DomainRow, MailboxRow } from "@/lib/queries";
 import AddDomainButton from "./AddDomainButton";
+import AddMailboxButton from "./AddMailboxButton";
 import ComposeButton from "./ComposeButton";
 import ManageMailboxButton from "./ManageMailboxButton";
 
 interface Props {
+  domains: DomainRow[];
   mailboxes: MailboxRow[];
   scope: string;
 }
 
-export default function Sidebar({ mailboxes, scope }: Props) {
-  // Group mailboxes by domain so each appears under a domain header. Order
-  // already matches (domain, local_part) from listMailboxesForUser.
+export default function Sidebar({ domains, mailboxes, scope }: Props) {
+  // Group mailboxes by domain. Iterating `domains` (not the mailbox map) so a
+  // domain you administer but have no mailboxes in still appears with a "+"
+  // button, instead of disappearing from the sidebar.
   const byDomain = new Map<string, MailboxRow[]>();
   for (const mb of mailboxes) {
     const list = byDomain.get(mb.domain_name) ?? [];
@@ -33,16 +36,20 @@ export default function Sidebar({ mailboxes, scope }: Props) {
       <nav className="flex-1 overflow-y-auto px-2 pb-2">
         <SidebarLink href="/inbox/all" label="All inboxes" active={scope === "all"} />
 
-        {Array.from(byDomain.entries()).map(([domain, list]) => (
-          <div key={domain} className="mt-4">
-            <div className="px-3 pb-1 text-xs uppercase tracking-wider text-neutral-500">
-              {domain}
+        {domains.map(d => {
+          const list = byDomain.get(d.name) ?? [];
+          return (
+            <div key={d.id} className="mt-4">
+              <div className="flex items-center justify-between gap-1 px-3 pb-1 text-xs uppercase tracking-wider text-neutral-500">
+                <span className="truncate">{d.name}</span>
+                {d.is_admin === 1 && <AddMailboxButton domainId={d.id} domainName={d.name} />}
+              </div>
+              {list.map(mb => (
+                <SidebarMailbox key={mb.id} mb={mb} active={scope === mb.id} />
+              ))}
             </div>
-            {list.map(mb => (
-              <SidebarMailbox key={mb.id} mb={mb} active={scope === mb.id} />
-            ))}
-          </div>
-        ))}
+          );
+        })}
       </nav>
 
       <div className="p-2 border-t border-neutral-200 dark:border-neutral-800">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 
 interface Member {
   user_id: string;
@@ -21,6 +22,7 @@ export default function ManageMembersDialog({
   mailboxLabel: string;
   onClose: () => void;
 }) {
+  const router = useRouter();
   const [members, setMembers] = useState<Member[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -76,6 +78,24 @@ export default function ManageMembersDialog({
         return;
       }
       await refresh();
+    });
+  }
+
+  function deleteMailbox() {
+    if (!confirm(`Delete ${mailboxLabel}? All threads, messages, and attachments in it will be permanently removed.`)) {
+      return;
+    }
+    setActionError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${mailboxId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setActionError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      onClose();
+      router.refresh();
+      router.push("/inbox/all");
     });
   }
 
@@ -169,6 +189,17 @@ export default function ManageMembersDialog({
             </button>
           </div>
           {actionError && <div className="text-xs text-red-600">{actionError}</div>}
+        </div>
+
+        <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
+          <button
+            type="button"
+            onClick={deleteMailbox}
+            disabled={isPending}
+            className="text-xs text-red-600 hover:underline disabled:opacity-50"
+          >
+            Delete this mailbox
+          </button>
         </div>
       </div>
     </div>

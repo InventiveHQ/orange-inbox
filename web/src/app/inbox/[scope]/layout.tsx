@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { listMailboxesForUser, listThreads } from "@/lib/queries";
+import { listDomainsForUser, listMailboxesForUser, listThreads } from "@/lib/queries";
 import { listIdentities } from "@/lib/identities";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
@@ -16,7 +16,8 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [mailboxes, identities] = await Promise.all([
+  const [domains, mailboxes, identities] = await Promise.all([
+    listDomainsForUser(user.id),
     listMailboxesForUser(user.id),
     listIdentities(user.id),
   ]);
@@ -29,11 +30,11 @@ export default async function InboxLayout({
 
   const threads = await listThreads(user.id, { mailboxId });
 
-  if (mailboxes.length === 0) {
+  if (domains.length === 0) {
     return (
       <ComposeProvider identities={identities}>
         <div className="flex h-screen">
-          <Sidebar mailboxes={[]} scope={effectiveScope} />
+          <Sidebar domains={[]} mailboxes={[]} scope={effectiveScope} />
           <FirstMailboxPrompt />
         </div>
       </ComposeProvider>
@@ -51,7 +52,7 @@ export default async function InboxLayout({
   return (
     <ComposeProvider identities={identities}>
       <div className="flex h-screen">
-        <Sidebar mailboxes={mailboxes} scope={effectiveScope} />
+        <Sidebar domains={domains} mailboxes={mailboxes} scope={effectiveScope} />
         <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
           <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
             {scopeLabel}
