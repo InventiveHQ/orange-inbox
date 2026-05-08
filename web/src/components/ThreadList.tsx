@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ThreadListItem } from "@/lib/queries";
 import { formatThreadDate, senderLabel } from "@/lib/format";
+import LabelChip from "./LabelChip";
 
 interface Props {
   threads: ThreadListItem[];
@@ -54,11 +55,20 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
                 )}
                 <span className="shrink-0 text-xs text-neutral-500">{formatThreadDate(t.last_message_at)}</span>
               </div>
-              <div className={`truncate text-sm ${isUnread ? "font-medium" : "text-neutral-700 dark:text-neutral-300"}`}>
-                {subject}
-                {t.message_count > 1 && (
-                  <span className="ml-1 text-xs text-neutral-500">({t.message_count})</span>
+              <div className={`flex items-center gap-1.5 min-w-0 text-sm ${isUnread ? "font-medium" : "text-neutral-700 dark:text-neutral-300"}`}>
+                {t.labels.length > 0 && (
+                  <span className="flex items-center gap-1 shrink-0">
+                    {t.labels.map(l => (
+                      <LabelChip key={l.id} name={l.name} color={l.color} />
+                    ))}
+                  </span>
                 )}
+                <span className="truncate min-w-0">
+                  {subject}
+                  {t.message_count > 1 && (
+                    <span className="ml-1 text-xs text-neutral-500">({t.message_count})</span>
+                  )}
+                </span>
               </div>
               <div className="truncate text-xs text-neutral-500">{t.last_snippet || ""}</div>
               {showDomain && (

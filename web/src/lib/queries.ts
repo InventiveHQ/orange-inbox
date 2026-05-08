@@ -79,6 +79,13 @@ export interface ThreadListItem {
   last_from_addr: string | null;
   last_from_name: string | null;
   last_snippet: string | null;
+  // Labels applied to any message in this thread, deduped by label id.
+  // Populated by listThreads via JSON_GROUP_ARRAY; see ThreadList rendering.
+  labels: { id: string; name: string; color: string | null }[];
+}
+
+interface ThreadListRow extends Omit<ThreadListItem, "labels"> {
+  labels_json: string | null;
 }
 
 // Threads in mailboxes the user has read access to. `mailboxId` filters to
@@ -98,6 +105,10 @@ export async function listThreads(
     binds.push(opts.mailboxId);
   }
 
+  // Labels per thread come from a correlated subquery that aggregates the
+  // distinct labels attached to any message in the thread. Using a
+  // correlated subquery (vs. a LEFT JOIN + GROUP BY) keeps the rest of the
+  // shape unchanged and dodges duplicating the aggregate columns.
   const sql = `
     SELECT
       t.id, t.subject_normalized, t.last_message_at, t.message_count,
@@ -107,7 +118,20 @@ export async function listThreads(
       m.subject AS last_subject,
       m.from_addr AS last_from_addr,
       m.from_name AS last_from_name,
-      m.snippet AS last_snippet
+      m.snippet AS last_snippet,
+      (
+        SELECT JSON_GROUP_ARRAY(
+                 JSON_OBJECT('id', tl.id, 'name', tl.name, 'color', tl.color)
+               )
+          FROM (
+            SELECT DISTINCT l.id AS id, l.name AS name, l.color AS color
+              FROM labels l
+              INNER JOIN message_labels ml ON ml.label_id = l.id
+              INNER JOIN messages mm ON mm.id = ml.message_id
+             WHERE mm.thread_id = t.id
+             ORDER BY l.name
+          ) AS tl
+      ) AS labels_json
     FROM threads t
     INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
     INNER JOIN domains d ON d.id = mb.domain_id
@@ -121,8 +145,23 @@ export async function listThreads(
   `;
   binds.push(limit);
 
-  const { results } = await getDb().prepare(sql).bind(...binds).all<ThreadListItem>();
-  return results ?? [];
+  const { results } = await getDb().prepare(sql).bind(...binds).all<ThreadListRow>();
+  return (results ?? []).map(parseThreadListRow);
+}
+
+function parseThreadListRow(row: ThreadListRow): ThreadListItem {
+  let labels: ThreadListItem["labels"] = [];
+  if (row.labels_json) {
+    try {
+      const parsed = JSON.parse(row.labels_json) as ThreadListItem["labels"];
+      if (Array.isArray(parsed)) labels = parsed;
+    } catch {
+      labels = [];
+    }
+  }
+  const { labels_json: _unused, ...rest } = row;
+  void _unused;
+  return { ...rest, labels };
 }
 
 export interface ThreadDetail {
