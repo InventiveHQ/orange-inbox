@@ -74,29 +74,17 @@ orange-inbox/
 
 ## Setup
 
+One command does everything: install, resource creation, schema, deploy.
+
 ```sh
-# 1. Install
-cd web && npm install
-cd ../email-worker && npm install
-
-# 2. Create the shared D1 database
-cd ../web
-npx wrangler d1 create orange-inbox
-# Paste the database_id into BOTH web/wrangler.jsonc and email-worker/wrangler.jsonc.
-
-# 3. Create R2 buckets and KV namespace
-npx wrangler r2 bucket create orange-inbox-raw
-npx wrangler r2 bucket create orange-inbox-attachments
-npx wrangler kv namespace create DRAFTS
-# Paste the KV id into web/wrangler.jsonc.
-
-# 4. Apply schema
-npx wrangler d1 migrations apply orange-inbox --local
-npx wrangler d1 migrations apply orange-inbox --remote
-
-# 5. Generate binding types (run after wrangler.jsonc changes)
-npm run cf-typegen
+./scripts/setup.sh
 ```
+
+This is idempotent — every step looks for existing resources before creating
+anything. Re-run it any time you pull new migrations or want to redeploy.
+
+If you'd rather do it by hand, see [`scripts/setup.sh`](./scripts/setup.sh) for
+the exact wrangler commands; nothing in there is magical.
 
 ## Development
 
