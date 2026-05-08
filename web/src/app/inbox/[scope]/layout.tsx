@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { listDomainsForUser, listThreads } from "@/lib/queries";
+import { listMailboxesForUser, listThreads } from "@/lib/queries";
 import { listIdentities } from "@/lib/identities";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
@@ -16,32 +16,51 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, threads, identities] = await Promise.all([
-    listDomainsForUser(user.id),
-    listThreads(user.id, { domainName: scope === "all" ? undefined : scope }),
+  const [mailboxes, identities] = await Promise.all([
+    listMailboxesForUser(user.id),
     listIdentities(user.id),
   ]);
 
-  if (domains.length === 0) {
+  // Validate the scope: "all" or a mailbox the user has access to. Anything
+  // else falls back to "all" rather than 404'ing the layout.
+  const isValidScope = scope === "all" || mailboxes.some(mb => mb.id === scope);
+  const effectiveScope = isValidScope ? scope : "all";
+  const mailboxId = effectiveScope === "all" ? undefined : effectiveScope;
+
+  const threads = await listThreads(user.id, { mailboxId });
+
+  if (mailboxes.length === 0) {
     return (
       <ComposeProvider identities={identities}>
         <div className="flex h-screen">
-          <Sidebar domains={[]} scope={scope} />
-          <FirstDomainPrompt />
+          <Sidebar mailboxes={[]} scope={effectiveScope} />
+          <FirstMailboxPrompt />
         </div>
       </ComposeProvider>
     );
   }
 
+  const scopeLabel =
+    effectiveScope === "all"
+      ? "All inboxes"
+      : (() => {
+          const mb = mailboxes.find(m => m.id === effectiveScope);
+          return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
+        })();
+
   return (
     <ComposeProvider identities={identities}>
       <div className="flex h-screen">
-        <Sidebar domains={domains} scope={scope} />
+        <Sidebar mailboxes={mailboxes} scope={effectiveScope} />
         <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
           <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-            {scope === "all" ? "All inboxes" : scope}
+            {scopeLabel}
           </header>
-          <ThreadList threads={threads} scope={scope} showDomain={scope === "all"} />
+          <ThreadList
+            threads={threads}
+            scope={effectiveScope}
+            showDomain={effectiveScope === "all"}
+          />
         </section>
         <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
       </div>
@@ -65,15 +84,15 @@ function SignInPrompt() {
   );
 }
 
-function FirstDomainPrompt() {
+function FirstMailboxPrompt() {
   return (
     <div className="flex-1 flex items-center justify-center text-center px-6">
       <div className="max-w-md">
         <h2 className="text-lg font-semibold mb-2">Add your first mail domain</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          Use the “+ Add mail domain” button in the sidebar. After it’s added, point its MX
-          records at Cloudflare Email Routing and set the routing rule to dispatch to the
-          orange-inbox-email Worker.
+          Use the “+ Add mail domain” button in the sidebar. Adding a domain creates a
+          default catch-all mailbox you own. Once Email Routing on that domain points at
+          the orange-inbox-email Worker, mail starts landing here.
         </p>
       </div>
     </div>

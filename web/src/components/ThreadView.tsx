@@ -43,6 +43,11 @@ export default function ThreadView({ detail, mailboxId }: Props) {
 
 function MessageBlock({ m }: { m: ThreadMessage }) {
   const to = parseAddrs(m.to_json);
+  const isOutbound = m.direction === "outbound";
+  const sentByLabel =
+    isOutbound && (m.sent_by_display_name || m.sent_by_email)
+      ? m.sent_by_display_name || m.sent_by_email
+      : null;
   return (
     <section className="px-6 py-5">
       <div className="flex items-baseline justify-between gap-4">
@@ -51,6 +56,14 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
           <div className="text-xs text-neutral-500">
             to {to.map(a => a.name || a.addr).join(", ")}
           </div>
+          {sentByLabel && (
+            <div
+              className="text-xs text-neutral-500 italic mt-0.5"
+              title="Internal attribution — recipients see only the mailbox address"
+            >
+              sent by {sentByLabel}
+            </div>
+          )}
         </div>
         <div className="text-xs text-neutral-500 shrink-0">{formatFullDate(m.date)}</div>
       </div>

@@ -4,20 +4,62 @@ export interface DomainRow {
   id: string;
   name: string;
   display_name: string | null;
-  role: "admin" | "member" | "reader";
+  is_admin: number;
 }
 
+// Domains the user can see at all — they have access to at least one mailbox
+// on the domain, OR they're a domain admin (so they can administer it even
+// before granting themselves any mailbox access).
 export async function listDomainsForUser(userId: string): Promise<DomainRow[]> {
   const { results } = await getDb()
     .prepare(
-      `SELECT d.id, d.name, d.display_name, uda.role
+      `SELECT d.id, d.name, d.display_name,
+              CASE WHEN MAX(CASE WHEN uda.role = 'admin' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS is_admin
          FROM domains d
-         INNER JOIN user_domain_access uda ON uda.domain_id = d.id
-        WHERE uda.user_id = ?
+         LEFT JOIN user_domain_access uda
+           ON uda.domain_id = d.id AND uda.user_id = ?1
+         LEFT JOIN mailboxes mb ON mb.domain_id = d.id
+         LEFT JOIN user_mailbox_access uma
+           ON uma.mailbox_id = mb.id AND uma.user_id = ?1
+        WHERE uda.user_id IS NOT NULL OR uma.user_id IS NOT NULL
+        GROUP BY d.id, d.name, d.display_name
         ORDER BY d.name`,
     )
     .bind(userId)
     .all<DomainRow>();
+  return results ?? [];
+}
+
+export interface MailboxRow {
+  id: string;
+  domain_id: string;
+  domain_name: string;
+  local_part: string;
+  display_name: string | null;
+  is_catch_all: number;
+  role: "owner" | "member" | "reader";
+  member_count: number;
+  is_shared: number;
+}
+
+// Mailboxes the user can read from. The sidebar groups these under domain
+// headers. `is_shared` is just `member_count > 1`, surfaced for the UI badge.
+export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]> {
+  const { results } = await getDb()
+    .prepare(
+      `SELECT mb.id, mb.domain_id, d.name AS domain_name, mb.local_part,
+              mb.display_name, mb.is_catch_all, uma.role,
+              (SELECT COUNT(*) FROM user_mailbox_access WHERE mailbox_id = mb.id) AS member_count,
+              CASE WHEN (SELECT COUNT(*) FROM user_mailbox_access WHERE mailbox_id = mb.id) > 1
+                   THEN 1 ELSE 0 END AS is_shared
+         FROM mailboxes mb
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = mb.id
+         INNER JOIN domains d ON d.id = mb.domain_id
+        WHERE uma.user_id = ?
+        ORDER BY d.name, mb.local_part`,
+    )
+    .bind(userId)
+    .all<MailboxRow>();
   return results ?? [];
 }
 
@@ -32,26 +74,28 @@ export interface ThreadListItem {
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
+  mailbox_local_part: string;
   last_subject: string | null;
   last_from_addr: string | null;
   last_from_name: string | null;
   last_snippet: string | null;
 }
 
-// Threads visible to a user, optionally filtered to one domain. The "last
-// message" denormalisation joins on the most recent message via a subquery so
-// the thread list can render snippet + sender in one round trip.
+// Threads in mailboxes the user has read access to. `mailboxId` filters to
+// a single mailbox; absence means "everything I can see" (the All inboxes
+// view). Joining user_mailbox_access enforces visibility, so an unauthorised
+// mailboxId silently returns empty.
 export async function listThreads(
   userId: string,
-  opts: { domainName?: string; limit?: number } = {},
+  opts: { mailboxId?: string; limit?: number } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  const where = ["uda.user_id = ?", "t.archived = 0"];
+  const where = ["uma.user_id = ?", "t.archived = 0"];
   const binds: unknown[] = [userId];
 
-  if (opts.domainName) {
-    where.push("d.name = ?");
-    binds.push(opts.domainName);
+  if (opts.mailboxId) {
+    where.push("t.mailbox_id = ?");
+    binds.push(opts.mailboxId);
   }
 
   const sql = `
@@ -59,7 +103,7 @@ export async function listThreads(
       t.id, t.subject_normalized, t.last_message_at, t.message_count,
       t.unread_count, t.starred, t.archived,
       d.id AS domain_id, d.name AS domain_name,
-      mb.id AS mailbox_id,
+      mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
       m.subject AS last_subject,
       m.from_addr AS last_from_addr,
       m.from_name AS last_from_name,
@@ -67,7 +111,7 @@ export async function listThreads(
     FROM threads t
     INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
     INNER JOIN domains d ON d.id = mb.domain_id
-    INNER JOIN user_domain_access uda ON uda.domain_id = d.id
+    INNER JOIN user_mailbox_access uma ON uma.mailbox_id = t.mailbox_id
     LEFT JOIN messages m ON m.id = (
       SELECT id FROM messages WHERE thread_id = t.id ORDER BY date DESC LIMIT 1
     )
@@ -111,6 +155,9 @@ export interface ThreadMessage {
   text_body: string | null;
   read: number;
   starred: number;
+  // Internal attribution for shared mailboxes — populated for outbound only.
+  sent_by_email: string | null;
+  sent_by_display_name: string | null;
 }
 
 export async function getThreadDetail(userId: string, threadId: string): Promise<ThreadDetail | null> {
@@ -122,8 +169,8 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
          FROM threads t
          INNER JOIN mailboxes mb ON mb.id = t.mailbox_id
          INNER JOIN domains d ON d.id = mb.domain_id
-         INNER JOIN user_domain_access uda ON uda.domain_id = d.id
-        WHERE t.id = ? AND uda.user_id = ?`,
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = t.mailbox_id
+        WHERE t.id = ? AND uma.user_id = ?`,
     )
     .bind(threadId, userId)
     .first<ThreadDetail["thread"]>();
@@ -131,11 +178,14 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
 
   const { results } = await getDb()
     .prepare(
-      `SELECT id, message_id_header, direction, from_addr, from_name, to_json, cc_json,
-              subject, date, snippet, text_body, read, starred
-         FROM messages
-        WHERE thread_id = ?
-        ORDER BY date ASC`,
+      `SELECT m.id, m.message_id_header, m.direction, m.from_addr, m.from_name,
+              m.to_json, m.cc_json, m.subject, m.date, m.snippet, m.text_body,
+              m.read, m.starred,
+              u.email AS sent_by_email, u.display_name AS sent_by_display_name
+         FROM messages m
+         LEFT JOIN users u ON u.id = m.sent_by_user_id
+        WHERE m.thread_id = ?
+        ORDER BY m.date ASC`,
     )
     .bind(threadId)
     .all<ThreadMessage>();

@@ -47,6 +47,12 @@ export async function POST(req: NextRequest) {
       db
         .prepare("INSERT INTO user_domain_access (user_id, domain_id, role) VALUES (?, ?, 'admin')")
         .bind(user.id, domainId),
+      // Domain admin alone doesn't grant mailbox access — explicitly seed the
+      // creator as owner of the default catch-all mailbox so they can read
+      // and send from it without a separate invite step.
+      db
+        .prepare("INSERT INTO user_mailbox_access (user_id, mailbox_id, role) VALUES (?, ?, 'owner')")
+        .bind(user.id, mailboxId),
     ]);
 
     return NextResponse.json({ domain: { id: domainId, name, role: "admin" } }, { status: 201 });

@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     const limit = limitRaw ? Number(limitRaw) : undefined;
 
     const threads = await listThreads(user.id, {
-      domainName: scope === "all" ? undefined : scope,
+      mailboxId: scope === "all" ? undefined : scope,
       limit,
     });
     return NextResponse.json({ threads, scope });

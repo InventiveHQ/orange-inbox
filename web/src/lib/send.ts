@@ -108,8 +108,8 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
-          subject, date, snippet, raw_r2_key, text_body, read, starred)
-         VALUES (?, ?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
+          subject, date, snippet, raw_r2_key, text_body, read, starred, sent_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)`,
       )
       .bind(
         messageId,
@@ -130,6 +130,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
         snippet,
         rawKey,
         input.body,
+        userId,
       ),
   );
 
