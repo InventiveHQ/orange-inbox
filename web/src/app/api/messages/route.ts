@@ -11,6 +11,7 @@ interface Body {
   body?: string;
   reply_to_message_id?: string;
   draft_id?: string;
+  attachment_ids?: string[];
 }
 
 export async function POST(req: NextRequest) {
@@ -34,6 +35,9 @@ export async function POST(req: NextRequest) {
       body: b.body,
       replyToMessageId: b.reply_to_message_id,
       draftId: b.draft_id,
+      attachmentIds: Array.isArray(b.attachment_ids)
+        ? b.attachment_ids.filter(x => typeof x === "string")
+        : undefined,
     });
     return NextResponse.json({ messageId, threadId }, { status: 201 });
   } catch (e) {

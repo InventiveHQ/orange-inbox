@@ -27,8 +27,42 @@ export interface ComposeOpenArgs {
   draftId?: string;
 }
 
+interface UploadedFile {
+  id: string;
+  filename: string | null;
+  content_type: string | null;
+  size: number;
+}
+
 interface ComposeCtx {
   open: (args?: ComposeOpenArgs) => void;
+}
+
+// The composer is text-only, so we coerce mailbox.signature_html (HTML) into
+// readable plain text. Drops tags and decodes the most common entities.
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 const Ctx = createContext<ComposeCtx | null>(null);
@@ -85,12 +119,26 @@ function ComposeModal({
 }) {
   const router = useRouter();
   const initial = useMemo(() => pickInitialIdentity(identities, args), [identities, args]);
+  // Initial body = bodyPrefill + the chosen identity's signature (when set).
+  // Body state is only seeded once — switching the From identity mid-compose
+  // won't swap the signature (v1 limitation).
+  const initialBody = useMemo(() => {
+    const prefill = args.bodyPrefill ?? "";
+    const sig = initial?.signature_html ? stripHtmlToText(initial.signature_html) : "";
+    if (!sig) return prefill;
+    return prefill ? `${prefill}\n\n-- \n${sig}` : `\n\n-- \n${sig}`;
+  }, [args.bodyPrefill, initial]);
+
   const [fromId, setFromId] = useState(initial?.mailbox_id ?? "");
   const [to, setTo] = useState((args.toAddrs ?? []).join(", "));
   const [cc, setCc] = useState((args.ccAddrs ?? []).join(", "));
   const [showCc, setShowCc] = useState((args.ccAddrs ?? []).length > 0);
   const [subject, setSubject] = useState(args.subject ?? "");
-  const [body, setBody] = useState(args.bodyPrefill ?? "");
+  const [body, setBody] = useState(initialBody);
+  const [attachments, setAttachments] = useState<UploadedFile[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draftId, setDraftId] = useState<string | null>(args.draftId ?? null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -197,6 +245,7 @@ function ComposeModal({
           body,
           reply_to_message_id: args.replyToMessageId,
           draft_id: draftId ?? undefined,
+          attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
         }),
       });
       if (!res.ok) {
@@ -218,7 +267,40 @@ function ComposeModal({
       // Best-effort delete — we close either way.
       void fetch(`/api/drafts/${draftId}`, { method: "DELETE" }).then(() => router.refresh());
     }
+    // Drop staged uploads so we don't leave R2 + temp_uploads orphans.
+    for (const a of attachments) {
+      void fetch(`/api/uploads/${a.id}`, { method: "DELETE" });
+    }
     onClose();
+  }
+
+  async function attachFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploadError(null);
+    setIsUploading(true);
+    const uploaded: UploadedFile[] = [];
+    for (const file of Array.from(files)) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/uploads", { method: "POST", body: fd });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setUploadError(`${file.name}: ${b.error ?? `upload failed (${res.status})`}`);
+        continue;
+      }
+      const u = (await res.json()) as UploadedFile;
+      uploaded.push(u);
+    }
+    if (uploaded.length > 0) {
+      setAttachments(prev => [...prev, ...uploaded]);
+    }
+    setIsUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments(prev => prev.filter(a => a.id !== id));
+    void fetch(`/api/uploads/${id}`, { method: "DELETE" });
   }
 
   function applyTemplate(t: TemplateRow) {
@@ -331,6 +413,35 @@ function ComposeModal({
         className="block w-full px-4 py-3 bg-transparent border-t border-neutral-200 dark:border-neutral-800 focus:outline-none resize-none text-sm leading-relaxed"
       />
 
+      {(attachments.length > 0 || uploadError) && (
+        <div className="px-4 py-2 border-t border-neutral-200 dark:border-neutral-800 space-y-2">
+          {attachments.length > 0 && (
+            <ul className="flex flex-wrap gap-2">
+              {attachments.map(a => (
+                <li
+                  key={a.id}
+                  className="inline-flex items-center gap-2 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-2 py-1 text-xs"
+                >
+                  <span className="font-medium truncate max-w-[16rem]">
+                    {a.filename || "attachment"}
+                  </span>
+                  <span className="text-neutral-500">{formatBytes(a.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(a.id)}
+                    aria-label={`Remove ${a.filename ?? "attachment"}`}
+                    className="text-neutral-500 hover:text-red-600"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {uploadError && <div className="text-xs text-red-600">{uploadError}</div>}
+        </div>
+      )}
+
       {error && (
         <div className="px-4 py-2 text-xs text-red-600 border-t border-neutral-200 dark:border-neutral-800">
           {error}
@@ -364,12 +475,33 @@ function ComposeModal({
       <footer className="flex items-center justify-between gap-2 px-4 py-3 border-t border-neutral-200 dark:border-neutral-800">
         <div className="flex items-center gap-3">
           <TemplatePicker onPick={applyTemplate} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            onChange={e => attachFiles(e.target.files)}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            title="Attach files"
+            aria-label="Attach files"
+            className="rounded-md p-1.5 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-900 disabled:opacity-50"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+              <path d="M9.93 2.04a3.5 3.5 0 0 1 4.95 4.95l-7.07 7.07a2.5 2.5 0 0 1-3.54-3.54l6.36-6.36a1.5 1.5 0 0 1 2.12 2.12L6.4 12.63a.5.5 0 1 1-.71-.71l5.66-5.66a.5.5 0 0 0-.71-.71L4.27 11.94a1.5 1.5 0 0 0 2.12 2.12l7.07-7.07a2.5 2.5 0 0 0-3.53-3.54L9.93 2.04Z" />
+            </svg>
+          </button>
           <span className="text-xs text-neutral-500">
-            {isSavingDraft
-              ? "Saving…"
-              : savedAt
-                ? `Draft saved ${formatRelative(savedAt)}`
-                : ""}
+            {isUploading
+              ? "Uploading…"
+              : isSavingDraft
+                ? "Saving…"
+                : savedAt
+                  ? `Draft saved ${formatRelative(savedAt)}`
+                  : ""}
           </span>
         </div>
         <div className="flex items-center gap-2">

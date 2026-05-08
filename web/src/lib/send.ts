@@ -20,6 +20,9 @@ export interface SendInput {
   // If set, the draft is deleted in the same batch as the message insert.
   // The route validates ownership before passing it in.
   draftId?: string;
+  // Outbound attachments staged via /api/uploads. We re-verify ownership and
+  // pull bytes from R2 before handing them to env.EMAIL.send().
+  attachmentIds?: string[];
 }
 
 export interface SendResult {
@@ -67,6 +70,35 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     headers["References"] = [...parentReferences, parentMessage.message_id_header].join(" ");
   }
 
+  // Resolve attachment uploads: validate ownership, pull bytes from R2, build
+  // the EmailAttachment array. Done here (not in a helper) so a missing /
+  // not-owned id surfaces a precise SendError before we touch the binding.
+  const attachments: EmailAttachment[] = [];
+  if (input.attachmentIds?.length) {
+    for (const uploadId of input.attachmentIds) {
+      const upload = await db
+        .prepare(
+          "SELECT id, filename, content_type, size, r2_key FROM temp_uploads WHERE id = ? AND user_id = ?",
+        )
+        .bind(uploadId, userId)
+        .first<{ id: string; filename: string | null; content_type: string | null; size: number; r2_key: string }>();
+      if (!upload) {
+        throw new SendError("attachment_not_found", `Attachment ${uploadId} not found or not owned by you.`);
+      }
+      const obj = await env.ATTACHMENTS.get(upload.r2_key);
+      if (!obj) {
+        throw new SendError("attachment_missing", `Attachment ${upload.filename ?? uploadId} bytes are missing.`);
+      }
+      const buf = await obj.arrayBuffer();
+      attachments.push({
+        disposition: "attachment",
+        filename: upload.filename || "attachment",
+        type: upload.content_type || "application/octet-stream",
+        content: buf,
+      });
+    }
+  }
+
   const sendBuilder = {
     from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
     to: input.to,
@@ -74,6 +106,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     bcc: input.bcc?.length ? input.bcc : undefined,
     subject: input.subject || "(no subject)",
     text: input.body,
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
   } as const;
   try {
@@ -177,6 +210,20 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
       db
         .prepare("DELETE FROM drafts WHERE id = ? AND user_id = ?")
         .bind(input.draftId, userId),
+    );
+  }
+
+  // Clean up the temp_uploads rows now that the message is on the wire.
+  // The R2 blobs themselves are left for a future sweeper — they're harmless
+  // orphans, and removing them in the hot send path would double the work.
+  if (input.attachmentIds?.length) {
+    const placeholders = input.attachmentIds.map(() => "?").join(",");
+    stmts.push(
+      db
+        .prepare(
+          `DELETE FROM temp_uploads WHERE user_id = ? AND id IN (${placeholders})`,
+        )
+        .bind(userId, ...input.attachmentIds),
     );
   }
 
