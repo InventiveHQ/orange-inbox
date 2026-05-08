@@ -23,7 +23,7 @@
     {
       "binding": "DB",
       "database_name": "orange-inbox",
-      "database_id": "REPLACE_WITH_D1_ID",
+      "database_id": "eb1b4c90-36c6-4806-a38b-5c6ceb5dd1d5",
       "migrations_dir": "../db/migrations"
     }
   ],
@@ -44,7 +44,7 @@
   "kv_namespaces": [
     {
       "binding": "DRAFTS",
-      "id": "REPLACE_WITH_KV_ID"
+      "id": "89cd821d5d734f52b0fb29ea8d1859c4"
     }
   ],
 
