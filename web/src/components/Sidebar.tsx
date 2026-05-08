@@ -26,7 +26,7 @@ export default function Sidebar({ domains, mailboxes, scope }: Props) {
     <aside className="w-64 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
       <div className="p-4 flex items-center gap-2">
         <span className="inline-block w-3 h-3 rounded-full bg-[var(--color-brand)]" />
-        <span className="font-semibold tracking-tight">orange-inbox</span>
+        <span className="font-semibold tracking-tight">orange mail</span>
       </div>
 
       <div className="px-3 pb-3">
@@ -106,7 +106,7 @@ function SidebarMailbox({ mb, active }: { mb: MailboxRow; active: boolean }) {
           </span>
         )}
       </Link>
-      {mb.role === "owner" && <ManageMailboxButton mailboxId={mb.id} mailboxLabel={label} />}
+      {mb.role === "owner" && <ManageMailboxButton mailbox={mb} />}
     </div>
   );
 }

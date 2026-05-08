@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import type { MailboxRow } from "@/lib/queries";
 
 interface Member {
   user_id: string;
@@ -14,15 +15,27 @@ interface Member {
 const ROLES: Member["role"][] = ["owner", "member", "reader"];
 
 export default function ManageMembersDialog({
-  mailboxId,
-  mailboxLabel,
+  mailbox,
   onClose,
 }: {
-  mailboxId: string;
-  mailboxLabel: string;
+  mailbox: MailboxRow;
   onClose: () => void;
 }) {
   const router = useRouter();
+  const mailboxId = mailbox.id;
+  const initialLabel = mailbox.is_catch_all
+    ? `${mailbox.local_part}@ (catch-all)`
+    : `${mailbox.local_part}@${mailbox.domain_name}`;
+
+  // Settings form (rename / display name / catch-all). Pre-populated from
+  // the row the sidebar already loaded; saved values are kept in local
+  // state until router.refresh() pushes the new sidebar data through.
+  const [localPart, setLocalPart] = useState(mailbox.local_part);
+  const [displayName, setDisplayName] = useState(mailbox.display_name ?? "");
+  const [isCatchAll, setIsCatchAll] = useState(mailbox.is_catch_all === 1);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+
   const [members, setMembers] = useState<Member[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -45,6 +58,35 @@ export default function ManageMembersDialog({
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailboxId]);
+
+  function saveSettings() {
+    setSettingsError(null);
+    setSettingsSaved(false);
+    const payload: Record<string, unknown> = {};
+    const lp = localPart.trim().toLowerCase();
+    if (lp !== mailbox.local_part) payload.local_part = lp;
+    const dn = displayName.trim();
+    if (dn !== (mailbox.display_name ?? "")) payload.display_name = dn || null;
+    if ((mailbox.is_catch_all === 1) !== isCatchAll) payload.is_catch_all = isCatchAll;
+    if (Object.keys(payload).length === 0) {
+      setSettingsError("Nothing changed");
+      return;
+    }
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${mailboxId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setSettingsError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      setSettingsSaved(true);
+      router.refresh();
+    });
+  }
 
   function invite() {
     setActionError(null);
@@ -82,7 +124,11 @@ export default function ManageMembersDialog({
   }
 
   function deleteMailbox() {
-    if (!confirm(`Delete ${mailboxLabel}? All threads, messages, and attachments in it will be permanently removed.`)) {
+    if (
+      !confirm(
+        `Delete ${initialLabel}? All threads, messages, and attachments in it will be permanently removed.`,
+      )
+    ) {
       return;
     }
     setActionError(null);
@@ -110,8 +156,8 @@ export default function ManageMembersDialog({
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
           <div>
-            <div className="text-sm font-medium">Manage members</div>
-            <div className="text-xs text-neutral-500">{mailboxLabel}</div>
+            <div className="text-sm font-medium">Manage mailbox</div>
+            <div className="text-xs text-neutral-500">{initialLabel}</div>
           </div>
           <button
             onClick={onClose}
@@ -122,73 +168,139 @@ export default function ManageMembersDialog({
           </button>
         </header>
 
-        <div className="overflow-y-auto">
-          {loadError && <div className="px-4 py-3 text-sm text-red-600">{loadError}</div>}
-          {members === null && !loadError && (
-            <div className="px-4 py-3 text-sm text-neutral-500">Loading…</div>
-          )}
-          {members && members.length === 0 && (
-            <div className="px-4 py-3 text-sm text-neutral-500">No members yet.</div>
-          )}
-          <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {members?.map(m => (
-              <li key={m.user_id} className="px-4 py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm truncate">{m.display_name || m.email}</div>
-                  {m.display_name && (
-                    <div className="text-xs text-neutral-500 truncate">{m.email}</div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs uppercase tracking-wider text-neutral-500">{m.role}</span>
-                  <button
-                    type="button"
-                    onClick={() => remove(m.user_id)}
-                    disabled={isPending}
-                    className="text-xs text-red-600 hover:underline disabled:opacity-50"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <div className="overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800">
+          {/* Settings */}
+          <section className="px-4 py-3 space-y-2">
+            <div className="text-xs uppercase tracking-wider text-neutral-500">Settings</div>
+            <label className="block text-sm">
+              <span className="text-xs text-neutral-500">Address</span>
+              <div className="mt-1 flex items-center gap-1">
+                <input
+                  type="text"
+                  value={localPart}
+                  onChange={e => {
+                    setLocalPart(e.target.value);
+                    setSettingsSaved(false);
+                  }}
+                  className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 focus:outline-none focus:border-[var(--color-brand)]"
+                />
+                <span className="text-neutral-500 px-1">@{mailbox.domain_name}</span>
+              </div>
+            </label>
+            <label className="block text-sm">
+              <span className="text-xs text-neutral-500">Display name (optional)</span>
+              <input
+                type="text"
+                value={displayName}
+                onChange={e => {
+                  setDisplayName(e.target.value);
+                  setSettingsSaved(false);
+                }}
+                placeholder="Support Team"
+                className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 focus:outline-none focus:border-[var(--color-brand)]"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+              <input
+                type="checkbox"
+                checked={isCatchAll}
+                onChange={e => {
+                  setIsCatchAll(e.target.checked);
+                  setSettingsSaved(false);
+                }}
+              />
+              <span>
+                Catch-all{" "}
+                <span className="text-xs text-neutral-500">
+                  — receive mail addressed to anything else on this domain
+                </span>
+              </span>
+            </label>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              {settingsError && <span className="text-xs text-red-600">{settingsError}</span>}
+              {settingsSaved && !settingsError && <span className="text-xs text-green-600">Saved</span>}
+              <button
+                type="button"
+                onClick={saveSettings}
+                disabled={isPending}
+                className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </section>
 
-        <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2">
-          <div className="text-xs uppercase tracking-wider text-neutral-500">Invite</div>
-          <div className="flex gap-2">
-            <input
-              type="email"
-              placeholder="email@example.com"
-              value={inviteEmail}
-              onChange={e => setInviteEmail(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter") invite();
-              }}
-              className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
-            />
-            <select
-              value={inviteRole}
-              onChange={e => setInviteRole(e.target.value as Member["role"])}
-              className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm"
-            >
-              {ROLES.map(r => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
+          {/* Members */}
+          <section className="px-4 py-3">
+            <div className="text-xs uppercase tracking-wider text-neutral-500 mb-1">Members</div>
+            {loadError && <div className="text-sm text-red-600">{loadError}</div>}
+            {members === null && !loadError && (
+              <div className="text-sm text-neutral-500">Loading…</div>
+            )}
+            {members && members.length === 0 && (
+              <div className="text-sm text-neutral-500">No members yet.</div>
+            )}
+            <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
+              {members?.map(m => (
+                <li key={m.user_id} className="py-2 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{m.display_name || m.email}</div>
+                    {m.display_name && (
+                      <div className="text-xs text-neutral-500 truncate">{m.email}</div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs uppercase tracking-wider text-neutral-500">{m.role}</span>
+                    <button
+                      type="button"
+                      onClick={() => remove(m.user_id)}
+                      disabled={isPending}
+                      className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
               ))}
-            </select>
-            <button
-              type="button"
-              onClick={invite}
-              disabled={isPending}
-              className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-            >
-              Invite
-            </button>
-          </div>
-          {actionError && <div className="text-xs text-red-600">{actionError}</div>}
+            </ul>
+          </section>
+
+          {/* Invite */}
+          <section className="px-4 py-3 space-y-2">
+            <div className="text-xs uppercase tracking-wider text-neutral-500">Invite</div>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                placeholder="email@example.com"
+                value={inviteEmail}
+                onChange={e => setInviteEmail(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") invite();
+                }}
+                className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+              />
+              <select
+                value={inviteRole}
+                onChange={e => setInviteRole(e.target.value as Member["role"])}
+                className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm"
+              >
+                {ROLES.map(r => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={invite}
+                disabled={isPending}
+                className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              >
+                Invite
+              </button>
+            </div>
+            {actionError && <div className="text-xs text-red-600">{actionError}</div>}
+          </section>
         </div>
 
         <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">

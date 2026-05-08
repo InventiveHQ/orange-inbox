@@ -8,7 +8,7 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "orange-inbox",
+  title: "orange mail",
   description: "Gmail-like webmail on Cloudflare",
 };
 
