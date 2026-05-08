@@ -6,7 +6,9 @@ import type { DomainRow, MailboxRow } from "@/lib/queries";
 import AddDomainButton from "./AddDomainButton";
 import AddMailboxButton from "./AddMailboxButton";
 import ComposeButton from "./ComposeButton";
+import ManageLabelsButton from "./ManageLabelsButton";
 import ManageMailboxButton from "./ManageMailboxButton";
+import SearchBar from "./SearchBar";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
 
@@ -62,11 +64,26 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
         </button>
       </div>
 
+      {!collapsed && (
+        <div className="px-3 pb-2">
+          <SearchBar />
+        </div>
+      )}
+
       <div className={`pb-3 ${collapsed ? "px-2" : "px-3"}`}>
         <ComposeButton scope={scope} collapsed={collapsed} />
       </div>
 
       <nav className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-2" : "px-2"}`}>
+        {collapsed && (
+          <SpecialLink
+            href="/search"
+            label="Search"
+            active={false}
+            icon={<SearchIcon />}
+            collapsed={collapsed}
+          />
+        )}
         <SpecialLink
           href="/inbox/all"
           label="All inboxes"
@@ -127,11 +144,20 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
       </nav>
 
       {!collapsed && (
-        <div className="p-2 border-t border-neutral-200 dark:border-neutral-800">
+        <div className="p-2 border-t border-neutral-200 dark:border-neutral-800 space-y-1">
+          <ManageLabelsButton />
           <AddDomainButton />
         </div>
       )}
     </aside>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.099.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.099Zm-5.242.656a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z" />
+    </svg>
   );
 }
 

@@ -1,5 +1,6 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
 import { formatFullDate, senderLabel } from "@/lib/format";
+import ApplyLabelButton from "./ApplyLabelButton";
 import ReplyButton from "./ReplyButton";
 import ThreadActions from "./ThreadActions";
 import MessageHtmlFrame from "./MessageHtmlFrame";
@@ -30,7 +31,8 @@ export default function ThreadView({ detail, mailboxId }: Props) {
             initialStarred={thread.starred === 1}
             initialArchived={thread.archived === 1}
           />
-          {lastInbound && (
+          <ApplyLabelButton threadId={thread.id} />
+          {lastInbound && thread.user_role !== "reader" && (
             <ReplyButton
               replyToMessageId={lastInbound.id}
               preferredMailboxId={mailboxId}

@@ -55,6 +55,34 @@ export async function POST(
 
     const target = await findOrCreateUserByEmail(email);
 
+    // Last-owner guard: catches *demotions* too. If we're about to change an
+    // existing owner's role to something other than 'owner' AND they're the
+    // only owner left, refuse. The dedicated DELETE handler covers self-
+    // removal; this covers re-inviting yourself (or anyone) at member/reader.
+    if (role !== "owner") {
+      const existing = await getDb()
+        .prepare(
+          "SELECT role FROM user_mailbox_access WHERE user_id = ? AND mailbox_id = ?",
+        )
+        .bind(target.id, mailboxId)
+        .first<{ role: string }>();
+      if (existing?.role === "owner") {
+        const others = await getDb()
+          .prepare(
+            `SELECT COUNT(*) AS n FROM user_mailbox_access
+              WHERE mailbox_id = ? AND role = 'owner' AND user_id != ?`,
+          )
+          .bind(mailboxId, target.id)
+          .first<{ n: number }>();
+        if (!others || others.n === 0) {
+          return NextResponse.json(
+            { error: "cannot_demote_last_owner" },
+            { status: 409 },
+          );
+        }
+      }
+    }
+
     // INSERT-or-replace so re-inviting an existing member updates their role
     // instead of returning 409.
     await getDb()
