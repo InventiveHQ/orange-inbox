@@ -1,6 +1,7 @@
 "use client";
 
 import type { DraftListItem } from "@/lib/drafts";
+import { htmlToText } from "@/lib/html-text";
 import { useCompose } from "./ComposeProvider";
 
 interface Props {
@@ -53,8 +54,10 @@ export default function DraftsList({ drafts }: Props) {
               <div className="text-sm truncate text-neutral-700 dark:text-neutral-300">
                 {d.subject || <em className="text-neutral-500 not-italic">(no subject)</em>}
               </div>
-              {d.snippet && (
-                <div className="text-xs truncate text-neutral-500">{d.snippet}</div>
+              {d.body && (
+                <div className="text-xs truncate text-neutral-500">
+                  {htmlToText(d.body).slice(0, 200)}
+                </div>
               )}
               <div className="text-[10px] uppercase tracking-wider text-neutral-500 mt-0.5">
                 from {d.local_part}@{d.domain_name}
