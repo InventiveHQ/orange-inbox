@@ -108,21 +108,94 @@ npm run dev          # local Worker with shared D1/R2
 Open http://localhost:3000 — the app redirects to `/inbox/all` and prompts you
 to add your first mail domain through the sidebar button.
 
-## Deploy
+## Post-deploy setup
+
+`./scripts/setup.sh` deploys both Workers but the app isn't yet usable —
+anyone hitting it gets the "Sign in required" screen and no mail flows. Three
+steps in the Cloudflare dashboard wire it together. The first is optional;
+the other two are required for an end-to-end inbox.
+
+### 1. Custom domain for the web app (optional but recommended)
+
+The default URL is `<worker-name>.<subdomain>.workers.dev`. Fine for testing,
+but you'll want a real host like `mail.example.com`.
+
+1. **Workers & Pages** → click `orange-inbox-web`
+2. **Settings** → **Domains & Routes** → **Add → Custom domain**
+3. Enter the host you want (`mail.yourdomain.com`). The domain must already
+   be on Cloudflare as a zone you control.
+4. Save. DNS, TLS, and routing auto-configure within a minute.
+
+This host is independent from any mail-plane domains — the host doesn't need
+Email Routing and never receives mail.
+
+### 2. Cloudflare Access (login)
+
+orange-inbox has no password store and no login form. Authentication is
+fully delegated to Access — the Worker trusts the
+`Cf-Access-Authenticated-User-Email` header that Access injects on every
+request. Without Access in front, no header is set and the app shows
+"Sign in required".
+
+1. **Zero Trust** → **Access** → **Applications** → **Add an application**
+2. Choose **Self-hosted**
+3. **Application name:** `orange-inbox`
+4. **Application domain:** the custom domain from step 1, or your
+   `*.workers.dev` URL
+5. Pick at least one **identity provider**. **One-time PIN** works without
+   any setup; Google / GitHub / SAML / OIDC are all options if you want SSO.
+6. Add a **policy**:
+   - **Action:** Allow
+   - **Configure rules:** e.g. `Emails ending in` → `@yourdomain.com`, or
+     a literal email allowlist for a single user
+7. Save. Access starts protecting the URL within seconds.
+
+Visit the host URL — you redirect to Access, sign in (PIN or your IdP), and
+land back in the app authenticated. The first sign-in lazily creates a row
+in the `users` table.
+
+> **MFA / hardware keys:** configured per identity provider in Zero Trust →
+> Settings → Authentication. Enabling a TOTP or WebAuthn factor on the
+> provider applies automatically to the orange-inbox app.
+
+### 3. Email Routing for a mail-plane domain
+
+For each domain whose mail you want orange-inbox to handle:
+
+1. Cloudflare dashboard → select the domain → **Email** → **Email Routing**
+2. **Get started** / **Enable Email Routing**. Cloudflare offers to add the
+   needed MX, SPF, and DKIM DNS records — accept that. Wait a minute for
+   them to verify.
+3. **Routing rules** → either:
+   - **Catch-all address** → **Edit** → Action: **Send to a Worker** →
+     Destination: `orange-inbox-email` → Save and **enable** the catch-all,
+     or
+   - Add per-address rules with the same Worker destination.
+4. Open the deployed app, sidebar **+ Add mail domain**, enter the same
+   domain name. The app creates the `domains` row, a default catch-all
+   `mailbox`, and grants you `admin` role on it.
+
+Mail sent to `anything@yourdomain.com` now lands in D1/R2 via the email
+Worker. Compose and Reply use the `send_email` binding to send back out —
+which works for any domain on your account that has Email Routing active
+(step 2 enabled it).
+
+### Verifying it works
 
 ```sh
-cd web && npm run deploy
-cd ../email-worker && npm run deploy
+# Tail inbound parse logs while you send yourself a test
+cd email-worker && npx wrangler tail
 ```
 
-Then in the Cloudflare dashboard:
+Send mail to `anything@yourdomain.com`, watch the tail print the parsed
+`from`/`to`/`mailbox`/`thread` IDs, then refresh the app — the thread
+appears at the top of the list.
 
-1. Point your domain's Email Routing rule at the deployed `orange-inbox-email`
-   Worker. Inbound mail will start landing in D1/R2.
-2. Put **Cloudflare Access** in front of `orange-inbox-web` (Zero Trust →
-   Applications → Add a self-hosted application). Access takes care of MFA,
-   hardware-key login, and SSO; the app trusts the
-   `Cf-Access-Authenticated-User-Email` header it injects.
+## Updating
+
+`./scripts/setup.sh` is the same command for first-time setup and for
+updates: it skips resource creation if things already exist and just
+applies any new migrations and redeploys both Workers.
 
 ## Roadmap
 
