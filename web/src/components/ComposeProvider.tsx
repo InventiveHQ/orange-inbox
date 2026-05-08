@@ -139,6 +139,9 @@ function ComposeModal({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState("");
+  const scheduleRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draftId, setDraftId] = useState<string | null>(args.draftId ?? null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -301,6 +304,50 @@ function ComposeModal({
   function removeAttachment(id: string) {
     setAttachments(prev => prev.filter(a => a.id !== id));
     void fetch(`/api/uploads/${id}`, { method: "DELETE" });
+  }
+
+  function schedule(scheduledForUnix: number) {
+    setError(null);
+    const toList = splitList(to);
+    const ccList = splitList(cc);
+    if (toList.length === 0) {
+      setError("Add at least one recipient");
+      return;
+    }
+    if (!body.trim()) {
+      setError("Body can't be empty");
+      return;
+    }
+    if (scheduledForUnix <= Math.floor(Date.now() / 1000)) {
+      setError("Scheduled time must be in the future");
+      return;
+    }
+    startSending(async () => {
+      const res = await fetch("/api/scheduled", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          from_mailbox_id: fromId,
+          to: toList,
+          cc: ccList.length ? ccList : undefined,
+          subject,
+          body,
+          reply_to_message_id: args.replyToMessageId,
+          draft_id: draftId ?? undefined,
+          attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
+          scheduled_for: scheduledForUnix,
+        }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Schedule failed (${res.status})`);
+        return;
+      }
+      setScheduleOpen(false);
+      onClose();
+      router.refresh();
+      router.push("/scheduled");
+    });
   }
 
   function applyTemplate(t: TemplateRow) {
@@ -520,14 +567,69 @@ function ComposeModal({
           >
             Save draft
           </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={isSending}
-            className="rounded-md bg-[var(--color-brand)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {isSending ? "Sending…" : "Send"}
-          </button>
+          <div ref={scheduleRef} className="relative inline-flex">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={isSending}
+              className="rounded-l-md bg-[var(--color-brand)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {isSending ? "Sending…" : "Send"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setScheduleOpen(o => !o)}
+              disabled={isSending}
+              title="Schedule send"
+              aria-label="Schedule send"
+              className="rounded-r-md bg-[var(--color-brand)] px-2 py-1.5 text-sm font-medium text-white border-l border-white/30 hover:brightness-95 disabled:opacity-50"
+            >
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+                <path d="M3.22 5.22a.75.75 0 0 1 1.06 0L8 8.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 6.28a.75.75 0 0 1 0-1.06Z" />
+              </svg>
+            </button>
+            {scheduleOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 bottom-full mb-1 z-30 w-72 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg p-3 space-y-2"
+              >
+                <div className="text-xs uppercase tracking-wider text-neutral-500">Schedule send</div>
+                <input
+                  type="datetime-local"
+                  value={scheduleAt}
+                  onChange={e => setScheduleAt(e.target.value)}
+                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleOpen(false)}
+                    className="rounded-md px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ms = Date.parse(scheduleAt);
+                      if (isNaN(ms)) {
+                        setError("Pick a date/time");
+                        return;
+                      }
+                      schedule(Math.floor(ms / 1000));
+                    }}
+                    disabled={isSending || !scheduleAt}
+                    className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+                  >
+                    Schedule
+                  </button>
+                </div>
+                <div className="text-xs text-neutral-500">
+                  Goes out at the selected time. View/cancel under Scheduled in the sidebar.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </footer>
     </ModalShell>

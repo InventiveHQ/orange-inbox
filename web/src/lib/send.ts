@@ -99,6 +99,14 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     }
   }
 
+  // Recipient-side rendering is much nicer when an HTML alternative ships
+  // alongside the text — paragraph breaks, line wraps, and plain links
+  // render properly instead of looking like notepad output. We auto-build a
+  // safe HTML version from the plain-text body (escape, p-wrap on blank
+  // lines, linkify URLs) so the user gets this for free without a WYSIWYG
+  // editor in the composer.
+  const html = buildHtmlFromText(input.body);
+
   const sendBuilder = {
     from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
     to: input.to,
@@ -106,6 +114,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     bcc: input.bcc?.length ? input.bcc : undefined,
     subject: input.subject || "(no subject)",
     text: input.body,
+    html,
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
   } as const;
@@ -276,6 +285,41 @@ async function loadReplyParent(parentId: string | undefined): Promise<ParentInfo
     ? row.references_chain.split(/\s+/).filter(Boolean)
     : [];
   return { parentMessage: row, parentReferences };
+}
+
+// Build an HTML alternative from the plain-text body. Steps:
+//   1. Escape HTML metacharacters so user input never becomes markup.
+//   2. Linkify bare http/https URLs.
+//   3. Split on blank lines into <p> blocks; convert single newlines to <br>.
+// The result is intentionally simple — recipients with HTML-capable clients
+// see something readable, and clients that prefer text/plain still get the
+// raw body unchanged.
+function buildHtmlFromText(text: string): string {
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+  // Linkify after escaping so we wrap escaped text but the href stays clean.
+  // The URL chars match a conservative set — no trailing punctuation grabs.
+  const linkified = escaped.replace(
+    /\b(https?:\/\/[^\s<>"'`)\]]+[^\s<>"'`)\].,;:!?])/g,
+    url => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+  );
+
+  const paragraphs = linkified
+    .split(/\n{2,}/)
+    .map(p => p.replace(/\n/g, "<br>"))
+    .filter(p => p.length > 0)
+    .map(p => `<p>${p}</p>`)
+    .join("\n");
+
+  return `<!DOCTYPE html>
+<html><body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111;line-height:1.45;">
+${paragraphs}
+</body></html>`;
 }
 
 function normalizeSubject(subject: string): string {

@@ -1,3 +1,4 @@
+import { runCron } from "./cron";
 import { parseEmail } from "./parse";
 import { resolveRecipient } from "./route";
 import { storeMessage } from "./store";
@@ -24,5 +25,9 @@ export default {
       `inbound ${result.duplicate ? "(dup)" : "ok"} mailbox=${recipient.mailboxId} ` +
         `thread=${result.threadId} msg=${result.messageId} from=${parsed.from.addr}`,
     );
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    await runCron(env, ctx);
   },
 } satisfies ExportedHandler<Env>;

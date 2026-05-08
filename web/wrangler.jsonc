@@ -55,5 +55,13 @@
     {
       "name": "EMAIL"
     }
-  ]
+  ],
+
+  // Shared secret matching email-worker's INTERNAL_SECRET — used to gate
+  // /api/internal/dispatch-scheduled which the email-worker calls via service
+  // binding. For prod, override with `wrangler secret put INTERNAL_SECRET`
+  // on BOTH workers (use the same value).
+  "vars": {
+    "INTERNAL_SECRET": "REPLACE_WITH_LOCAL_DEV_SECRET"
+  }
 }

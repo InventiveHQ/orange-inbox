@@ -2,6 +2,9 @@ export interface Env {
   DB: D1Database;
   RAW_MAIL: R2Bucket;
   ATTACHMENTS: R2Bucket;
+  // Service binding to the web Worker (dispatching scheduled sends).
+  WEB?: { fetch: (request: Request) => Promise<Response> };
+  INTERNAL_SECRET?: string;
 }
 
 export interface AddressInfo {

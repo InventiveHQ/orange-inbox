@@ -5,6 +5,12 @@
   "compatibility_date": "2026-05-08",
   "compatibility_flags": ["nodejs_compat"],
 
+  // 1-minute cron drives unsnooze, scheduled-send dispatch, and the
+  // temp_uploads sweeper. All shipped in src/cron.ts.
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
   // Bindings mirror web/wrangler.jsonc so both Workers see the same state.
   "d1_databases": [
     {
@@ -23,5 +29,23 @@
       "binding": "ATTACHMENTS",
       "bucket_name": "orange-inbox-attachments"
     }
-  ]
+  ],
+
+  // Service binding to the web Worker for dispatching scheduled sends. The
+  // web worker exposes /api/internal/dispatch-scheduled which is gated by
+  // the shared INTERNAL_SECRET below.
+  "services": [
+    {
+      "binding": "WEB",
+      "service": "orange-inbox-web"
+    }
+  ],
+
+  // Shared secret for the internal dispatcher endpoint. Service bindings
+  // are private (not reachable from the public internet), but we still gate
+  // the endpoint so a future misconfiguration doesn't expose it. For prod,
+  // override with `wrangler secret put INTERNAL_SECRET`.
+  "vars": {
+    "INTERNAL_SECRET": "REPLACE_WITH_LOCAL_DEV_SECRET"
+  }
 }

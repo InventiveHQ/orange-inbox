@@ -8,7 +8,6 @@ import AddMailboxButton from "./AddMailboxButton";
 import ComposeButton from "./ComposeButton";
 import ManageLabelsButton from "./ManageLabelsButton";
 import ManageMailboxButton from "./ManageMailboxButton";
-import SearchBar from "./SearchBar";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
 
@@ -64,26 +63,11 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
         </button>
       </div>
 
-      {!collapsed && (
-        <div className="px-3 pb-2">
-          <SearchBar />
-        </div>
-      )}
-
       <div className={`pb-3 ${collapsed ? "px-2" : "px-3"}`}>
         <ComposeButton scope={scope} collapsed={collapsed} />
       </div>
 
       <nav className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-2" : "px-2"}`}>
-        {collapsed && (
-          <SpecialLink
-            href="/search"
-            label="Search"
-            active={false}
-            icon={<SearchIcon />}
-            collapsed={collapsed}
-          />
-        )}
         <SpecialLink
           href="/inbox/all"
           label="All inboxes"
@@ -110,6 +94,13 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           label="Templates"
           active={scope === "templates"}
           icon={<TemplatesIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
+          href="/scheduled"
+          label="Scheduled"
+          active={false}
+          icon={<ScheduledIcon />}
           collapsed={collapsed}
         />
 
@@ -150,14 +141,6 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
         </div>
       )}
     </aside>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.099.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.099Zm-5.242.656a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z" />
-    </svg>
   );
 }
 
@@ -350,6 +333,14 @@ function TemplatesIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M5 1.5A1.5 1.5 0 0 1 6.5 0h6A1.5 1.5 0 0 1 14 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 5 9.5v-8Zm-2.5 3a.5.5 0 0 1 .5.5v9.5h7.5a.5.5 0 0 1 0 1H3a1 1 0 0 1-1-1V5a.5.5 0 0 1 .5-.5Z" />
+    </svg>
+  );
+}
+
+function ScheduledIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.75 3.5v3.69l2.53 1.46a.75.75 0 1 1-.75 1.3L7.625 9.16A.75.75 0 0 1 7.25 8.5v-4a.75.75 0 0 1 1.5 0Z" />
     </svg>
   );
 }

@@ -97,7 +97,14 @@ export async function listThreads(
   opts: { mailboxId?: string; limit?: number } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  const where = ["uma.user_id = ?", "t.archived = 0"];
+  // Hide threads that are still in a future-snooze. The cron clears
+  // snoozed_until once it elapses, but if the cron is briefly behind we still
+  // don't want to show those rows — hence the explicit `> unixepoch()` check.
+  const where = [
+    "uma.user_id = ?",
+    "t.archived = 0",
+    "(t.snoozed_until IS NULL OR t.snoozed_until <= unixepoch())",
+  ];
   const binds: unknown[] = [userId];
 
   if (opts.mailboxId) {
@@ -179,6 +186,7 @@ export interface ThreadDetail {
     // Caller's role on the thread's mailbox — drives "can the Reply button
     // appear" and similar gates in the reader UI.
     user_role: "owner" | "member" | "reader";
+    snoozed_until: number | null;
   };
   messages: ThreadMessage[];
 }
@@ -217,7 +225,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
   const head = await getDb()
     .prepare(
       `SELECT t.id, t.subject_normalized, t.last_message_at, t.message_count,
-              t.unread_count, t.starred, t.archived,
+              t.unread_count, t.starred, t.archived, t.snoozed_until,
               d.name AS domain_name, mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role
          FROM threads t

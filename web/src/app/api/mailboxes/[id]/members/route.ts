@@ -6,6 +6,7 @@ import {
   isMailboxOwner,
   listMailboxMembers,
 } from "@/lib/mailbox-access";
+import { sendInvitationEmail } from "@/lib/invitations";
 
 const VALID_ROLES = new Set(["owner", "member", "reader"]);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -93,6 +94,22 @@ export async function POST(
       )
       .bind(target.id, mailboxId, role)
       .run();
+
+    // Best-effort heads-up email when this is a brand-new user. Failures are
+    // logged inside sendInvitationEmail; the invite itself is already
+    // committed by this point so we never block the response on delivery.
+    if (target.created) {
+      try {
+        await sendInvitationEmail({
+          inviterId: user.id,
+          inviteeEmail: email,
+          mailboxId,
+          role: role as "owner" | "member" | "reader",
+        });
+      } catch (e) {
+        console.warn("invitation email path threw", e);
+      }
+    }
 
     return NextResponse.json(
       { user_id: target.id, email, role, was_new_user: target.created },
