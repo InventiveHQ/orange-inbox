@@ -55,10 +55,19 @@
     {
       "name": "EMAIL"
     }
-  ]
+  ],
 
-  // INTERNAL_SECRET is provisioned as a Worker secret (not a var) by
-  // scripts/setup.sh — it gates /api/internal/dispatch-scheduled which the
-  // email-worker calls via service binding. For local dev, put a matching
-  // value in web/.dev.vars and email-worker/.dev.vars.
+  // Web Push (VAPID). Public key + subject are vars (safe to ship). The
+  // private key is a Worker secret; provision via `pnpm vapid` →
+  // `wrangler secret put VAPID_PRIVATE_KEY`. setup.sh handles bootstrap.
+  "vars": {
+    "VAPID_PUBLIC_KEY": "BH8smumQaKTZZh9luj79lTPSVZEfCJbPW6smaIGieSbzYmHxDzEQyZ-wkMhsoOyLJqi6bxfHZTN8fl0YeezpdxE",
+    "VAPID_SUBJECT": "mailto:sean@inventivehq.com"
+  }
+
+  // INTERNAL_SECRET and VAPID_PRIVATE_KEY are provisioned as Worker secrets
+  // (not vars) by scripts/setup.sh. INTERNAL_SECRET gates internal endpoints
+  // the email-worker calls via service binding; VAPID_PRIVATE_KEY signs the
+  // VAPID JWT on /api/internal/notify-new-message. For local dev, put both
+  // matching values in web/.dev.vars.
 }

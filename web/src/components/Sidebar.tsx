@@ -47,7 +47,7 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
         {!collapsed && (
           <>
             <span className="inline-block w-3 h-3 rounded-full bg-[var(--color-brand)]" />
-            <span className="font-semibold tracking-tight truncate">orange mail</span>
+            <span className="font-semibold tracking-tight truncate">orange inbox</span>
           </>
         )}
         <button

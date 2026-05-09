@@ -7,3 +7,7 @@ export function getDb(): D1Database {
 export function getEnv() {
   return getCloudflareContext().env;
 }
+
+export function getCtx(): ExecutionContext {
+  return getCloudflareContext().ctx;
+}

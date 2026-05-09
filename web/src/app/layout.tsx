@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import PWAClient from "@/components/PWAClient";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -8,10 +9,11 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "orange mail",
+  title: "orange inbox",
   description: "Gmail-like webmail on Cloudflare",
   applicationName: "orange mail",
-  manifest: "/manifest.webmanifest",
+  // manifest link is rendered manually below with crossOrigin="use-credentials"
+  // so the browser sends the Cloudflare Access cookie when fetching it.
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -37,8 +39,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
+      <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
       <body className="min-h-full bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100 font-sans">
         {children}
+        <PWAClient />
       </body>
     </html>
   );
