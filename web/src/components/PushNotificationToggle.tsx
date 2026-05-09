@@ -4,10 +4,11 @@ import { useEffect, useState, useTransition } from "react";
 
 type State = "idle" | "loading" | "subscribed" | "denied" | "unsupported" | "error";
 
-function b64uToUint8(b64u: string): Uint8Array {
+function b64uToUint8(b64u: string): Uint8Array<ArrayBuffer> {
   const pad = b64u.length % 4 === 0 ? "" : "=".repeat(4 - (b64u.length % 4));
   const bin = atob(b64u.replace(/-/g, "+").replace(/_/g, "/") + pad);
-  const out = new Uint8Array(bin.length);
+  const buf = new ArrayBuffer(bin.length);
+  const out = new Uint8Array(buf);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
