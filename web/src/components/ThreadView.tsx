@@ -6,6 +6,7 @@ import ReplyButton from "./ReplyButton";
 import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
 import MessageHtmlFrame from "./MessageHtmlFrame";
+import MessageMenu from "./MessageMenu";
 
 interface Props {
   detail: ThreadDetail;
@@ -90,7 +91,10 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
             </div>
           )}
         </div>
-        <div className="text-xs text-neutral-500 shrink-0">{formatFullDate(m.date)}</div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-xs text-neutral-500">{formatFullDate(m.date)}</span>
+          <MessageMenu messageId={m.id} />
+        </div>
       </div>
 
       {m.html_r2_key ? (
