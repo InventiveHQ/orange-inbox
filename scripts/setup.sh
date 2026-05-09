@@ -103,6 +103,27 @@ log "Deploying email-worker"
 log "Deploying web (Next.js build via OpenNext — takes a couple minutes)"
 (cd "$ROOT/web" && npm run deploy | tail -10)
 
+# ─── INTERNAL_SECRET ────────────────────────────────────────────────────────
+# Shared between the two workers — gates /api/internal/dispatch-scheduled.
+# The placeholder in wrangler.jsonc is a public var; a secret with the same
+# name overrides it at runtime. Must run after deploy because `secret put`
+# requires the worker to exist.
+log "Ensuring INTERNAL_SECRET is set on both workers"
+secret_exists() {
+  (cd "$1" && npx --yes wrangler secret list 2>/dev/null) \
+    | grep -q INTERNAL_SECRET
+}
+if secret_exists "$ROOT/web" && secret_exists "$ROOT/email-worker"; then
+  ok "INTERNAL_SECRET already set on both workers"
+else
+  command -v openssl >/dev/null 2>&1 || { err "openssl not found in PATH"; exit 1; }
+  SECRET=$(openssl rand -hex 32)
+  printf '%s' "$SECRET" | (cd "$ROOT/web"          && npx --yes wrangler secret put INTERNAL_SECRET) >/dev/null
+  printf '%s' "$SECRET" | (cd "$ROOT/email-worker" && npx --yes wrangler secret put INTERNAL_SECRET) >/dev/null
+  unset SECRET
+  ok "Set INTERNAL_SECRET on both workers"
+fi
+
 # ─── done ───────────────────────────────────────────────────────────────────
 cat <<'BANNER'
 
@@ -125,6 +146,8 @@ Two manual steps to make it usable:
 
 For local development:
    echo 'DEV_USER_EMAIL=you@yourdomain.com' > web/.dev.vars
+   echo 'INTERNAL_SECRET=dev-only-secret'   >> web/.dev.vars
+   echo 'INTERNAL_SECRET=dev-only-secret'   > email-worker/.dev.vars
    cd web && npm run dev
 ────────────────────────────────────────────
 BANNER

@@ -95,9 +95,16 @@ The Next.js Worker expects a Cloudflare Access-signed identity header
 hatch: set `DEV_USER_EMAIL` in `web/.dev.vars` and the auth helper will
 treat that as the signed-in user.
 
+`INTERNAL_SECRET` gates the cron-driven `/api/internal/dispatch-scheduled`
+endpoint and must match between the two workers. In prod it's a Cloudflare
+Worker secret (provisioned by `scripts/setup.sh`); for local dev, put any
+matching value in both `.dev.vars` files.
+
 ```sh
 cd web
 echo 'DEV_USER_EMAIL=you@yourdomain.com' > .dev.vars
+echo 'INTERNAL_SECRET=dev-only-secret'   >> .dev.vars
+echo 'INTERNAL_SECRET=dev-only-secret'   > ../email-worker/.dev.vars
 npm run dev          # Next.js dev server with miniflare-backed bindings
 npm run preview      # OpenNext build + workerd preview (matches prod)
 ```

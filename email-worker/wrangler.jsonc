@@ -41,11 +41,9 @@
     }
   ],
 
-  // Shared secret for the internal dispatcher endpoint. Service bindings
-  // are private (not reachable from the public internet), but we still gate
-  // the endpoint so a future misconfiguration doesn't expose it. For prod,
-  // override with `wrangler secret put INTERNAL_SECRET`.
-  "vars": {
-    "INTERNAL_SECRET": "REPLACE_WITH_LOCAL_DEV_SECRET"
-  }
+  // INTERNAL_SECRET is provisioned as a Worker secret by scripts/setup.sh.
+  // Service bindings are private (not reachable from the public internet),
+  // but we still gate /api/internal/dispatch-scheduled with this so a future
+  // misconfiguration doesn't expose it. For local dev, put a matching value
+  // in web/.dev.vars and email-worker/.dev.vars.
 }
