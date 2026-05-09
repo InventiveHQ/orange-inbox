@@ -69,6 +69,7 @@ async function SettingsRoute() {
       initialLabels={labels}
       manageableIdentities={manageableIdentities}
       isAdmin={user.is_admin}
+      initialUndoSendSeconds={user.undo_send_seconds}
     />
   );
 }
