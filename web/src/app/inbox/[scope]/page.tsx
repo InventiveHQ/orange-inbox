@@ -60,16 +60,21 @@ async function SettingsRoute() {
   if (!user) return null;
   // Admins manage every domain and every mailbox; non-admins see only what
   // they have membership in (and the management UI below is hidden anyway).
-  const [domains, labels, manageableIdentities] = await Promise.all([
+  const [domains, labels, manageableIdentities, myIdentities] = await Promise.all([
     user.is_admin ? listAllDomains() : listDomainsForUser(user.id),
     listLabelsForUser(user.id),
     user.is_admin ? listAllIdentities() : listIdentities(user.id),
+    listIdentities(user.id),
   ]);
+  // Signatures are personal-config: any user can edit signatures on mailboxes
+  // *they own*, regardless of admin status.
+  const ownedIdentities = myIdentities.filter(i => i.role === "owner");
   return (
     <SettingsManager
       domains={domains}
       initialLabels={labels}
       manageableIdentities={manageableIdentities}
+      ownedIdentities={ownedIdentities}
       isAdmin={user.is_admin}
       initialUndoSendSeconds={user.undo_send_seconds}
     />

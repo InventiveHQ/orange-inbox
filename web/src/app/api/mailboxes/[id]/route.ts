@@ -9,11 +9,7 @@ interface PatchBody {
   local_part?: string;
   display_name?: string | null;
   is_catch_all?: boolean;
-  signature_html?: string | null;
 }
-
-// Hard cap so a runaway editor can't blow up the row.
-const MAX_SIGNATURE_BYTES = 8 * 1024;
 
 async function loadMailbox(mailboxId: string) {
   return getDb()
@@ -69,16 +65,6 @@ export async function PATCH(
     if (b.is_catch_all !== undefined) {
       updates.push("is_catch_all = ?");
       binds.push(b.is_catch_all ? 1 : 0);
-    }
-
-    if (b.signature_html !== undefined) {
-      const sig = b.signature_html == null ? null : String(b.signature_html);
-      if (sig != null && sig.length > MAX_SIGNATURE_BYTES) {
-        return NextResponse.json({ error: "signature too long" }, { status: 400 });
-      }
-      updates.push("signature_html = ?");
-      // Empty string normalises to null so we don't store noise.
-      binds.push(sig && sig.trim() ? sig : null);
     }
 
     if (updates.length === 0) {

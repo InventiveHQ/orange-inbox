@@ -17,6 +17,9 @@ interface Props {
   // Mailboxes the current user can manage. For admins this is every mailbox
   // in the system; for non-admins it's empty (management UI is hidden).
   manageableIdentities: Identity[];
+  // Mailboxes the current user *owns* — used for the Signatures section,
+  // which is personal-config available to any owner regardless of admin status.
+  ownedIdentities: Identity[];
   isAdmin: boolean;
   initialUndoSendSeconds: number;
 }
@@ -37,25 +40,23 @@ export default function SettingsManager({
   domains,
   initialLabels,
   manageableIdentities,
+  ownedIdentities,
   isAdmin,
   initialUndoSendSeconds,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const hasOwnedMailboxes = ownedIdentities.length > 0;
   const sections = useMemo(
     () => [
       { id: "mail-domains", label: "Mail domains" },
-      ...(isAdmin
-        ? [
-            { id: "mailbox-access", label: "Mailbox access" },
-            { id: "signatures", label: "Signatures" },
-          ]
-        : []),
+      ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
+      ...(hasOwnedMailboxes ? [{ id: "signatures", label: "Signatures" }] : []),
       { id: "labels", label: "Labels" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
       { id: "about", label: "About" },
     ],
-    [isAdmin],
+    [isAdmin, hasOwnedMailboxes],
   );
   const active = useActiveSection(
     scrollRef,
@@ -90,8 +91,8 @@ export default function SettingsManager({
                 identities={manageableIdentities}
               />
             )}
-            {isAdmin && (
-              <SignaturesSection id="signatures" identities={manageableIdentities} />
+            {hasOwnedMailboxes && (
+              <SignaturesSection id="signatures" identities={ownedIdentities} />
             )}
             <LabelsSection id="labels" initialLabels={initialLabels} />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
@@ -273,7 +274,7 @@ function SignatureEditor({ identity }: { identity: Identity }) {
   function save() {
     setError(null);
     startTransition(async () => {
-      const res = await fetch(`/api/mailboxes/${identity.mailbox_id}`, {
+      const res = await fetch(`/api/mailboxes/${identity.mailbox_id}/signature`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ signature_html: html || null }),
