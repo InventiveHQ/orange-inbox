@@ -4,8 +4,10 @@ A Gmail-like webmail client that runs entirely on Cloudflare. Built for people
 who use [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/)
 and want a real inbox UI instead of forwarding everything to a third party.
 
-> Status: pre-alpha scaffold. The repo lays out the architecture; features are
-> being added in stages.
+> Status: actively developed. The core inbox — receive, read, compose, reply,
+> labels, search, snooze, scheduled send, undo send, drafts, templates, push
+> notifications, PWA install — is working end-to-end. Versions are still
+> 0.1.x; expect rough edges.
 
 ## What it is
 
@@ -278,12 +280,17 @@ manual `byte_estimate` refresh — live in
 
 ## Roadmap
 
-- [x] Stage 1 — Repo scaffold, schema, configs, control-plane / mail-plane split.
-- [x] Stage 2 — Inbound parse + threading.
-- [x] Stage 3 — Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
-- [x] Stage 4 — Compose + send via `env.EMAIL.send()`, identity-aware replies.
-- [ ] Stage 5 — Labels, search, identity-aware replies.
-- [ ] Stage 6 — One-click deploy button + per-domain role management.
+- [x] Repo scaffold, schema, configs, control-plane / mail-plane split.
+- [x] Inbound parse + threading.
+- [x] Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
+- [x] Compose + send via `env.EMAIL.send()`, identity-aware replies.
+- [x] Labels, full-text search, drafts, templates, contacts.
+- [x] Snooze, scheduled send, undo send, attachments, mailbox signatures.
+- [x] Mail-DB overflow sharding.
+- [x] PWA install + web push notifications.
+- [x] Two-tier roles (Admin/User) + per-mailbox member management.
+- [x] Mobile shell + in-app help.
+- [ ] One-click deploy button.
 
 ## License
 
