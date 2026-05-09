@@ -140,39 +140,72 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
       </div>
 
       {/*
-        Settings sits at the bottom of the drawer — common Gmail/Slack
+        Settings + Help sit at the bottom of the drawer — common Gmail/Slack
         pattern, and an out-of-the-way home for things you only touch
-        occasionally (mailbox access, signatures, labels, domains).
+        occasionally (mailbox access, signatures, labels, domains, install
+        instructions).
       */}
-      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2">
-        {collapsed ? (
-          <Link
-            href="/inbox/settings"
-            title="Settings"
-            aria-label="Settings"
-            className={`flex items-center justify-center w-10 h-10 mx-auto rounded-md ${
-              scope === "settings"
-                ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
-                : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-            }`}
-          >
-            <SettingsIcon />
-          </Link>
-        ) : (
-          <Link
-            href="/inbox/settings"
-            className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm ${
-              scope === "settings"
-                ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
-                : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-            }`}
-          >
-            <SettingsIcon />
-            <span className="truncate">Settings</span>
-          </Link>
-        )}
+      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2 space-y-0.5">
+        <BottomLink
+          href="/inbox/settings"
+          label="Settings"
+          active={scope === "settings"}
+          icon={<SettingsIcon />}
+          collapsed={collapsed}
+        />
+        <BottomLink
+          href="/inbox/help"
+          label="Help"
+          active={scope === "help"}
+          icon={<HelpIcon />}
+          collapsed={collapsed}
+        />
       </div>
     </aside>
+  );
+}
+
+function BottomLink({
+  href,
+  label,
+  active,
+  icon,
+  collapsed,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+  icon: React.ReactNode;
+  collapsed: boolean;
+}) {
+  if (collapsed) {
+    return (
+      <Link
+        href={href}
+        title={label}
+        aria-label={label}
+        className={`flex items-center justify-center w-10 h-10 mx-auto rounded-md ${
+          active
+            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
+            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+        }`}
+      >
+        {icon}
+      </Link>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm ${
+        active
+          ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
+          : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+      }`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+    </Link>
   );
 }
 
@@ -375,6 +408,14 @@ function ScheduledIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.75 3.5v3.69l2.53 1.46a.75.75 0 1 1-.75 1.3L7.625 9.16A.75.75 0 0 1 7.25 8.5v-4a.75.75 0 0 1 1.5 0Z" />
+    </svg>
+  );
+}
+
+function HelpIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.05 11.25a.95.95 0 1 1 0-1.9.95.95 0 0 1 0 1.9Zm1.6-4.41c-.59.36-.85.61-.85 1.06v.35a.75.75 0 0 1-1.5 0v-.35c0-1.18.78-1.79 1.42-2.18.55-.34.83-.6.83-1.07 0-.66-.55-1.15-1.32-1.15-.86 0-1.27.49-1.5 1.06a.75.75 0 1 1-1.39-.56C5.62 4.18 6.55 3 8.23 3c1.6 0 2.82 1.06 2.82 2.65 0 1.18-.78 1.79-1.4 2.19Z" />
     </svg>
   );
 }

@@ -200,6 +200,38 @@ Send mail to `anything@yourdomain.com`, watch the tail print the parsed
 `from`/`to`/`mailbox`/`thread` IDs, then refresh the app — the thread
 appears at the top of the list.
 
+## Installing on your phone
+
+orange-inbox ships as a Progressive Web App. Once installed it launches with
+its own home-screen icon, no browser chrome, and (on supported platforms)
+push notifications.
+
+**iPhone / iPad — Safari only.** Chrome and Firefox on iOS can't install
+PWAs.
+
+1. Open the host URL (e.g. `https://orangemail.yourdomain.com`) in Safari.
+2. Sign in through Cloudflare Access first — the manifest is fetched with
+   `crossOrigin="use-credentials"` so the Access cookie has to be present
+   when the browser asks for it. If install fails silently, this is almost
+   always the cause.
+3. Tap the Share button (square with up-arrow) → **Add to Home Screen** →
+   **Add**.
+
+**Android — Chrome.**
+
+1. Open the host URL in Chrome and sign in.
+2. Tap the install banner if it appears, or open the ⋮ menu →
+   **Install app**.
+
+**Push notifications.** Toggle them on at *Settings → Notifications*. The
+browser will prompt for permission once. On iOS, push only works after the
+app is installed to the home screen (iOS 16.4+) — install first, then open
+the installed app and enable from inside it.
+
+In-app help with the same instructions plus walkthroughs for mailboxes,
+sharing, compose features, and search lives at *sidebar → Help*
+(`/inbox/help`).
+
 ## Updating
 
 `./scripts/setup.sh` is the same command for first-time setup and for

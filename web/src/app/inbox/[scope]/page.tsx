@@ -7,6 +7,7 @@ import { listLabelsForUser } from "@/lib/labels";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
+import HelpManager from "@/components/HelpManager";
 
 export default async function InboxIndex({
   params,
@@ -20,6 +21,7 @@ export default async function InboxIndex({
   if (scope === "contacts") return <ContactsRoute searchParams={await searchParams} />;
   if (scope === "templates") return <TemplatesRoute />;
   if (scope === "settings") return <SettingsRoute />;
+  if (scope === "help") return <HelpManager />;
 
   const message =
     scope === "drafts" ? "Select a draft to edit it." : "Select a thread to read it.";
