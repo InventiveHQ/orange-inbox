@@ -58,7 +58,7 @@ export default function SearchBar({
         id="orange-search-scope"
         value={scope}
         onChange={e => setScope(e.target.value)}
-        className="shrink-0 max-w-[12rem] rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm focus:border-[var(--color-brand)] focus:outline-none"
+        className="hidden sm:block shrink-0 max-w-[12rem] rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm focus:border-[var(--color-brand)] focus:outline-none"
       >
         <option value="all">All inboxes</option>
         {mailboxes.map(m => (

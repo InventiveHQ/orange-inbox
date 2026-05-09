@@ -8,6 +8,7 @@ import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
 import SearchBar from "@/components/SearchBar";
+import MobileShell from "@/components/MobileShell";
 
 export default async function InboxLayout({
   children,
@@ -52,21 +53,20 @@ export default async function InboxLayout({
   if (domains.length === 0 && effectiveScope !== "settings") {
     return (
       <ComposeProvider identities={identities}>
-        <div className="flex h-screen">
-          <Sidebar
-            domains={[]}
-            mailboxes={[]}
-            scope={effectiveScope}
-            initialCollapsed={sidebarCollapsed}
-            isAdmin={user.is_admin}
-          />
-          <div className="flex flex-col flex-1 min-w-0">
-            <TopBar mailboxes={[]} scope={effectiveScope} />
-            <div className="flex flex-1 min-h-0">
-              <FirstMailboxPrompt />
-            </div>
-          </div>
-        </div>
+        <MobileShell
+          sidebar={
+            <Sidebar
+              domains={[]}
+              mailboxes={[]}
+              scope={effectiveScope}
+              initialCollapsed={sidebarCollapsed}
+              isAdmin={user.is_admin}
+            />
+          }
+          topBar={<TopBar mailboxes={[]} scope={effectiveScope} />}
+          list={null}
+          main={<FirstMailboxPrompt />}
+        />
       </ComposeProvider>
     );
   }
@@ -86,39 +86,39 @@ export default async function InboxLayout({
     domain_name: mb.domain_name,
   }));
 
+  const listContent = isFullPage ? null : (
+    <>
+      <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
+        {scopeLabel}
+      </header>
+      {isDrafts ? (
+        <DraftsList drafts={drafts} />
+      ) : (
+        <ThreadList
+          threads={threads}
+          scope={effectiveScope}
+          showDomain={effectiveScope === "all"}
+        />
+      )}
+    </>
+  );
+
   return (
     <ComposeProvider identities={identities}>
-      <div className="flex h-screen">
-        <Sidebar
-          domains={domains}
-          mailboxes={mailboxes}
-          scope={effectiveScope}
-          initialCollapsed={sidebarCollapsed}
-          isAdmin={user.is_admin}
-        />
-        <div className="flex flex-col flex-1 min-w-0">
-          <TopBar mailboxes={searchMailboxes} scope={effectiveScope} />
-          <div className="flex flex-1 min-h-0">
-            {!isFullPage && (
-              <section className="w-96 shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col">
-                <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-                  {scopeLabel}
-                </header>
-                {isDrafts ? (
-                  <DraftsList drafts={drafts} />
-                ) : (
-                  <ThreadList
-                    threads={threads}
-                    scope={effectiveScope}
-                    showDomain={effectiveScope === "all"}
-                  />
-                )}
-              </section>
-            )}
-            <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
-          </div>
-        </div>
-      </div>
+      <MobileShell
+        sidebar={
+          <Sidebar
+            domains={domains}
+            mailboxes={mailboxes}
+            scope={effectiveScope}
+            initialCollapsed={sidebarCollapsed}
+            isAdmin={user.is_admin}
+          />
+        }
+        topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}
+        list={listContent}
+        main={children}
+      />
     </ComposeProvider>
   );
 }
@@ -131,8 +131,8 @@ interface SearchMailbox {
 
 function TopBar({ mailboxes, scope }: { mailboxes: SearchMailbox[]; scope: string }) {
   return (
-    <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-4 py-2">
-      <div className="mx-auto max-w-3xl">
+    <div className="px-3 py-2 sm:px-4">
+      <div className="max-w-3xl">
         <SearchBar mailboxes={mailboxes} defaultScope={scope} />
       </div>
     </div>

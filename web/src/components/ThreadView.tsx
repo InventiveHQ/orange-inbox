@@ -1,6 +1,7 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
 import { formatFullDate, senderLabel } from "@/lib/format";
 import ApplyLabelButton from "./ApplyLabelButton";
+import BackToListButton from "./BackToListButton";
 import ReplyButton from "./ReplyButton";
 import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
@@ -18,15 +19,20 @@ export default function ThreadView({ detail, mailboxId }: Props) {
 
   return (
     <article className="flex-1 overflow-y-auto">
-      <header className="flex items-start justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 px-6 py-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{subject}</h1>
-          <div className="mt-1 text-xs text-neutral-500">
-            {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
-            {messages.length === 1 ? "" : "s"}
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex items-start gap-1 min-w-0 flex-1">
+          <BackToListButton label="Back to list" />
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight break-words">
+              {subject}
+            </h1>
+            <div className="mt-1 text-xs text-neutral-500 break-all">
+              {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
+              {messages.length === 1 ? "" : "s"}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
           <ThreadActions
             threadId={thread.id}
             initialStarred={thread.starred === 1}
@@ -68,11 +74,11 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
   const fileAtts = m.attachments.filter(a => a.inline_cid == null);
 
   return (
-    <section className="px-6 py-5">
-      <div className="flex items-baseline justify-between gap-4">
-        <div>
-          <div className="text-sm font-medium">{senderLabel(m.from_addr, m.from_name)}</div>
-          <div className="text-xs text-neutral-500">
+    <section className="px-4 py-4 sm:px-6 sm:py-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium break-words">{senderLabel(m.from_addr, m.from_name)}</div>
+          <div className="text-xs text-neutral-500 break-all">
             to {to.map(a => a.name || a.addr).join(", ")}
           </div>
           {sentByLabel && (
