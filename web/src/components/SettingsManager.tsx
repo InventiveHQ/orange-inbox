@@ -33,7 +33,13 @@ const PRESET_COLORS: (string | null)[] = [
   "#ec4899",
 ];
 
-export default function SettingsManager({ domains, initialLabels, manageableIdentities, isAdmin }: Props) {
+export default function SettingsManager({
+  domains,
+  initialLabels,
+  manageableIdentities,
+  isAdmin,
+  initialUndoSendSeconds,
+}: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
@@ -45,11 +51,74 @@ export default function SettingsManager({ domains, initialLabels, manageableIden
           {isAdmin && <MailboxAccessSection identities={manageableIdentities} />}
           {isAdmin && <SignaturesSection identities={manageableIdentities} />}
           <LabelsSection initialLabels={initialLabels} />
+          <SendingSection initialUndoSendSeconds={initialUndoSendSeconds} />
           <NotificationsSection />
           <AboutSection />
         </div>
       </div>
     </div>
+  );
+}
+
+const UNDO_SEND_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Off" },
+  { value: 5, label: "5 seconds" },
+  { value: 10, label: "10 seconds" },
+  { value: 20, label: "20 seconds" },
+  { value: 30, label: "30 seconds" },
+];
+
+function SendingSection({ initialUndoSendSeconds }: { initialUndoSendSeconds: number }) {
+  const [value, setValue] = useState(initialUndoSendSeconds);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function change(next: number) {
+    setError(null);
+    setValue(next);
+    startTransition(async () => {
+      const res = await fetch("/api/me", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ undo_send_seconds: next }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      setSavedAt(Date.now());
+    });
+  }
+
+  return (
+    <section>
+      <SectionHeader
+        title="Sending"
+        description="Hold outgoing messages briefly so you can undo before they leave. Cron dispatches each minute, so the actual send may follow the countdown by up to a minute."
+      />
+      <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-3">
+        <label className="block text-sm font-medium mb-2">Undo send</label>
+        <select
+          value={value}
+          onChange={e => change(Number(e.target.value))}
+          disabled={isPending}
+          className="w-full sm:w-48 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
+        >
+          {UNDO_SEND_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
+          {isPending && <span>Saving…</span>}
+          {!isPending && savedAt && <span>Saved</span>}
+          {error && <span className="text-red-600">{error}</span>}
+        </div>
+      </div>
+    </section>
   );
 }
 
