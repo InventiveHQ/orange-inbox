@@ -48,8 +48,8 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
-        <div className="flex items-center gap-3 min-w-0">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <Link
             href="/inbox/contacts"
             className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
@@ -102,8 +102,8 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
         </div>
       </header>
 
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[20rem_1fr] overflow-hidden">
-        <aside className="border-r border-neutral-200 dark:border-neutral-800 overflow-y-auto p-6 space-y-5">
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-[20rem_1fr] overflow-y-auto md:overflow-hidden">
+        <aside className="md:border-r border-b md:border-b-0 border-neutral-200 dark:border-neutral-800 md:overflow-y-auto p-4 sm:p-6 space-y-5">
           <Field label="Email">
             <a
               href={`mailto:${contact.email}`}
@@ -177,15 +177,15 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
           </Field>
         </aside>
 
-        <section className="overflow-y-auto">
-          <header className="px-6 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium flex items-center justify-between">
+        <section className="md:overflow-y-auto">
+          <header className="px-4 py-3 sm:px-6 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium flex items-center justify-between">
             <span>Conversation history</span>
             <span className="text-xs text-neutral-500">
               {threads.length} thread{threads.length === 1 ? "" : "s"}
             </span>
           </header>
           {threads.length === 0 ? (
-            <div className="px-6 py-12 text-sm text-neutral-500 text-center">
+            <div className="px-4 py-12 sm:px-6 text-sm text-neutral-500 text-center">
               No threads with this address in mailboxes you can read.
             </div>
           ) : (
@@ -194,7 +194,7 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
                 <li key={t.thread_id}>
                   <Link
                     href={`/inbox/${t.mailbox_id}/${t.thread_id}`}
-                    className="block px-6 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-900/40"
+                    className="block px-4 py-3 sm:px-6 hover:bg-neutral-50 dark:hover:bg-neutral-900/40"
                   >
                     <div className="flex items-baseline justify-between gap-3">
                       <span className="font-medium truncate">

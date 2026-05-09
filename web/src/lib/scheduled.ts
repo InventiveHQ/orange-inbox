@@ -20,7 +20,11 @@ export async function listScheduledForUser(
   userId: string,
   opts: { includeFinal?: boolean } = {},
 ): Promise<ScheduledRowWithSummary[]> {
-  const where = opts.includeFinal ? "user_id = ?" : "user_id = ? AND status = 'pending'";
+  // kind='undo_send' rows are transient (5–30s) and only ever surfaced through
+  // the compose-time toast, so they're filtered out of the Scheduled view.
+  const where = opts.includeFinal
+    ? "user_id = ? AND kind = 'scheduled'"
+    : "user_id = ? AND status = 'pending' AND kind = 'scheduled'";
   const { results } = await getDb()
     .prepare(
       `SELECT id, user_id, scheduled_for, payload_json, status, error_message, created_at, sent_at

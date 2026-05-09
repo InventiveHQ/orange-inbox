@@ -16,6 +16,7 @@ import type { ContactRow } from "@/lib/contacts";
 import type { TemplateRow } from "@/lib/templates";
 import { looksLikeHtml } from "@/lib/html-text";
 import RichTextEditor from "./RichTextEditor";
+import UndoSendToast from "./UndoSendToast";
 
 export interface ComposeOpenArgs {
   replyToMessageId?: string;
@@ -77,18 +78,31 @@ export function useCompose(): ComposeCtx {
   return c;
 }
 
+// State for the Undo Send toast. Lives at the Provider level so the toast
+// survives the compose modal closing — by design, the user hits Send (which
+// closes compose) and the countdown ticks at the bottom of the screen.
+interface UndoToastState {
+  scheduledId: string;
+  delaySeconds: number;
+}
+
 export default function ComposeProvider({
   identities,
+  undoSendSeconds,
   children,
 }: {
   identities: Identity[];
+  // 0 = Undo Send disabled; otherwise the configured hold window in seconds.
+  undoSendSeconds: number;
   children: React.ReactNode;
 }) {
+  const router = useRouter();
   const [args, setArgs] = useState<ComposeOpenArgs | null>(null);
   // Bumped every time we want to *replace* the in-flight compose with a fresh
   // one (e.g. a Reply click). The modal keys off this so its internal state
   // (to/cc/subject/body) is reset cleanly without lifting it into the provider.
   const [instanceKey, setInstanceKey] = useState(0);
+  const [undoToast, setUndoToast] = useState<UndoToastState | null>(null);
 
   const open = useCallback((a?: ComposeOpenArgs) => {
     setArgs(a ?? {});
@@ -104,8 +118,26 @@ export default function ComposeProvider({
         <ComposeModal
           key={instanceKey}
           identities={identities}
+          undoSendSeconds={undoSendSeconds}
           args={args}
           onClose={() => setArgs(null)}
+          onQueuedUndoSend={(scheduledId, delaySeconds) =>
+            setUndoToast({ scheduledId, delaySeconds })
+          }
+        />
+      )}
+      {undoToast && (
+        <UndoSendToast
+          key={undoToast.scheduledId}
+          scheduledId={undoToast.scheduledId}
+          delaySeconds={undoToast.delaySeconds}
+          onUndone={draftId => {
+            setUndoToast(null);
+            // Reopen the compose modal pointing at the restored draft.
+            open({ draftId });
+            router.refresh();
+          }}
+          onDismiss={() => setUndoToast(null)}
         />
       )}
     </Ctx.Provider>
@@ -114,12 +146,16 @@ export default function ComposeProvider({
 
 function ComposeModal({
   identities,
+  undoSendSeconds,
   args,
   onClose,
+  onQueuedUndoSend,
 }: {
   identities: Identity[];
+  undoSendSeconds: number;
   args: ComposeOpenArgs;
   onClose: () => void;
+  onQueuedUndoSend: (scheduledId: string, delaySeconds: number) => void;
 }) {
   const router = useRouter();
   const initial = useMemo(() => pickInitialIdentity(identities, args), [identities, args]);
@@ -248,6 +284,39 @@ function ComposeModal({
     }
 
     startSending(async () => {
+      // With Undo Send enabled, route through the scheduled pipeline with a
+      // short hold window. The toast shown after onClose() lets the user
+      // cancel within the delay; the existing cron picks the row up after.
+      if (undoSendSeconds > 0) {
+        const scheduledFor = Math.floor(Date.now() / 1000) + undoSendSeconds;
+        const res = await fetch("/api/scheduled", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            from_mailbox_id: fromId,
+            to: toList,
+            cc: ccList.length ? ccList : undefined,
+            subject,
+            body: bodyHtml,
+            reply_to_message_id: args.replyToMessageId,
+            draft_id: draftId ?? undefined,
+            attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
+            scheduled_for: scheduledFor,
+            kind: "undo_send",
+          }),
+        });
+        if (!res.ok) {
+          const b = (await res.json().catch(() => ({}))) as { error?: string };
+          setError(b.error ?? `Send failed (${res.status})`);
+          return;
+        }
+        const b = (await res.json()) as { id?: string };
+        if (b.id) onQueuedUndoSend(b.id, undoSendSeconds);
+        onClose();
+        router.refresh();
+        return;
+      }
+
       const res = await fetch("/api/messages", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -894,12 +963,12 @@ function ModalShell({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-end p-4 sm:p-6 bg-black/30"
+      className="fixed inset-0 z-50 flex items-end justify-end bg-black/30 sm:p-6"
       onClick={onBackdrop}
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="w-full sm:w-[560px] max-h-[85vh] flex flex-col rounded-lg bg-white dark:bg-neutral-950 shadow-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden"
+        className="w-full h-full sm:h-auto sm:w-[560px] sm:max-h-[85vh] flex flex-col bg-white dark:bg-neutral-950 shadow-xl overflow-hidden sm:rounded-lg sm:border sm:border-neutral-200 sm:dark:border-neutral-800"
       >
         {children}
       </div>
@@ -923,7 +992,10 @@ function MinimizedBar({
   // No backdrop — the page stays interactive while minimized. The bar pins to
   // the bottom-right; clicking the title restores the full modal.
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-72 rounded-lg bg-white dark:bg-neutral-950 shadow-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden">
+    <div
+      className="fixed right-4 z-50 w-72 rounded-lg bg-white dark:bg-neutral-950 shadow-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden"
+      style={{ bottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+    >
       <div className="flex items-center">
         <button
           type="button"

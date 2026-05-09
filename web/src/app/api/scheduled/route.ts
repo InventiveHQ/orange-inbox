@@ -5,6 +5,10 @@ import { listScheduledForUser } from "@/lib/scheduled";
 
 interface ScheduleBody {
   scheduled_for?: number;
+  // 'scheduled' (default) for explicit Schedule-send; 'undo_send' for the
+  // short hold window applied by Undo Send. Only difference is whether the
+  // row appears in the user-facing Scheduled list.
+  kind?: "scheduled" | "undo_send";
   // Plus the same fields as /api/messages POST body.
   from_mailbox_id?: string;
   to?: string[];
@@ -65,15 +69,16 @@ export async function POST(req: NextRequest) {
       attachment_ids: b.attachment_ids,
     };
 
+    const kind = b.kind === "undo_send" ? "undo_send" : "scheduled";
     const id = crypto.randomUUID();
     await getDb()
       .prepare(
-        `INSERT INTO scheduled_messages (id, user_id, scheduled_for, payload_json, status)
-         VALUES (?, ?, ?, ?, 'pending')`,
+        `INSERT INTO scheduled_messages (id, user_id, scheduled_for, payload_json, status, kind)
+         VALUES (?, ?, ?, ?, 'pending', ?)`,
       )
-      .bind(id, user.id, scheduledFor, JSON.stringify(payload))
+      .bind(id, user.id, scheduledFor, JSON.stringify(payload), kind)
       .run();
-    return NextResponse.json({ id, scheduled_for: scheduledFor }, { status: 201 });
+    return NextResponse.json({ id, scheduled_for: scheduledFor, kind }, { status: 201 });
   } catch (e) {
     return errorResponse(e);
   }

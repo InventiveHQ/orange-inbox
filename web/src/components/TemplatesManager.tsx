@@ -21,7 +21,7 @@ export default function TemplatesManager({ templates, identities }: Props) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
+      <header className="flex items-center justify-between gap-3 px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
         <h1 className="text-base font-semibold">Templates</h1>
         <button
           type="button"
@@ -41,7 +41,7 @@ export default function TemplatesManager({ templates, identities }: Props) {
           {templates.map(t => (
             <li
               key={t.id}
-              className="flex items-start justify-between gap-3 px-6 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-900/40"
+              className="flex items-start justify-between gap-3 px-4 py-3 sm:px-6 hover:bg-neutral-50 dark:hover:bg-neutral-900/40"
             >
               <div className="min-w-0">
                 <div className="flex items-baseline gap-2">

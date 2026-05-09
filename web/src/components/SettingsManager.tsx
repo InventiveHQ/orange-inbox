@@ -18,6 +18,7 @@ interface Props {
   // in the system; for non-admins it's empty (management UI is hidden).
   manageableIdentities: Identity[];
   isAdmin: boolean;
+  initialUndoSendSeconds: number;
 }
 
 const PRESET_COLORS: (string | null)[] = [
@@ -35,11 +36,11 @@ const PRESET_COLORS: (string | null)[] = [
 export default function SettingsManager({ domains, initialLabels, manageableIdentities, isAdmin }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
+      <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
         <h1 className="text-base font-semibold">Settings</h1>
       </header>
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl px-6 py-6 space-y-10">
+        <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 space-y-10">
           <MailDomainsSection domains={domains} isAdmin={isAdmin} />
           {isAdmin && <MailboxAccessSection identities={manageableIdentities} />}
           {isAdmin && <SignaturesSection identities={manageableIdentities} />}

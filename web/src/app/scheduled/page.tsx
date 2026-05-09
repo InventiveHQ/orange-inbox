@@ -20,7 +20,7 @@ export default async function ScheduledPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100">
-      <header className="border-b border-neutral-200 dark:border-neutral-800 px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-4 sm:px-6 flex items-center justify-between">
         <div>
           <Link
             href="/inbox/all"
@@ -35,7 +35,7 @@ export default async function ScheduledPage() {
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-6 space-y-8">
+      <main className="max-w-3xl mx-auto px-4 py-6 sm:px-6 space-y-8">
         <Section title={`Pending (${pending.length})`} empty="No scheduled sends.">
           {pending.map(item => (
             <li

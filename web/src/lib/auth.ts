@@ -6,6 +6,7 @@ export interface User {
   email: string;
   display_name: string | null;
   is_admin: boolean;
+  undo_send_seconds: number;
 }
 
 interface UserRow {
@@ -13,6 +14,7 @@ interface UserRow {
   email: string;
   display_name: string | null;
   is_admin: number;
+  undo_send_seconds: number;
 }
 
 const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
@@ -26,7 +28,7 @@ export async function getCurrentUser(): Promise<User | null> {
 
   const db = getDb();
   const existing = await db
-    .prepare("SELECT id, email, display_name, is_admin FROM users WHERE email = ?")
+    .prepare("SELECT id, email, display_name, is_admin, undo_send_seconds FROM users WHERE email = ?")
     .bind(email)
     .first<UserRow>();
   if (existing) {
@@ -39,7 +41,7 @@ export async function getCurrentUser(): Promise<User | null> {
     .prepare("INSERT INTO users (id, email, last_seen_at) VALUES (?, ?, unixepoch())")
     .bind(id, email)
     .run();
-  return { id, email, display_name: null, is_admin: false };
+  return { id, email, display_name: null, is_admin: false, undo_send_seconds: 0 };
 }
 
 export async function requireUser(): Promise<User> {
@@ -76,6 +78,7 @@ function rowToUser(row: UserRow): User {
     email: row.email,
     display_name: row.display_name,
     is_admin: row.is_admin === 1,
+    undo_send_seconds: row.undo_send_seconds ?? 0,
   };
 }
 

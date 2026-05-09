@@ -54,7 +54,7 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-base font-semibold mr-2">Contacts</h1>
           <FilterSelect
@@ -116,7 +116,7 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
             >
               <Link
                 href={`/inbox/contacts/${c.id}`}
-                className="flex items-center justify-between gap-3 px-6 py-3"
+                className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">

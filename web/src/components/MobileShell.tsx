@@ -43,12 +43,19 @@ export default function MobileShell({ sidebar, topBar, list, main }: Props) {
         className={`shrink-0 z-50 flex transition-transform duration-200 ease-out fixed inset-y-0 left-0 bg-white dark:bg-neutral-950 md:static md:translate-x-0 md:shadow-none ${
           drawerOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
         }`}
+        style={{
+          paddingTop: "env(safe-area-inset-top)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
       >
         {sidebar}
       </div>
 
       <div className="flex flex-col flex-1 min-w-0">
-        <div className="shrink-0 flex items-stretch border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950">
+        <div
+          className="shrink-0 flex items-stretch border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
+          style={{ paddingTop: "env(safe-area-inset-top)" }}
+        >
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}

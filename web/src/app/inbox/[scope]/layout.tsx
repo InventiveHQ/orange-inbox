@@ -52,7 +52,7 @@ export default async function InboxLayout({
 
   if (domains.length === 0 && effectiveScope !== "settings") {
     return (
-      <ComposeProvider identities={identities}>
+      <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
         <MobileShell
           sidebar={
             <Sidebar
@@ -104,7 +104,7 @@ export default async function InboxLayout({
   );
 
   return (
-    <ComposeProvider identities={identities}>
+    <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
       <MobileShell
         sidebar={
           <Sidebar
