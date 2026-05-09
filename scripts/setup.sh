@@ -124,6 +124,26 @@ else
   ok "Set INTERNAL_SECRET on both workers"
 fi
 
+# ─── VAPID_PRIVATE_KEY (Web Push) ──────────────────────────────────────────
+# Signs the JWT on /api/internal/notify-new-message. Public key + subject
+# live in web/wrangler.jsonc vars. Idempotent — only generates if missing.
+log "Ensuring VAPID_PRIVATE_KEY is set on web worker"
+vapid_exists() {
+  (cd "$ROOT/web" && npx --yes wrangler secret list 2>/dev/null) \
+    | grep -q VAPID_PRIVATE_KEY
+}
+if vapid_exists; then
+  ok "VAPID_PRIVATE_KEY already set"
+else
+  log "Generating VAPID keypair (run \`pnpm vapid\` to print again)"
+  VAPID_OUTPUT=$(cd "$ROOT/web" && node scripts/generate-vapid.mjs)
+  VAPID_PUB=$(printf '%s\n' "$VAPID_OUTPUT" | grep '^VAPID_PUBLIC_KEY=' | cut -d= -f2)
+  VAPID_PRIV=$(printf '%s\n' "$VAPID_OUTPUT" | grep '^VAPID_PRIVATE_KEY=' | cut -d= -f2)
+  printf '%s' "$VAPID_PRIV" | (cd "$ROOT/web" && npx --yes wrangler secret put VAPID_PRIVATE_KEY) >/dev/null
+  unset VAPID_PRIV VAPID_OUTPUT
+  ok "Set VAPID_PRIVATE_KEY (private). Public key for wrangler.jsonc vars: $VAPID_PUB"
+fi
+
 # ─── done ───────────────────────────────────────────────────────────────────
 cat <<'BANNER'
 

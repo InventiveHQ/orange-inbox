@@ -6,7 +6,7 @@ import { findOrCreateThread } from "./thread";
 import type { Env } from "./types";
 
 export default {
-  async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext) {
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
     const recipient = await resolveRecipient(env, message.to);
     if (!recipient) {
       message.setReject(`Unknown mailbox: ${message.to}`);
@@ -19,7 +19,7 @@ export default {
 
     const parsed = await parseEmail(forParse);
     const thread = await findOrCreateThread(env, recipient.mailboxId, parsed);
-    const result = await storeMessage(env, recipient, thread, parsed, rawBytes);
+    const result = await storeMessage(env, ctx, recipient, thread, parsed, rawBytes);
 
     console.log(
       `inbound ${result.duplicate ? "(dup)" : "ok"} mailbox=${recipient.mailboxId} ` +

@@ -16,6 +16,7 @@ export interface StoreResult {
 
 export async function storeMessage(
   env: Env,
+  ctx: ExecutionContext,
   recipient: Recipient,
   thread: ThreadMatch,
   parsed: ParsedMessage,
@@ -188,5 +189,44 @@ export async function storeMessage(
     console.error("upsertThreadIndex failed", err);
   }
 
+  // Fire-and-forget Web Push fan-out via the web worker. Wrapped in
+  // ctx.waitUntil so the email handler returns fast; failures here never
+  // affect mail ingestion.
+  ctx.waitUntil(notifyWebOfNewMessage(env, recipient.mailboxId, thread.threadId, messageId, parsed));
+
   return { messageId, threadId: thread.threadId, duplicate: false };
+}
+
+async function notifyWebOfNewMessage(
+  env: Env,
+  mailboxId: string,
+  threadId: string,
+  messageId: string,
+  parsed: ParsedMessage,
+): Promise<void> {
+  if (!env.WEB || !env.INTERNAL_SECRET) return;
+  try {
+    const res = await env.WEB.fetch(
+      new Request("https://internal/api/internal/notify-new-message", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-internal-secret": env.INTERNAL_SECRET,
+        },
+        body: JSON.stringify({
+          mailboxId,
+          threadId,
+          messageId,
+          fromAddr: parsed.from.addr,
+          fromName: parsed.from.name ?? null,
+          subject: parsed.subject || null,
+        }),
+      }),
+    );
+    if (!res.ok) {
+      console.warn(`notify-new-message ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    }
+  } catch (err) {
+    console.warn("notify-new-message threw", err);
+  }
 }

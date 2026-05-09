@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
 import type { LabelRow } from "@/lib/labels";
+import { APP_VERSION } from "@/lib/version";
 import LabelChip from "./LabelChip";
+import PushNotificationToggle from "./PushNotificationToggle";
 import RichTextEditor from "./RichTextEditor";
+import usePWAUpdate from "./usePWAUpdate";
 
 interface Props {
   domains: DomainRow[];
@@ -41,6 +44,8 @@ export default function SettingsManager({ domains, initialLabels, manageableIden
           {isAdmin && <MailboxAccessSection identities={manageableIdentities} />}
           {isAdmin && <SignaturesSection identities={manageableIdentities} />}
           <LabelsSection initialLabels={initialLabels} />
+          <NotificationsSection />
+          <AboutSection />
         </div>
       </div>
     </div>
@@ -650,6 +655,63 @@ function LabelsSection({ initialLabels }: { initialLabels: LabelRow[] }) {
         </div>
       </div>
       {actionError && <div className="mt-2 text-xs text-red-600">{actionError}</div>}
+    </section>
+  );
+}
+
+function NotificationsSection() {
+  return (
+    <section>
+      <SectionHeader
+        title="Notifications"
+        description="Get a phone-style notification when new mail arrives. Subscription is per-device — turn it on once on each device you use."
+      />
+      <PushNotificationToggle />
+    </section>
+  );
+}
+
+function AboutSection() {
+  const pwa = usePWAUpdate();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function onClick() {
+    setMsg(null);
+    if (pwa.needRefresh) {
+      pwa.applyUpdate();
+      return;
+    }
+    startTransition(async () => {
+      const updated = await pwa.checkForUpdate();
+      if (!updated) setMsg("You're on the latest version.");
+    });
+  }
+
+  return (
+    <section>
+      <SectionHeader title="About" description="" />
+      <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-3 text-sm space-y-3">
+        <div className="flex justify-between">
+          <span className="text-neutral-500">Version</span>
+          <span className="font-medium">{APP_VERSION}</span>
+        </div>
+        {pwa.supported && (
+          <button
+            type="button"
+            onClick={onClick}
+            disabled={isPending}
+            className="w-full rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {pwa.needRefresh
+              ? "Update available — Reload"
+              : isPending
+                ? "Checking…"
+                : "Check for updates"}
+          </button>
+        )}
+        {msg && <p className="text-xs text-center text-neutral-500">{msg}</p>}
+      </div>
     </section>
   );
 }
