@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Props {
   scheduledId: string;
@@ -17,11 +17,14 @@ export default function UndoSendToast({ scheduledId, delaySeconds, onUndone, onD
   const [secsLeft, setSecsLeft] = useState(delaySeconds);
   const [error, setError] = useState<string | null>(null);
   const [isUndoing, setIsUndoing] = useState(false);
-  const startedAt = useRef(Date.now());
 
   useEffect(() => {
+    // Anchor the countdown on mount, not at first render — render-phase calls
+    // to Date.now() trip react-hooks/purity (the value would change across
+    // re-renders before the effect ran).
+    const startedAt = Date.now();
     const handle = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - startedAt.current) / 1000);
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
       const remaining = Math.max(0, delaySeconds - elapsed);
       setSecsLeft(remaining);
       if (remaining <= 0) {

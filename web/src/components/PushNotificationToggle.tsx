@@ -105,7 +105,7 @@ export default function PushNotificationToggle() {
   }
 
   return (
-    <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-3 text-sm flex items-center justify-between gap-3">
+    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3 text-sm flex items-center justify-between gap-3">
       <div className="min-w-0">
         <div className="font-medium">Notifications on this device</div>
         <div className="text-xs text-neutral-500 mt-0.5">

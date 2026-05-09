@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
@@ -40,24 +40,134 @@ export default function SettingsManager({
   isAdmin,
   initialUndoSendSeconds,
 }: Props) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sections = useMemo(
+    () => [
+      { id: "mail-domains", label: "Mail domains" },
+      ...(isAdmin
+        ? [
+            { id: "mailbox-access", label: "Mailbox access" },
+            { id: "signatures", label: "Signatures" },
+          ]
+        : []),
+      { id: "labels", label: "Labels" },
+      { id: "sending", label: "Sending" },
+      { id: "notifications", label: "Notifications" },
+      { id: "about", label: "About" },
+    ],
+    [isAdmin],
+  );
+  const active = useActiveSection(
+    scrollRef,
+    sections.map(s => s.id),
+  );
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
         <h1 className="text-base font-semibold">Settings</h1>
       </header>
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 space-y-10">
-          <MailDomainsSection domains={domains} isAdmin={isAdmin} />
-          {isAdmin && <MailboxAccessSection identities={manageableIdentities} />}
-          {isAdmin && <SignaturesSection identities={manageableIdentities} />}
-          <LabelsSection initialLabels={initialLabels} />
-          <SendingSection initialUndoSendSeconds={initialUndoSendSeconds} />
-          <NotificationsSection />
-          <AboutSection />
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8 flex gap-10">
+          <aside className="hidden md:block w-44 shrink-0">
+            <nav className="sticky top-0 space-y-0.5">
+              {sections.map(s => (
+                <SectionNavLink
+                  key={s.id}
+                  id={s.id}
+                  label={s.label}
+                  active={active === s.id}
+                  scrollRoot={scrollRef}
+                />
+              ))}
+            </nav>
+          </aside>
+          <div className="flex-1 min-w-0 space-y-12">
+            <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
+            {isAdmin && (
+              <MailboxAccessSection
+                id="mailbox-access"
+                identities={manageableIdentities}
+              />
+            )}
+            {isAdmin && (
+              <SignaturesSection id="signatures" identities={manageableIdentities} />
+            )}
+            <LabelsSection id="labels" initialLabels={initialLabels} />
+            <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
+            <NotificationsSection id="notifications" />
+            <AboutSection id="about" />
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function SectionNavLink({
+  id,
+  label,
+  active,
+  scrollRoot,
+}: {
+  id: string;
+  label: string;
+  active: boolean;
+  scrollRoot: React.RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <a
+      href={`#${id}`}
+      onClick={e => {
+        e.preventDefault();
+        const el = document.getElementById(id);
+        const root = scrollRoot.current;
+        if (!el || !root) return;
+        const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
+        root.scrollTo({ top, behavior: "smooth" });
+        history.replaceState(null, "", `#${id}`);
+      }}
+      className={`block rounded-md px-3 py-1.5 text-sm transition-colors ${
+        active
+          ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-medium"
+          : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50 dark:text-neutral-400 dark:hover:text-neutral-100 dark:hover:bg-neutral-900"
+      }`}
+    >
+      {label}
+    </a>
+  );
+}
+
+function useActiveSection(
+  scrollRef: React.RefObject<HTMLDivElement | null>,
+  ids: string[],
+) {
+  const [active, setActive] = useState(ids[0] ?? "");
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        const visible = entries
+          .filter(e => e.isIntersecting)
+          .map(e => ({ id: e.target.id, top: e.boundingClientRect.top }));
+        if (visible.length === 0) return;
+        visible.sort((a, b) => a.top - b.top);
+        setActive(visible[0].id);
+      },
+      {
+        root,
+        rootMargin: "0px 0px -65% 0px",
+        threshold: 0,
+      },
+    );
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [scrollRef, ids]);
+  return active;
 }
 
 const UNDO_SEND_OPTIONS: { value: number; label: string }[] = [
@@ -68,7 +178,13 @@ const UNDO_SEND_OPTIONS: { value: number; label: string }[] = [
   { value: 30, label: "30 seconds" },
 ];
 
-function SendingSection({ initialUndoSendSeconds }: { initialUndoSendSeconds: number }) {
+function SendingSection({
+  id,
+  initialUndoSendSeconds,
+}: {
+  id: string;
+  initialUndoSendSeconds: number;
+}) {
   const [value, setValue] = useState(initialUndoSendSeconds);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,12 +209,12 @@ function SendingSection({ initialUndoSendSeconds }: { initialUndoSendSeconds: nu
   }
 
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader
         title="Sending"
         description="Hold outgoing messages briefly so you can undo before they leave. Cron dispatches each minute, so the actual send may follow the countdown by up to a minute."
       />
-      <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-3">
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4">
         <label className="block text-sm font-medium mb-2">Undo send</label>
         <select
           value={value}
@@ -122,15 +238,15 @@ function SendingSection({ initialUndoSendSeconds }: { initialUndoSendSeconds: nu
   );
 }
 
-function SignaturesSection({ identities }: { identities: Identity[] }) {
+function SignaturesSection({ id, identities }: { id: string; identities: Identity[] }) {
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader
         title="Signatures"
         description="Per-mailbox signature appended to every outbound message."
       />
       {identities.length === 0 ? (
-        <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500">
+        <div className="rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-8 text-sm text-neutral-500 text-center">
           No mailboxes yet.
         </div>
       ) : (
@@ -173,15 +289,13 @@ function SignatureEditor({ identity }: { identity: Identity }) {
   }
 
   return (
-    <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
-      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-neutral-200 dark:border-neutral-800">
-        <div className="text-sm font-medium truncate">
+    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="text-sm font-medium font-mono truncate">
           {identity.local_part}@{identity.domain_name}
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {savedAt && (
-            <span className="text-xs text-neutral-500">Saved</span>
-          )}
+          {savedAt && <span className="text-xs text-neutral-500">Saved</span>}
           {error && <span className="text-xs text-red-600">{error}</span>}
           <button
             type="button"
@@ -212,18 +326,18 @@ interface Member {
 }
 const MEMBER_ROLES: Member["role"][] = ["owner", "member", "reader"];
 
-function MailboxAccessSection({ identities }: { identities: Identity[] }) {
+function MailboxAccessSection({ id, identities }: { id: string; identities: Identity[] }) {
   // One row per mailbox in the system (admin view). Each row lazily fetches
   // its member list the first time the row mounts so the page paints fast
   // even with many mailboxes.
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader
         title="Mailbox access"
         description="Invite collaborators (e.g. a contractor working on a single mailbox) and pick their role: owner, member (read + send), or reader (read-only). They sign in via Cloudflare Access — make sure your Access policy allows their email."
       />
       {identities.length === 0 ? (
-        <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500">
+        <div className="rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-8 text-sm text-neutral-500 text-center">
           No mailboxes yet.
         </div>
       ) : (
@@ -340,59 +454,76 @@ function MailboxAccessRow({ identity }: { identity: Identity }) {
     });
   }
 
+  const memberCount = members?.length ?? 0;
+
   return (
-    <div className="rounded-md border border-neutral-200 dark:border-neutral-800">
-      <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium truncate">
-        {label}
-      </div>
-
-      <div className="px-3 py-2">
-        {loadError && <div className="text-xs text-red-600 mb-1">{loadError}</div>}
-        {members === null && !loadError && (
-          <div className="text-xs text-neutral-500">Loading…</div>
-        )}
-        {members && members.length === 0 && (
-          <div className="text-xs text-neutral-500">Just you.</div>
-        )}
-        {members && members.length > 0 && (
-          <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {members.map(m => (
-              <li key={m.user_id} className="py-1.5 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm truncate">{m.display_name || m.email}</div>
-                  {m.display_name && (
-                    <div className="text-[11px] text-neutral-500 truncate">{m.email}</div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <select
-                    value={m.role}
-                    onChange={e => changeRole(m.user_id, e.target.value as Member["role"])}
-                    disabled={isPending}
-                    className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-xs px-1.5 py-0.5"
-                  >
-                    {MEMBER_ROLES.map(r => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => remove(m.user_id)}
-                    disabled={isPending}
-                    className="rounded-md px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
+    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="text-sm font-medium font-mono truncate">{label}</div>
+        {members && (
+          <span className="shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">
+            {memberCount === 0
+              ? "Just you"
+              : `${memberCount} ${memberCount === 1 ? "member" : "members"}`}
+          </span>
         )}
       </div>
 
-      <div className="px-3 py-2 border-t border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5">
+      {(loadError || members === null || (members && members.length > 0)) && (
+        <div className="border-t border-neutral-200 dark:border-neutral-800">
+          {loadError && (
+            <div className="px-4 py-2 text-xs text-red-600">{loadError}</div>
+          )}
+          {members === null && !loadError && (
+            <div className="px-4 py-2 text-xs text-neutral-500">Loading…</div>
+          )}
+          {members && members.length > 0 && (
+            <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
+              {members.map(m => (
+                <li
+                  key={m.user_id}
+                  className="flex items-center justify-between gap-2 px-4 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{m.display_name || m.email}</div>
+                    {m.display_name && (
+                      <div className="text-[11px] text-neutral-500 truncate">
+                        {m.email}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <select
+                      value={m.role}
+                      onChange={e =>
+                        changeRole(m.user_id, e.target.value as Member["role"])
+                      }
+                      disabled={isPending}
+                      className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs px-1.5 py-0.5 focus:outline-none focus:border-[var(--color-brand)]"
+                    >
+                      {MEMBER_ROLES.map(r => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => remove(m.user_id)}
+                      disabled={isPending}
+                      className="rounded-md px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div className="border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-950/40 px-4 py-3 flex items-center gap-2">
         <input
           type="email"
           placeholder="contractor@example.com"
@@ -401,12 +532,12 @@ function MailboxAccessRow({ identity }: { identity: Identity }) {
           onKeyDown={e => {
             if (e.key === "Enter") invite();
           }}
-          className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+          className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2.5 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
         />
         <select
           value={inviteRole}
           onChange={e => setInviteRole(e.target.value as Member["role"])}
-          className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-1 text-sm"
+          className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
         >
           {MEMBER_ROLES.map(r => (
             <option key={r} value={r}>
@@ -424,38 +555,60 @@ function MailboxAccessRow({ identity }: { identity: Identity }) {
         </button>
       </div>
       {actionError && (
-        <div className="px-3 pb-2 text-xs text-red-600">{actionError}</div>
+        <div className="px-4 py-2 text-xs text-red-600 border-t border-neutral-200 dark:border-neutral-800">
+          {actionError}
+        </div>
       )}
     </div>
   );
 }
 
-function MailDomainsSection({ domains, isAdmin }: { domains: DomainRow[]; isAdmin: boolean }) {
+function MailDomainsSection({
+  id,
+  domains,
+  isAdmin,
+}: {
+  id: string;
+  domains: DomainRow[];
+  isAdmin: boolean;
+}) {
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader
         title="Mail domains"
         description="Domains routed to orange-inbox. Adding a domain creates a default catch-all mailbox you own."
       />
-      {domains.length === 0 ? (
-        <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500">
-          No domains yet.
-        </div>
-      ) : (
-        <ul className="rounded-md border border-neutral-200 dark:border-neutral-800 divide-y divide-neutral-200 dark:divide-neutral-800 mb-4">
-          {domains.map(d => (
-            <li key={d.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <div className="min-w-0">
-                <div className="text-sm font-medium truncate">{d.name}</div>
-                {d.display_name && (
-                  <div className="text-xs text-neutral-500 truncate">{d.display_name}</div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {isAdmin && <AddDomainForm />}
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+        {domains.length === 0 ? (
+          <div className="px-4 py-8 text-sm text-neutral-500 text-center">
+            No domains yet.
+          </div>
+        ) : (
+          <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {domains.map(d => (
+              <li
+                key={d.id}
+                className="flex items-center gap-3 px-4 py-3"
+              >
+                <div className="h-7 w-7 rounded-md bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center text-neutral-500 shrink-0">
+                  <GlobeIcon />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium truncate">{d.name}</div>
+                  {d.display_name && (
+                    <div className="text-xs text-neutral-500 truncate">{d.display_name}</div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {isAdmin && (
+          <div className="border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-950/40 px-4 py-3">
+            <AddDomainForm />
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -516,7 +669,7 @@ function AddDomainForm() {
   );
 }
 
-function LabelsSection({ initialLabels }: { initialLabels: LabelRow[] }) {
+function LabelsSection({ id, initialLabels }: { id: string; initialLabels: LabelRow[] }) {
   const router = useRouter();
   const [labels, setLabels] = useState<LabelRow[]>(initialLabels);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -621,107 +774,110 @@ function LabelsSection({ initialLabels }: { initialLabels: LabelRow[] }) {
   }
 
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader title="Labels" description="Tags you can apply to conversations." />
 
       {loadError && <div className="text-sm text-red-600 mb-2">{loadError}</div>}
-      {labels.length === 0 ? (
-        <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500 mb-4">
-          No labels yet.
-        </div>
-      ) : (
-        <ul className="rounded-md border border-neutral-200 dark:border-neutral-800 divide-y divide-neutral-200 dark:divide-neutral-800 mb-4">
-          {labels.map(l =>
-            editingId === l.id ? (
-              <li key={l.id} className="px-4 py-3 space-y-2">
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={e => setEditName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === "Enter") saveEdit(l.id);
-                    if (e.key === "Escape") cancelEdit();
-                  }}
-                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
-                />
-                <ColorPicker value={editColor} onChange={setEditColor} />
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={cancelEdit}
-                    className="rounded-md px-3 py-1 text-xs text-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => saveEdit(l.id)}
-                    disabled={isPending}
-                    className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-                  >
-                    Save
-                  </button>
-                </div>
-              </li>
-            ) : (
-              <li
-                key={l.id}
-                className="flex items-center justify-between gap-3 px-4 py-2.5"
-              >
-                <div className="min-w-0 flex items-center gap-2">
-                  <LabelChip name={l.name} color={l.color} size="sm" />
-                  {l.mailbox_id && (
-                    <span className="text-[10px] uppercase tracking-wider text-neutral-500">
-                      mailbox
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => startEdit(l)}
-                    disabled={isPending}
-                    className="text-xs text-neutral-600 hover:underline disabled:opacity-50 dark:text-neutral-400"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => remove(l)}
-                    disabled={isPending}
-                    className="text-xs text-red-600 hover:underline disabled:opacity-50"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </li>
-            ),
-          )}
-        </ul>
-      )}
-
-      <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-3 space-y-2">
-        <div className="text-xs uppercase tracking-wider text-neutral-500">New label</div>
-        <input
-          type="text"
-          placeholder="e.g. Receipts"
-          value={newName}
-          onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === "Enter") create();
-          }}
-          className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
-        />
-        <ColorPicker value={newColor} onChange={setNewColor} />
-        <div className="flex items-center justify-end">
-          <button
-            type="button"
-            onClick={create}
-            disabled={isPending}
-            className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {isPending ? "Creating…" : "Create label"}
-          </button>
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+        {labels.length === 0 ? (
+          <div className="px-4 py-8 text-sm text-neutral-500 text-center">
+            No labels yet.
+          </div>
+        ) : (
+          <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {labels.map(l =>
+              editingId === l.id ? (
+                <li key={l.id} className="px-4 py-3 space-y-2">
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") saveEdit(l.id);
+                      if (e.key === "Escape") cancelEdit();
+                    }}
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+                  />
+                  <ColorPicker value={editColor} onChange={setEditColor} />
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      className="rounded-md px-3 py-1 text-xs text-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveEdit(l.id)}
+                      disabled={isPending}
+                      className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </li>
+              ) : (
+                <li
+                  key={l.id}
+                  className="flex items-center justify-between gap-3 px-4 py-2.5"
+                >
+                  <div className="min-w-0 flex items-center gap-2">
+                    <LabelChip name={l.name} color={l.color} size="sm" />
+                    {l.mailbox_id && (
+                      <span className="text-[10px] uppercase tracking-wider text-neutral-500">
+                        mailbox
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(l)}
+                      disabled={isPending}
+                      className="text-xs text-neutral-600 hover:underline disabled:opacity-50 dark:text-neutral-400"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => remove(l)}
+                      disabled={isPending}
+                      className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </li>
+              ),
+            )}
+          </ul>
+        )}
+        <div className="border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-950/40 px-4 py-3 space-y-2">
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500">
+            New label
+          </div>
+          <input
+            type="text"
+            placeholder="e.g. Receipts"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") create();
+            }}
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+          />
+          <ColorPicker value={newColor} onChange={setNewColor} />
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={create}
+              disabled={isPending}
+              className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {isPending ? "Creating…" : "Create label"}
+            </button>
+          </div>
         </div>
       </div>
       {actionError && <div className="mt-2 text-xs text-red-600">{actionError}</div>}
@@ -729,9 +885,9 @@ function LabelsSection({ initialLabels }: { initialLabels: LabelRow[] }) {
   );
 }
 
-function NotificationsSection() {
+function NotificationsSection({ id }: { id: string }) {
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader
         title="Notifications"
         description="Get a phone-style notification when new mail arrives. Subscription is per-device — turn it on once on each device you use."
@@ -741,7 +897,7 @@ function NotificationsSection() {
   );
 }
 
-function AboutSection() {
+function AboutSection({ id }: { id: string }) {
   const pwa = usePWAUpdate();
   const [msg, setMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -759,9 +915,9 @@ function AboutSection() {
   }
 
   return (
-    <section>
+    <section id={id} className="scroll-mt-4">
       <SectionHeader title="About" description="" />
-      <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-3 text-sm space-y-3">
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 text-sm space-y-3">
         <div className="flex justify-between">
           <span className="text-neutral-500">Version</span>
           <span className="font-medium">{APP_VERSION}</span>
@@ -786,11 +942,35 @@ function AboutSection() {
   );
 }
 
+function GlobeIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
+    </svg>
+  );
+}
+
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
-    <div className="mb-3">
-      <h2 className="text-sm font-semibold">{title}</h2>
-      <p className="text-xs text-neutral-500 mt-0.5">{description}</p>
+    <div className="mb-4">
+      <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+      {description && (
+        <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 leading-relaxed max-w-xl">
+          {description}
+        </p>
+      )}
     </div>
   );
 }
