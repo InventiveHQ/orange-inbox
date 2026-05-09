@@ -7,8 +7,10 @@ import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
+import ComposeFromUrl from "@/components/ComposeFromUrl";
 import SearchBar from "@/components/SearchBar";
 import MobileShell from "@/components/MobileShell";
+import AppBadgeSync from "@/components/AppBadgeSync";
 
 export default async function InboxLayout({
   children,
@@ -54,6 +56,8 @@ export default async function InboxLayout({
   if (domains.length === 0 && effectiveScope !== "settings" && effectiveScope !== "help") {
     return (
       <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
+        <ComposeFromUrl />
+        <AppBadgeSync />
         <MobileShell
           sidebar={
             <Sidebar
@@ -106,6 +110,8 @@ export default async function InboxLayout({
 
   return (
     <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
+      <ComposeFromUrl />
+      <AppBadgeSync />
       <MobileShell
         sidebar={
           <Sidebar

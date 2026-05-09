@@ -65,22 +65,60 @@ self.addEventListener('push', (e) => {
   const title = p.title || 'orange mail';
   const body = p.body || '';
   const url = p.url || '/inbox/all';
-  const tag = p.threadId ? `thread-${p.threadId}` : `msg-${p.messageId || Date.now()}`;
+  const threadId = p.threadId || null;
+  const tag = threadId ? `thread-${threadId}` : `msg-${p.messageId || Date.now()}`;
+
+  // Badging: only set when the payload carries a fresh unread total. If
+  // missing (older payloads in flight), skip rather than guess — drift is
+  // worse than a stale badge.
+  if (typeof p.unreadTotal === 'number') {
+    try {
+      if (typeof self.navigator.setAppBadge === 'function') {
+        self.navigator.setAppBadge(p.unreadTotal).catch(() => {});
+      }
+    } catch {
+      // setAppBadge unsupported — ignore.
+    }
+  }
+
   e.waitUntil(
     self.registration.showNotification(title, {
       body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      data: { url },
+      data: { url, threadId },
       tag,
       renotify: true,
+      actions: [
+        { action: 'open', title: 'Open' },
+        { action: 'archive', title: 'Archive' },
+      ],
     }),
   );
 });
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = e.notification.data?.url || '/inbox/all';
+  const data = e.notification.data || {};
+  const url = data.url || '/inbox/all';
+  const threadId = data.threadId || null;
+
+  if (e.action === 'archive' && threadId) {
+    // Archive the thread server-side; don't open a window.
+    e.waitUntil(
+      fetch(`/api/threads/${encodeURIComponent(threadId)}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ archived: true }),
+      }).catch(() => {
+        // Network/auth failure — best-effort; the client will catch up later.
+      }),
+    );
+    return;
+  }
+
+  // Default: open or no action — focus/navigate to the thread URL.
   e.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

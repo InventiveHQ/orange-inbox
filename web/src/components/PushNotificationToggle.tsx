@@ -2,7 +2,33 @@
 
 import { useEffect, useState, useTransition } from "react";
 
-type State = "idle" | "loading" | "subscribed" | "denied" | "unsupported" | "error";
+type State =
+  | "idle"
+  | "loading"
+  | "subscribed"
+  | "denied"
+  | "unsupported"
+  | "needs_install"
+  | "error";
+
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const win = window as Window & { MSStream?: unknown };
+  // Classic UA sniff plus a guard for IE Mobile (which historically spoofed iOS).
+  // iPadOS 13+ reports as Mac; `'standalone' in navigator` is the corollary tell.
+  const uaMatch = /iPad|iPhone|iPod/.test(ua) && !win.MSStream;
+  const standaloneProp = "standalone" in navigator;
+  return uaMatch || standaloneProp;
+}
+
+function isStandalonePWA(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.matchMedia?.("(display-mode: standalone)").matches) return true;
+  // Legacy iOS exposes navigator.standalone === true when launched from home screen.
+  const nav = navigator as Navigator & { standalone?: boolean };
+  return nav.standalone === true;
+}
 
 function b64uToUint8(b64u: string): Uint8Array<ArrayBuffer> {
   const pad = b64u.length % 4 === 0 ? "" : "=".repeat(4 - (b64u.length % 4));
@@ -23,6 +49,13 @@ export default function PushNotificationToggle() {
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
       setState("unsupported");
+      return;
+    }
+    // iOS only delivers Web Push when launched as an installed PWA (iOS 16.4+).
+    // The push APIs above are present in regular Safari but won't actually work,
+    // so surface a separate "needs_install" state with explicit instructions.
+    if (isIOS() && !isStandalonePWA()) {
+      setState("needs_install");
       return;
     }
     if (Notification.permission === "denied") {
@@ -111,11 +144,13 @@ export default function PushNotificationToggle() {
         <div className="text-xs text-neutral-500 mt-0.5">
           {state === "unsupported"
             ? "This browser doesn't support web push."
-            : state === "denied"
-              ? "Blocked. Re-enable notifications for this site in your browser settings."
-              : state === "subscribed"
-                ? "Enabled — you'll get a notification on this device when new mail arrives."
-                : "Get a push notification on this device when new mail arrives."}
+            : state === "needs_install"
+              ? "On iOS, push notifications only work after you install orange mail to your home screen. In Safari, tap the Share button → ‘Add to Home Screen’, then open the app from the home-screen icon and try again."
+              : state === "denied"
+                ? "Blocked. Re-enable notifications for this site in your browser settings."
+                : state === "subscribed"
+                  ? "Enabled — you'll get a notification on this device when new mail arrives."
+                  : "Get a push notification on this device when new mail arrives."}
         </div>
         {error && <div className="text-xs text-red-600 mt-1">{error}</div>}
       </div>
@@ -129,7 +164,7 @@ export default function PushNotificationToggle() {
           >
             {pending ? "…" : "Disable"}
           </button>
-        ) : (
+        ) : state === "needs_install" ? null : (
           <button
             type="button"
             onClick={enable}
