@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { ForbiddenError, UnauthenticatedError, requireAdmin } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import {
-  findOrCreateUserByEmail,
-  isMailboxOwner,
-  listMailboxMembers,
-} from "@/lib/mailbox-access";
+import { findOrCreateUserByEmail, listMailboxMembers } from "@/lib/mailbox-access";
 import { sendInvitationEmail } from "@/lib/invitations";
 
 const VALID_ROLES = new Set(["owner", "member", "reader"]);
@@ -16,11 +12,8 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireUser();
+    await requireAdmin();
     const { id: mailboxId } = await ctx.params;
-    if (!(await isMailboxOwner(user.id, mailboxId))) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
     const members = await listMailboxMembers(mailboxId);
     return NextResponse.json({ members });
   } catch (e) {
@@ -38,11 +31,8 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireUser();
+    const user = await requireAdmin();
     const { id: mailboxId } = await ctx.params;
-    if (!(await isMailboxOwner(user.id, mailboxId))) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
 
     const b = (await req.json().catch(() => null)) as InviteBody | null;
     const email = b?.email?.trim().toLowerCase();
@@ -123,6 +113,9 @@ export async function POST(
 function errorResponse(e: unknown) {
   if (e instanceof UnauthenticatedError) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  if (e instanceof ForbiddenError) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   console.error(e);
   return NextResponse.json({ error: "internal_error" }, { status: 500 });

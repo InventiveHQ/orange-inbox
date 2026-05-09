@@ -1,8 +1,8 @@
 import { getCurrentUser } from "@/lib/auth";
 import { listContactsForUser } from "@/lib/contacts";
 import { listTemplatesForUser } from "@/lib/templates";
-import { listIdentities } from "@/lib/identities";
-import { listDomainsForUser } from "@/lib/queries";
+import { listAllIdentities, listIdentities } from "@/lib/identities";
+import { listAllDomains, listDomainsForUser } from "@/lib/queries";
 import { listLabelsForUser } from "@/lib/labels";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
@@ -56,18 +56,19 @@ async function TemplatesRoute() {
 async function SettingsRoute() {
   const user = await getCurrentUser();
   if (!user) return null;
-  const [domains, labels, identities] = await Promise.all([
-    listDomainsForUser(user.id),
+  // Admins manage every domain and every mailbox; non-admins see only what
+  // they have membership in (and the management UI below is hidden anyway).
+  const [domains, labels, manageableIdentities] = await Promise.all([
+    user.is_admin ? listAllDomains() : listDomainsForUser(user.id),
     listLabelsForUser(user.id),
-    listIdentities(user.id),
+    user.is_admin ? listAllIdentities() : listIdentities(user.id),
   ]);
-  // Only owners can edit a mailbox's signature.
-  const ownedIdentities = identities.filter(i => i.role === "owner");
   return (
     <SettingsManager
       domains={domains}
       initialLabels={labels}
-      ownedIdentities={ownedIdentities}
+      manageableIdentities={manageableIdentities}
+      isAdmin={user.is_admin}
     />
   );
 }

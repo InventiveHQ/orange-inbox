@@ -1,30 +1,10 @@
 import { getDb } from "./db";
 
-// Domain admin? Used to gate "create new mailbox on this domain".
-export async function isDomainAdmin(userId: string, domainId: string): Promise<boolean> {
-  const row = await getDb()
-    .prepare(
-      `SELECT 1 FROM user_domain_access
-        WHERE user_id = ? AND domain_id = ? AND role = 'admin'
-        LIMIT 1`,
-    )
-    .bind(userId, domainId)
-    .first();
-  return row !== null;
-}
-
-// Mailbox owner? Used to gate member-management actions on the mailbox.
-export async function isMailboxOwner(userId: string, mailboxId: string): Promise<boolean> {
-  const row = await getDb()
-    .prepare(
-      `SELECT 1 FROM user_mailbox_access
-        WHERE user_id = ? AND mailbox_id = ? AND role = 'owner'
-        LIMIT 1`,
-    )
-    .bind(userId, mailboxId)
-    .first();
-  return row !== null;
-}
+// Mailbox membership and per-mailbox role helpers. Management actions
+// (member CRUD, mailbox CRUD, domain CRUD) are gated globally via
+// users.is_admin — see web/src/lib/auth.ts. The role column on
+// user_mailbox_access is retained as an access grant (owner/member/reader
+// determine outbound-send eligibility) but no longer drives gating.
 
 export interface MailboxMember {
   user_id: string;

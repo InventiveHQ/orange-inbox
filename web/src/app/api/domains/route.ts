@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { ForbiddenError, UnauthenticatedError, requireAdmin, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { listDomainsForUser } from "@/lib/queries";
+import { listAllDomains, listDomainsForUser } from "@/lib/queries";
 
 export async function GET() {
   try {
     const user = await requireUser();
-    const domains = await listDomainsForUser(user.id);
+    const domains = user.is_admin ? await listAllDomains() : await listDomainsForUser(user.id);
     return NextResponse.json({ domains });
   } catch (e) {
     return errorResponse(e);
@@ -15,7 +15,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireUser();
+    const user = await requireAdmin();
     const body = (await req.json().catch(() => null)) as
       | { name?: string; display_name?: string; default_local_part?: string }
       | null;
@@ -44,18 +44,15 @@ export async function POST(req: NextRequest) {
           "INSERT INTO mailboxes (id, domain_id, local_part, is_catch_all) VALUES (?, ?, ?, 1)",
         )
         .bind(mailboxId, domainId, localPart),
-      db
-        .prepare("INSERT INTO user_domain_access (user_id, domain_id, role) VALUES (?, ?, 'admin')")
-        .bind(user.id, domainId),
-      // Domain admin alone doesn't grant mailbox access — explicitly seed the
-      // creator as owner of the default catch-all mailbox so they can read
-      // and send from it without a separate invite step.
+      // Seed the creating admin as a member of the default catch-all so they
+      // can read/send from it. Management gating is global (users.is_admin),
+      // so we no longer write a user_domain_access row.
       db
         .prepare("INSERT INTO user_mailbox_access (user_id, mailbox_id, role) VALUES (?, ?, 'owner')")
         .bind(user.id, mailboxId),
     ]);
 
-    return NextResponse.json({ domain: { id: domainId, name, role: "admin" } }, { status: 201 });
+    return NextResponse.json({ domain: { id: domainId, name } }, { status: 201 });
   } catch (e) {
     return errorResponse(e);
   }
@@ -64,6 +61,9 @@ export async function POST(req: NextRequest) {
 function errorResponse(e: unknown) {
   if (e instanceof UnauthenticatedError) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  if (e instanceof ForbiddenError) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   console.error(e);
   return NextResponse.json({ error: "internal error" }, { status: 500 });

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { ForbiddenError, UnauthenticatedError, requireAdmin } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { isDomainAdmin } from "@/lib/mailbox-access";
 
 interface Body {
   domain_id?: string;
@@ -12,21 +11,17 @@ interface Body {
 
 const LOCAL_PART_RE = /^[a-z0-9._+\-]+$/i;
 
-// Domain admin creates a new mailbox in a domain they administer. Creator
-// becomes mailbox owner so they can immediately read/send/manage it; other
-// members are added later via the members endpoints.
+// Admin creates a new mailbox in any domain. Creator becomes mailbox owner so
+// they can read/send from it without a separate invite step; other members
+// are added later via the members endpoints.
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireUser();
+    const user = await requireAdmin();
     const b = (await req.json().catch(() => null)) as Body | null;
     if (!b?.domain_id) return NextResponse.json({ error: "domain_id required" }, { status: 400 });
     const localPart = b.local_part?.trim().toLowerCase();
     if (!localPart || !LOCAL_PART_RE.test(localPart)) {
       return NextResponse.json({ error: "invalid local_part" }, { status: 400 });
-    }
-
-    if (!(await isDomainAdmin(user.id, b.domain_id))) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
     const db = getDb();
@@ -52,6 +47,9 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     if (e instanceof UnauthenticatedError) {
       return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    }
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     console.error(e);
     return NextResponse.json({ error: "internal_error" }, { status: 500 });

@@ -11,7 +11,10 @@ import RichTextEditor from "./RichTextEditor";
 interface Props {
   domains: DomainRow[];
   initialLabels: LabelRow[];
-  ownedIdentities: Identity[];
+  // Mailboxes the current user can manage. For admins this is every mailbox
+  // in the system; for non-admins it's empty (management UI is hidden).
+  manageableIdentities: Identity[];
+  isAdmin: boolean;
 }
 
 const PRESET_COLORS: (string | null)[] = [
@@ -26,7 +29,7 @@ const PRESET_COLORS: (string | null)[] = [
   "#ec4899",
 ];
 
-export default function SettingsManager({ domains, initialLabels, ownedIdentities }: Props) {
+export default function SettingsManager({ domains, initialLabels, manageableIdentities, isAdmin }: Props) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800">
@@ -34,9 +37,9 @@ export default function SettingsManager({ domains, initialLabels, ownedIdentitie
       </header>
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl px-6 py-6 space-y-10">
-          <MailDomainsSection domains={domains} />
-          <MailboxAccessSection identities={ownedIdentities} />
-          <SignaturesSection identities={ownedIdentities} />
+          <MailDomainsSection domains={domains} isAdmin={isAdmin} />
+          {isAdmin && <MailboxAccessSection identities={manageableIdentities} />}
+          {isAdmin && <SignaturesSection identities={manageableIdentities} />}
           <LabelsSection initialLabels={initialLabels} />
         </div>
       </div>
@@ -49,11 +52,11 @@ function SignaturesSection({ identities }: { identities: Identity[] }) {
     <section>
       <SectionHeader
         title="Signatures"
-        description="Per-mailbox signature appended to every outbound message. You can only edit signatures for mailboxes you own."
+        description="Per-mailbox signature appended to every outbound message."
       />
       {identities.length === 0 ? (
         <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500">
-          You don&apos;t own any mailboxes yet.
+          No mailboxes yet.
         </div>
       ) : (
         <ul className="space-y-4">
@@ -135,9 +138,9 @@ interface Member {
 const MEMBER_ROLES: Member["role"][] = ["owner", "member", "reader"];
 
 function MailboxAccessSection({ identities }: { identities: Identity[] }) {
-  // One row per mailbox the current user owns. Each row lazily fetches its
-  // member list the first time the row mounts so the page paints fast even
-  // for accounts with many mailboxes.
+  // One row per mailbox in the system (admin view). Each row lazily fetches
+  // its member list the first time the row mounts so the page paints fast
+  // even with many mailboxes.
   return (
     <section>
       <SectionHeader
@@ -146,7 +149,7 @@ function MailboxAccessSection({ identities }: { identities: Identity[] }) {
       />
       {identities.length === 0 ? (
         <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-6 text-sm text-neutral-500">
-          You don&apos;t own any mailboxes yet.
+          No mailboxes yet.
         </div>
       ) : (
         <ul className="space-y-4">
@@ -352,7 +355,7 @@ function MailboxAccessRow({ identity }: { identity: Identity }) {
   );
 }
 
-function MailDomainsSection({ domains }: { domains: DomainRow[] }) {
+function MailDomainsSection({ domains, isAdmin }: { domains: DomainRow[]; isAdmin: boolean }) {
   return (
     <section>
       <SectionHeader
@@ -373,16 +376,11 @@ function MailDomainsSection({ domains }: { domains: DomainRow[] }) {
                   <div className="text-xs text-neutral-500 truncate">{d.display_name}</div>
                 )}
               </div>
-              {d.is_admin === 1 && (
-                <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
-                  admin
-                </span>
-              )}
             </li>
           ))}
         </ul>
       )}
-      <AddDomainForm />
+      {isAdmin && <AddDomainForm />}
     </section>
   );
 }

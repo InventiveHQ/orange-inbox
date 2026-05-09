@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { ForbiddenError, UnauthenticatedError, requireAdmin } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { isDomainAdmin, isMailboxOwner } from "@/lib/mailbox-access";
 import { tombstoneStatementsForMailbox } from "@/lib/r2-tombstones";
 
 const LOCAL_PART_RE = /^[a-z0-9._+\-]+$/i;
@@ -29,22 +28,15 @@ async function loadMailbox(mailboxId: string) {
     }>();
 }
 
-async function checkAllowed(userId: string, mailboxId: string, domainId: string) {
-  return (await isMailboxOwner(userId, mailboxId)) || (await isDomainAdmin(userId, domainId));
-}
-
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireUser();
+    await requireAdmin();
     const { id: mailboxId } = await ctx.params;
     const mb = await loadMailbox(mailboxId);
     if (!mb) return NextResponse.json({ error: "not_found" }, { status: 404 });
-    if (!(await checkAllowed(user.id, mailboxId, mb.domain_id))) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
 
     const b = (await req.json().catch(() => null)) as PatchBody | null;
     if (!b) return NextResponse.json({ error: "invalid_json" }, { status: 400 });
@@ -101,31 +93,23 @@ export async function PATCH(
 
     return NextResponse.json({ ok: true });
   } catch (e) {
-    if (e instanceof UnauthenticatedError) {
-      return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    }
-    console.error(e);
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+    return errorResponse(e);
   }
 }
 
-// Owner of the mailbox or admin of its parent domain may delete it.
-// ON DELETE CASCADE handles the row tree (threads → messages → attachments
-// → labels). R2 bytes get tombstoned in the same batch; the email-worker
-// cron sweeps them.
+// Admin-only mailbox deletion. ON DELETE CASCADE handles the row tree
+// (threads → messages → attachments → labels). R2 bytes get tombstoned in
+// the same batch; the email-worker cron sweeps them.
 export async function DELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireUser();
+    await requireAdmin();
     const { id: mailboxId } = await ctx.params;
 
     const mb = await loadMailbox(mailboxId);
     if (!mb) return NextResponse.json({ error: "not_found" }, { status: 404 });
-    if (!(await checkAllowed(user.id, mailboxId, mb.domain_id))) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
-    }
 
     const db = getDb();
     await db.batch([
@@ -134,10 +118,17 @@ export async function DELETE(
     ]);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    if (e instanceof UnauthenticatedError) {
-      return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    }
-    console.error(e);
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+    return errorResponse(e);
   }
+}
+
+function errorResponse(e: unknown) {
+  if (e instanceof UnauthenticatedError) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  if (e instanceof ForbiddenError) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+  console.error(e);
+  return NextResponse.json({ error: "internal_error" }, { status: 500 });
 }

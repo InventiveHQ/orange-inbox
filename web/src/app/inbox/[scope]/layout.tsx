@@ -58,6 +58,7 @@ export default async function InboxLayout({
             mailboxes={[]}
             scope={effectiveScope}
             initialCollapsed={sidebarCollapsed}
+            isAdmin={user.is_admin}
           />
           <div className="flex flex-col flex-1 min-w-0">
             <TopBar mailboxes={[]} scope={effectiveScope} />
@@ -93,6 +94,7 @@ export default async function InboxLayout({
           mailboxes={mailboxes}
           scope={effectiveScope}
           initialCollapsed={sidebarCollapsed}
+          isAdmin={user.is_admin}
         />
         <div className="flex flex-col flex-1 min-w-0">
           <TopBar mailboxes={searchMailboxes} scope={effectiveScope} />

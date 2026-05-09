@@ -15,9 +15,10 @@ interface Props {
   mailboxes: MailboxRow[];
   scope: string;
   initialCollapsed?: boolean;
+  isAdmin: boolean;
 }
 
-export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = false }: Props) {
+export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = false, isAdmin }: Props) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
 
   function toggle() {
@@ -27,8 +28,8 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
   }
 
   // Group mailboxes by domain. Iterating `domains` (not the mailbox map) so a
-  // domain you administer but have no mailboxes in still appears with a "+"
-  // button, instead of disappearing from the sidebar.
+  // domain with no accessible mailboxes still appears (admins use the "+" to
+  // create one).
   const byDomain = new Map<string, MailboxRow[]>();
   for (const mb of mailboxes) {
     const list = byDomain.get(mb.domain_name) ?? [];
@@ -115,7 +116,7 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
               ) : (
                 <div className="flex items-center justify-between gap-1 px-3 pb-1 text-xs uppercase tracking-wider text-neutral-500">
                   <span className="truncate">{d.name}</span>
-                  {d.is_admin === 1 && (
+                  {isAdmin && (
                     <AddMailboxButton domainId={d.id} domainName={d.name} />
                   )}
                 </div>
@@ -126,6 +127,7 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
                   mb={mb}
                   active={scope === mb.id}
                   collapsed={collapsed}
+                  isAdmin={isAdmin}
                 />
               ))}
             </div>
@@ -221,10 +223,12 @@ function SidebarMailbox({
   mb,
   active,
   collapsed,
+  isAdmin,
 }: {
   mb: MailboxRow;
   active: boolean;
   collapsed: boolean;
+  isAdmin: boolean;
 }) {
   const fullAddress = `${mb.local_part}@${mb.domain_name}`;
   const label = mb.is_catch_all ? `${mb.local_part}@ (catch-all)` : fullAddress;
@@ -274,7 +278,7 @@ function SidebarMailbox({
           </span>
         )}
       </Link>
-      {mb.role === "owner" && <ManageMailboxButton mailbox={mb} />}
+      {isAdmin && <ManageMailboxButton mailbox={mb} />}
     </div>
   );
 }

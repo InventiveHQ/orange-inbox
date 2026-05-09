@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { isMailboxOwner } from "@/lib/mailbox-access";
 import { listLabelsForUser } from "@/lib/labels";
 
 interface CreateBody {
@@ -49,10 +48,8 @@ export async function POST(req: NextRequest) {
     }
 
     const mailboxId = b.mailbox_id ?? null;
-    if (mailboxId) {
-      if (!(await isMailboxOwner(user.id, mailboxId))) {
-        return NextResponse.json({ error: "forbidden" }, { status: 403 });
-      }
+    if (mailboxId && !user.is_admin) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     // Global labels (mailbox_id null) — v1: any signed-in user can create.
     // See web/src/lib/labels.ts header for the multi-user gap.

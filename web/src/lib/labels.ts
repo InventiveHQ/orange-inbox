@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { isMailboxOwner } from "./mailbox-access";
+import type { User } from "./auth";
 
 // Labels are Gmail-style tags applied to threads (via message_labels rows).
 // A label scoped to a mailbox (mailbox_id NOT NULL) shows up only inside that
@@ -89,11 +89,11 @@ export async function bulkLoadThreadLabels(
   return out;
 }
 
-// True if the user can rename/delete the label. For mailbox-scoped labels,
-// require owner role on that mailbox. For global labels, v1 lets anyone
-// signed in manage them — see file header for the gap.
+// True if the user can rename/delete the label. Mailbox-scoped labels
+// require global admin (mailbox management is admin-only). Global labels
+// stay open to any signed-in user — see file header for the gap.
 export async function canManageLabel(
-  userId: string,
+  user: User,
   labelId: string,
 ): Promise<boolean> {
   const label = await getDb()
@@ -102,7 +102,7 @@ export async function canManageLabel(
     .first<{ id: string; mailbox_id: string | null }>();
   if (!label) return false;
   if (label.mailbox_id == null) return true; // v1 global gap
-  return isMailboxOwner(userId, label.mailbox_id);
+  return user.is_admin;
 }
 
 // True if the user may apply this label to this thread. Requires:

@@ -5,6 +5,14 @@ export interface User {
   id: string;
   email: string;
   display_name: string | null;
+  is_admin: boolean;
+}
+
+interface UserRow {
+  id: string;
+  email: string;
+  display_name: string | null;
+  is_admin: number;
 }
 
 const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
@@ -18,12 +26,12 @@ export async function getCurrentUser(): Promise<User | null> {
 
   const db = getDb();
   const existing = await db
-    .prepare("SELECT id, email, display_name FROM users WHERE email = ?")
+    .prepare("SELECT id, email, display_name, is_admin FROM users WHERE email = ?")
     .bind(email)
-    .first<User>();
+    .first<UserRow>();
   if (existing) {
     await db.prepare("UPDATE users SET last_seen_at = unixepoch() WHERE id = ?").bind(existing.id).run();
-    return existing;
+    return rowToUser(existing);
   }
 
   const id = crypto.randomUUID();
@@ -31,7 +39,7 @@ export async function getCurrentUser(): Promise<User | null> {
     .prepare("INSERT INTO users (id, email, last_seen_at) VALUES (?, ?, unixepoch())")
     .bind(id, email)
     .run();
-  return { id, email, display_name: null };
+  return { id, email, display_name: null, is_admin: false };
 }
 
 export async function requireUser(): Promise<User> {
@@ -42,10 +50,33 @@ export async function requireUser(): Promise<User> {
   return user;
 }
 
+export async function requireAdmin(): Promise<User> {
+  const user = await requireUser();
+  if (!user.is_admin) {
+    throw new ForbiddenError();
+  }
+  return user;
+}
+
 export class UnauthenticatedError extends Error {
   constructor() {
     super("not authenticated");
   }
+}
+
+export class ForbiddenError extends Error {
+  constructor() {
+    super("forbidden");
+  }
+}
+
+function rowToUser(row: UserRow): User {
+  return {
+    id: row.id,
+    email: row.email,
+    display_name: row.display_name,
+    is_admin: row.is_admin === 1,
+  };
 }
 
 async function resolveEmail(): Promise<string | null> {

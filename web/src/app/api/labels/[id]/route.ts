@@ -19,7 +19,7 @@ export async function PATCH(
     const user = await requireUser();
     const { id } = await ctx.params;
 
-    if (!(await canManageLabel(user.id, id))) {
+    if (!(await canManageLabel(user, id))) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
@@ -86,7 +86,7 @@ export async function DELETE(
     const user = await requireUser();
     const { id } = await ctx.params;
 
-    if (!(await canManageLabel(user.id, id))) {
+    if (!(await canManageLabel(user, id))) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 

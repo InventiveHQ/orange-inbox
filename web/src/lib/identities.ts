@@ -30,6 +30,24 @@ export async function listIdentities(userId: string): Promise<Identity[]> {
   return results ?? [];
 }
 
+// Every mailbox in the system, exposed in the Identity shape so the admin
+// management UI can re-use the components built for the per-user list. The
+// role is reported as 'owner' for sort/UI convenience; no per-user join is
+// performed here since admin access is global.
+export async function listAllIdentities(): Promise<Identity[]> {
+  const { results } = await getDb()
+    .prepare(
+      `SELECT mb.id AS mailbox_id, d.id AS domain_id, d.name AS domain_name,
+              mb.local_part, mb.display_name, mb.signature_html, mb.is_catch_all,
+              'owner' AS role
+         FROM mailboxes mb
+         INNER JOIN domains d ON d.id = mb.domain_id
+        ORDER BY d.name, mb.local_part`,
+    )
+    .all<Identity>();
+  return results ?? [];
+}
+
 // Used by the API to verify the chosen mailbox belongs to a (mailbox, role)
 // the user can send from before we hand bytes to env.EMAIL.send().
 export async function findIdentity(userId: string, mailboxId: string): Promise<Identity | null> {

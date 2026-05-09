@@ -5,28 +5,30 @@ export interface DomainRow {
   id: string;
   name: string;
   display_name: string | null;
-  is_admin: number;
 }
 
-// Domains the user can see at all — they have access to at least one mailbox
-// on the domain, OR they're a domain admin (so they can administer it even
-// before granting themselves any mailbox access).
+// Domains the user can see — they have access to at least one mailbox on the
+// domain. Admins should use `listAllDomains` instead so they can manage
+// domains they have no mailbox access on.
 export async function listDomainsForUser(userId: string): Promise<DomainRow[]> {
   const { results } = await getDb()
     .prepare(
-      `SELECT d.id, d.name, d.display_name,
-              CASE WHEN MAX(CASE WHEN uda.role = 'admin' THEN 1 ELSE 0 END) = 1 THEN 1 ELSE 0 END AS is_admin
+      `SELECT DISTINCT d.id, d.name, d.display_name
          FROM domains d
-         LEFT JOIN user_domain_access uda
-           ON uda.domain_id = d.id AND uda.user_id = ?1
-         LEFT JOIN mailboxes mb ON mb.domain_id = d.id
-         LEFT JOIN user_mailbox_access uma
-           ON uma.mailbox_id = mb.id AND uma.user_id = ?1
-        WHERE uda.user_id IS NOT NULL OR uma.user_id IS NOT NULL
-        GROUP BY d.id, d.name, d.display_name
+         INNER JOIN mailboxes mb ON mb.domain_id = d.id
+         INNER JOIN user_mailbox_access uma
+           ON uma.mailbox_id = mb.id AND uma.user_id = ?
         ORDER BY d.name`,
     )
     .bind(userId)
+    .all<DomainRow>();
+  return results ?? [];
+}
+
+// Every domain in the system. Admin-only entry point for the management UI.
+export async function listAllDomains(): Promise<DomainRow[]> {
+  const { results } = await getDb()
+    .prepare(`SELECT id, name, display_name FROM domains ORDER BY name`)
     .all<DomainRow>();
   return results ?? [];
 }
