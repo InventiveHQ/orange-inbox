@@ -1,7 +1,7 @@
 // orange mail service worker.
 // VERSION is the source of truth for the cache key; rewritten by
 // scripts/bump-version.mjs alongside src/lib/version.ts.
-const VERSION = 'v0.1.3';
+const VERSION = 'v0.1.4';
 const CACHE = `orange-${VERSION}`;
 const SHELL = [
   '/',
