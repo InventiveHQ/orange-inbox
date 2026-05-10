@@ -45,6 +45,7 @@ import { ContactsUIProvider } from "@/components/ContactsUIContext";
 import CalendarSidebarBody from "@/components/sidebar/CalendarSidebarBody";
 import ContactsSidebarBody from "@/components/sidebar/ContactsSidebarBody";
 import SettingsSidebarBody from "@/components/sidebar/SettingsSidebarBody";
+import HelpSidebarBody from "@/components/sidebar/HelpSidebarBody";
 import { buildSettingsSections } from "@/lib/settings-sections";
 
 export default async function InboxLayout({
@@ -318,6 +319,7 @@ export default async function InboxLayout({
   const calendarMode = effectiveScope === "calendar";
   const contactsMode = effectiveScope === "contacts";
   const settingsMode = effectiveScope === "settings";
+  const helpMode = effectiveScope === "help";
   const mailboxIdentities = identities.filter(i => i.kind === "mailbox");
   const settingsSections = settingsMode
     ? buildSettingsSections({
@@ -338,6 +340,8 @@ export default async function InboxLayout({
     <ContactsSidebarBody />
   ) : settingsMode && settingsSections ? (
     <SettingsSidebarBody sections={settingsSections} />
+  ) : helpMode ? (
+    <HelpSidebarBody />
   ) : null;
   const initialContactsMailbox = readMailboxParamFromHeaders(headerStore);
 

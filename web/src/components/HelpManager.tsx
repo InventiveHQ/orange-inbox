@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 
 // Section IDs are exported so the Sidebar Help-mode drawer can render the
 // same anchor list as the page itself — single source of truth.
@@ -17,24 +20,68 @@ export const HELP_SECTIONS: { id: string; label: string }[] = [
 
 // In-app help. Renders as a full-page scope (like Settings) so it has room
 // for prose and is reachable from the sidebar without leaving the app.
+//
+// Search filters by raw section text content — each Section is wrapped in
+// a div tagged with data-help-section, and the effect walks them after
+// every keystroke to toggle `hidden`. Cheap because there's only ~10
+// sections; avoids hard-coding a parallel search index that would drift
+// from the prose.
 export default function HelpManager() {
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [matchCount, setMatchCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const q = query.trim().toLowerCase();
+    const wrappers = container.querySelectorAll<HTMLElement>("[data-help-section]");
+    let visible = 0;
+    for (const w of wrappers) {
+      const text = (w.textContent ?? "").toLowerCase();
+      const match = q === "" || text.includes(q);
+      if (match) {
+        w.removeAttribute("hidden");
+        visible++;
+      } else {
+        w.setAttribute("hidden", "");
+      }
+    }
+    setMatchCount(q === "" ? null : visible);
+  }, [query]);
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
+      <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center gap-3">
         <h1 className="text-base font-semibold">Help</h1>
+        <div className="ml-auto flex items-center gap-2">
+          {matchCount !== null && (
+            <span className="text-xs text-neutral-500">
+              {matchCount === 0 ? "No matches" : `${matchCount} section${matchCount === 1 ? "" : "s"}`}
+            </span>
+          )}
+          <input
+            type="search"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search help…"
+            aria-label="Search help"
+            className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-sm px-2 py-1 w-48 sm:w-64 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/40"
+          />
+        </div>
       </header>
-      <div className="flex-1 overflow-y-auto">
+      <div ref={containerRef} className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 space-y-12">
-          <InstallSection />
-          <KeyboardShortcutsSection />
-          <NotificationsSection />
-          <DomainsSection />
-          <SharingSection />
-          <ComposeSection />
-          <OrganizingSection />
-          <SearchSection />
-          <MobileSection />
-          <TroubleshootingSection />
+          <div data-help-section><InstallSection /></div>
+          <div data-help-section><KeyboardShortcutsSection /></div>
+          <div data-help-section><NotificationsSection /></div>
+          <div data-help-section><DomainsSection /></div>
+          <div data-help-section><SharingSection /></div>
+          <div data-help-section><ComposeSection /></div>
+          <div data-help-section><OrganizingSection /></div>
+          <div data-help-section><SearchSection /></div>
+          <div data-help-section><MobileSection /></div>
+          <div data-help-section><TroubleshootingSection /></div>
         </div>
       </div>
     </div>
@@ -134,6 +181,7 @@ function KeyboardShortcutsSection() {
             <ShortcutRow keys={["d"]} desc="Day view" />
             <ShortcutRow keys={["w"]} desc="Week view" />
             <ShortcutRow keys={["m"]} desc="Month view" />
+            <ShortcutRow keys={["a"]} desc="Agenda (list) view" />
             <ShortcutRow keys={["t"]} desc="Jump to today" />
             <ShortcutRow keys={["j"]} desc="Next day / week / month" />
             <ShortcutRow keys={["k"]} desc="Previous day / week / month" />

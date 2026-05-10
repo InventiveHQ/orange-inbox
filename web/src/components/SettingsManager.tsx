@@ -83,57 +83,134 @@ export default function SettingsManager({
     [memberIdentities],
   );
   const hasAuditAccess = auditMailboxes.length > 0;
+
+  // Search/filter (live): each section is wrapped in a data-settings-
+  // section div, and after every keystroke we walk those wrappers and
+  // hide ones whose textContent doesn't include the query. Cheap because
+  // the whole page is ~20 sections of static prose + form labels — the
+  // cost is dominated by the textContent reads, not the loop. Hidden
+  // sections keep their <section id="…"> intact so the drawer's
+  // scrollIntoView still finds them (the user can clear the search to
+  // see the result move into view).
+  const [query, setQuery] = useState("");
+  const [matchCount, setMatchCount] = useState<number | null>(null);
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const q = query.trim().toLowerCase();
+    const wrappers = root.querySelectorAll<HTMLElement>("[data-settings-section]");
+    let visible = 0;
+    for (const w of wrappers) {
+      const text = (w.textContent ?? "").toLowerCase();
+      const match = q === "" || text.includes(q);
+      if (match) {
+        w.removeAttribute("hidden");
+        visible++;
+      } else {
+        w.setAttribute("hidden", "");
+      }
+    }
+    setMatchCount(q === "" ? null : visible);
+  }, [query]);
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
+      <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center gap-3">
         <h1 className="text-base font-semibold">Settings</h1>
+        <div className="ml-auto flex items-center gap-2">
+          {matchCount !== null && (
+            <span className="text-xs text-neutral-500">
+              {matchCount === 0 ? "No matches" : `${matchCount} section${matchCount === 1 ? "" : "s"}`}
+            </span>
+          )}
+          <input
+            type="search"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search settings…"
+            aria-label="Search settings"
+            className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-sm px-2 py-1 w-48 sm:w-64 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]/40"
+          />
+        </div>
       </header>
       {/* Section anchor list lives in the global Sidebar's section
           drawer (SettingsSidebarBody) — clicking an entry there
           scrolls these anchors via document.getElementById + ScrollIntoView. */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-8 sm:px-8 space-y-12">
-          <ProfileSection id="profile" />
-          <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
+          <div data-settings-section><ProfileSection id="profile" /></div>
+          <div data-settings-section>
+            <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
+          </div>
           {isAdmin && (
-            <MailboxNamesSection
-              id="mailbox-names"
-              identities={manageableIdentities}
-            />
+            <div data-settings-section>
+              <MailboxNamesSection
+                id="mailbox-names"
+                identities={manageableIdentities}
+              />
+            </div>
           )}
           {isAdmin && (
-            <MailboxAccessSection
-              id="mailbox-access"
-              identities={manageableIdentities}
-            />
+            <div data-settings-section>
+              <MailboxAccessSection
+                id="mailbox-access"
+                identities={manageableIdentities}
+              />
+            </div>
           )}
           {hasOwnedMailboxes && (
-            <SignaturesSection id="signatures" identities={ownedIdentities} />
+            <div data-settings-section>
+              <SignaturesSection id="signatures" identities={ownedIdentities} />
+            </div>
           )}
           {hasOwnedMailboxes && (
-            <VacationResponderSection id="vacation" identities={ownedIdentities} />
+            <div data-settings-section>
+              <VacationResponderSection id="vacation" identities={ownedIdentities} />
+            </div>
           )}
-          <LabelsSection id="labels" initialLabels={initialLabels} />
-          <RulesSection
-            id="rules"
-            identities={ownedIdentities}
-            labels={initialLabels}
-          />
-          <InboxLayoutEditor
-            initialLayouts={initialInboxLayouts}
-            savedSearches={savedSearches}
-          />
-          <BlockedSendersSection id="blocked-senders" />
-          <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
-          <NotificationsSection id="notifications" />
+          <div data-settings-section>
+            <LabelsSection id="labels" initialLabels={initialLabels} />
+          </div>
+          <div data-settings-section>
+            <RulesSection
+              id="rules"
+              identities={ownedIdentities}
+              labels={initialLabels}
+            />
+          </div>
+          <div data-settings-section>
+            <InboxLayoutEditor
+              initialLayouts={initialInboxLayouts}
+              savedSearches={savedSearches}
+            />
+          </div>
+          <div data-settings-section>
+            <BlockedSendersSection id="blocked-senders" />
+          </div>
+          <div data-settings-section>
+            <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
+          </div>
+          <div data-settings-section>
+            <NotificationsSection id="notifications" />
+          </div>
           {hasAuditAccess && (
-            <AuditLogSection id="audit-log" mailboxes={auditMailboxes} />
+            <div data-settings-section>
+              <AuditLogSection id="audit-log" mailboxes={auditMailboxes} />
+            </div>
           )}
-          <CalendarSubscriptionSection id="calendar-subscription" />
-          <ExportSection id="export" ownedIdentities={ownedIdentities} />
-          {isAdmin && <StorageSection id="storage" />}
-          <AppearanceSection id="appearance" />
-          <AboutSection id="about" />
+          <div data-settings-section>
+            <CalendarSubscriptionSection id="calendar-subscription" />
+          </div>
+          <div data-settings-section>
+            <ExportSection id="export" ownedIdentities={ownedIdentities} />
+          </div>
+          {isAdmin && (
+            <div data-settings-section>
+              <StorageSection id="storage" />
+            </div>
+          )}
+          <div data-settings-section><AppearanceSection id="appearance" /></div>
+          <div data-settings-section><AboutSection id="about" /></div>
         </div>
       </div>
     </div>

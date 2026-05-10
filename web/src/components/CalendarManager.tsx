@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import CalendarDayGrid from "./CalendarDayGrid";
 import CalendarEventForm from "./CalendarEventForm";
+import CalendarListView from "./CalendarListView";
 import CalendarMonthGrid from "./CalendarMonthGrid";
 import CalendarWeekGrid from "./CalendarWeekGrid";
 import { useCalendarUI, SCOPE_ALL } from "./CalendarUIContext";
@@ -20,7 +21,7 @@ import { useCalendarUI, SCOPE_ALL } from "./CalendarUIContext";
 // to ~2 years on either side; the views always ask for a single month / week
 // / day so we're well inside that.
 
-export type CalendarView = "day" | "week" | "month";
+export type CalendarView = "day" | "week" | "month" | "list";
 
 // Quick-create handoff: a grid click ships a slot's start/end seconds (+
 // all-day flag for month / all-day-strip clicks) and the manager opens the
@@ -275,6 +276,13 @@ export default function CalendarManager() {
           e.preventDefault();
           e.stopImmediatePropagation();
           return;
+        case "a":
+          // "a" = agenda / list view. Skips "l" since lower-case L is
+          // visually noisy in shortcut documentation alongside "i" / "1".
+          setView("list");
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
         case "t":
           todayCursor();
           e.preventDefault();
@@ -427,6 +435,7 @@ export default function CalendarManager() {
             <ViewTab v="day" current={view} onSelect={setView} />
             <ViewTab v="week" current={view} onSelect={setView} />
             <ViewTab v="month" current={view} onSelect={setView} />
+            <ViewTab v="list" current={view} onSelect={setView} />
           </div>
           {view === "week" && (
             <button
@@ -485,7 +494,7 @@ export default function CalendarManager() {
             onCreateAt={draft => setEditing(draft)}
             onPatched={refresh}
           />
-        ) : (
+        ) : view === "month" ? (
           <CalendarMonthGrid
             cursor={cursor}
             events={filteredEvents}
@@ -497,6 +506,13 @@ export default function CalendarManager() {
               setView("day");
             }}
             onCreateAt={draft => setEditing(draft)}
+          />
+        ) : (
+          <CalendarListView
+            cursor={cursor}
+            events={filteredEvents}
+            colorFor={colorFor}
+            onEditEvent={ev => setEditing(ev)}
           />
         )}
         </div>
@@ -762,7 +778,8 @@ function ViewTab({
   current: CalendarView;
   onSelect: (v: CalendarView) => void;
 }) {
-  const label = v === "day" ? "Day" : v === "week" ? "Week" : "Month";
+  const label =
+    v === "day" ? "Day" : v === "week" ? "Week" : v === "month" ? "Month" : "List";
   const active = v === current;
   return (
     <button
@@ -794,7 +811,7 @@ function ChevronIcon({ dir }: { dir: "left" | "right" }) {
 }
 
 function parseView(raw: string | null): CalendarView {
-  if (raw === "day" || raw === "week" || raw === "month") return raw;
+  if (raw === "day" || raw === "week" || raw === "month" || raw === "list") return raw;
   return "week";
 }
 
@@ -842,7 +859,10 @@ function computeWindow(
     to.setDate(to.getDate() + 7);
     return { from: Math.floor(from.getTime() / 1000), to: Math.floor(to.getTime() / 1000) };
   }
-  // month
+  // month / list — both use the cursor's month padded to a 6-week grid.
+  // List view shares the window so prev/next month-stepping in the
+  // header behaves identically; the list itself just renders a flat
+  // chronological list of whatever events fall inside.
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
   const from = startOfWeekFor(first, weekStartDay);
   const to = new Date(from);

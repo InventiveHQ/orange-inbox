@@ -424,8 +424,8 @@ function SectionPrimaryAction({ scope, collapsed }: { scope: string; collapsed: 
       />
     );
   }
-  if (scope === "settings") {
-    // Nothing meaningful to create from a Settings drawer; suppress
+  if (scope === "settings" || scope === "help") {
+    // Nothing meaningful to create from a Settings/Help drawer; suppress
     // the slot rather than render an inactive shell.
     return null;
   }
@@ -481,6 +481,7 @@ function sectionLabel(scope: string): string {
   if (scope === "calendar") return "Calendars";
   if (scope === "contacts") return "Contact filters";
   if (scope === "settings") return "Settings sections";
+  if (scope === "help") return "Help sections";
   return "Section";
 }
 
