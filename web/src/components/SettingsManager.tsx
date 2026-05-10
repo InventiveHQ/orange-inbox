@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
 import type { LabelRow } from "@/lib/labels";
+import type { InboxLayoutRow } from "@/lib/inbox-layouts";
+import type { SavedSearchRow } from "@/lib/saved-searches";
 import { APP_VERSION } from "@/lib/version";
 import AddMailboxDialog from "./AddMailboxDialog";
+import InboxLayoutEditor from "./InboxLayoutEditor";
 import LabelChip from "./LabelChip";
 import PushNotificationToggle from "./PushNotificationToggle";
 import RichTextEditor from "./RichTextEditor";
@@ -24,6 +27,8 @@ interface Props {
   ownedIdentities: Identity[];
   isAdmin: boolean;
   initialUndoSendSeconds: number;
+  initialInboxLayouts: InboxLayoutRow[];
+  savedSearches: SavedSearchRow[];
 }
 
 const PRESET_COLORS: (string | null)[] = [
@@ -45,6 +50,8 @@ export default function SettingsManager({
   ownedIdentities,
   isAdmin,
   initialUndoSendSeconds,
+  initialInboxLayouts,
+  savedSearches,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasOwnedMailboxes = ownedIdentities.length > 0;
@@ -56,6 +63,7 @@ export default function SettingsManager({
       ...(hasOwnedMailboxes ? [{ id: "vacation", label: "Vacation responder" }] : []),
       { id: "labels", label: "Labels" },
       { id: "rules", label: "Rules" },
+      { id: "inbox-layouts", label: "Inbox layouts" },
       { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
@@ -108,6 +116,10 @@ export default function SettingsManager({
               id="rules"
               identities={ownedIdentities}
               labels={initialLabels}
+            />
+            <InboxLayoutEditor
+              initialLayouts={initialInboxLayouts}
+              savedSearches={savedSearches}
             />
             <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
