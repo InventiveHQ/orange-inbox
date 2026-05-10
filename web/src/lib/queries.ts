@@ -386,6 +386,14 @@ export interface ThreadMessage {
   // the message had no .ics, the .ics was unparseable, or the attachment
   // didn't carry a DTSTART. Drives the inline calendar card + RSVP buttons.
   calendar_event: CalendarEvent | null;
+  // 0033: opt-in read receipt. Non-null on outbound messages where the
+  // sender enabled "Track opens" in the composer. The reader uses
+  // read_count + last_opened_at to render the "Read N times · last {when}"
+  // pill on the sender's view of the outbound message. NULL for messages
+  // sent before the feature shipped or with the toggle off.
+  tracking_token: string | null;
+  read_count: number;
+  last_opened_at: number | null;
 }
 
 // The thread head (visibility check + listing-style fields) comes from the
@@ -428,7 +436,12 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
   // control DB are independent D1 instances so we can't join across them.
   type RawMessageRow = Omit<
     ThreadMessage,
-    "attachments" | "sent_by_email" | "sent_by_display_name" | "calendar_event"
+    | "attachments"
+    | "sent_by_email"
+    | "sent_by_display_name"
+    | "calendar_event"
+    | "read_count"
+    | "last_opened_at"
   > & {
     sent_by_user_id: string | null;
     cal_starts_at: number | null;
@@ -447,7 +460,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
               m.html_r2_key, m.read, m.starred, m.sent_by_user_id,
               m.auth_results, m.first_contact, m.reply_to_addr,
               m.list_unsub_url, m.list_unsub_mailto, m.list_unsub_one_click,
-              m.unsubscribed_at,
+              m.unsubscribed_at, m.tracking_token,
               ce.starts_at AS cal_starts_at,
               ce.ends_at   AS cal_ends_at,
               ce.summary   AS cal_summary,
@@ -550,6 +563,33 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     }
   }
 
+  // Read-receipt counts (#69). Outbound messages with a tracking_token get a
+  // (count, last_opened_at) lookup from the control DB so the reader can
+  // render the "Read N times · last {when}" pill. Inbound and no-token
+  // outbound messages skip the round-trip entirely.
+  const trackedMessageIds = messageRows
+    .filter(m => m.direction === "outbound" && !!m.tracking_token)
+    .map(m => m.id);
+  const readStatsByMessageId = new Map<
+    string,
+    { count: number; last: number | null }
+  >();
+  if (trackedMessageIds.length > 0) {
+    const placeholders = trackedMessageIds.map(() => "?").join(",");
+    const { results: statRows } = await getDb()
+      .prepare(
+        `SELECT message_id, COUNT(*) AS count, MAX(opened_at) AS last
+           FROM message_read_events
+          WHERE message_id IN (${placeholders})
+          GROUP BY message_id`,
+      )
+      .bind(...trackedMessageIds)
+      .all<{ message_id: string; count: number; last: number | null }>();
+    for (const s of statRows ?? []) {
+      readStatsByMessageId.set(s.message_id, { count: s.count, last: s.last });
+    }
+  }
+
   const messages: ThreadMessage[] = messageRows.map(m => {
     const sender = m.sent_by_user_id ? senderMap.get(m.sent_by_user_id) ?? null : null;
     const {
@@ -559,6 +599,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
       ...rest
     } = m;
     void _drop;
+    const stats = readStatsByMessageId.get(m.id);
     // The LEFT JOIN nulls every cal_* field for messages without a row in
     // message_calendar_events. cal_starts_at is NOT NULL in the table, so
     // a non-null value there is the unambiguous "we have an event" signal.
@@ -584,6 +625,8 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
       sent_by_display_name: sender?.display_name ?? null,
       attachments: attachmentsByMessage.get(m.id) ?? [],
       calendar_event,
+      read_count: stats?.count ?? 0,
+      last_opened_at: stats?.last ?? null,
     };
   });
 

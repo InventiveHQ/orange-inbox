@@ -20,6 +20,11 @@ interface ScheduleBody {
   reply_to_message_id?: string;
   draft_id?: string;
   attachment_ids?: string[];
+  // #66 / #69 — forwarded verbatim into the payload snapshot so the eventual
+  // dispatcher passes them through to sendMessage. Validated at dispatch
+  // time, not here.
+  confidential?: { expires_at?: number; passcode?: string | null };
+  track_opens?: boolean;
 }
 
 export async function GET() {
@@ -69,6 +74,8 @@ export async function POST(req: NextRequest) {
       reply_to_message_id: b.reply_to_message_id,
       draft_id: b.draft_id,
       attachment_ids: b.attachment_ids,
+      confidential: b.confidential,
+      track_opens: b.track_opens === true ? true : undefined,
     };
 
     const kind = b.kind === "undo_send" ? "undo_send" : "scheduled";

@@ -7,35 +7,45 @@ export type Theme = "light" | "dark" | "system";
 export interface UserPreferences {
   theme: Theme;
   accent_hex: string;
+  // 0033: default state for the composer's "Track opens" toggle. When 1, new
+  // compose modals start with the toggle on. The toggle itself still lives
+  // per-message — the user can override either way before hitting Send.
+  default_track_opens: boolean;
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   theme: "system",
   accent_hex: "#f97316",
+  default_track_opens: false,
 };
 
 interface PreferencesRow {
   theme: string;
   accent_hex: string;
+  default_track_opens: number | null;
 }
 
 // Returns defaults if no row exists for the user yet — the table is sparsely
 // populated (only users who've changed defaults get a row).
 export async function getUserPreferences(userId: string): Promise<UserPreferences> {
   const row = await getDb()
-    .prepare("SELECT theme, accent_hex FROM user_preferences WHERE user_id = ?")
+    .prepare(
+      "SELECT theme, accent_hex, default_track_opens FROM user_preferences WHERE user_id = ?",
+    )
     .bind(userId)
     .first<PreferencesRow>();
   if (!row) return DEFAULT_PREFERENCES;
   return {
     theme: normaliseTheme(row.theme),
     accent_hex: normaliseHex(row.accent_hex) ?? DEFAULT_PREFERENCES.accent_hex,
+    default_track_opens: row.default_track_opens === 1,
   };
 }
 
 export interface PreferencesPatch {
   theme?: Theme;
   accent_hex?: string;
+  default_track_opens?: boolean;
 }
 
 // Upsert-shaped: merge the patch over current values, then INSERT or UPDATE.
@@ -55,17 +65,22 @@ export async function updateUserPreferences(
     if (!hex) return null;
     next.accent_hex = hex;
   }
+  if (patch.default_track_opens !== undefined) {
+    if (typeof patch.default_track_opens !== "boolean") return null;
+    next.default_track_opens = patch.default_track_opens;
+  }
 
   await getDb()
     .prepare(
-      `INSERT INTO user_preferences (user_id, theme, accent_hex, updated_at)
-       VALUES (?, ?, ?, unixepoch())
+      `INSERT INTO user_preferences (user_id, theme, accent_hex, default_track_opens, updated_at)
+       VALUES (?, ?, ?, ?, unixepoch())
        ON CONFLICT(user_id) DO UPDATE SET
          theme = excluded.theme,
          accent_hex = excluded.accent_hex,
+         default_track_opens = excluded.default_track_opens,
          updated_at = excluded.updated_at`,
     )
-    .bind(userId, next.theme, next.accent_hex)
+    .bind(userId, next.theme, next.accent_hex, next.default_track_opens ? 1 : 0)
     .run();
   return next;
 }
@@ -117,7 +132,13 @@ export function decodePreferencesCookie(raw: string | undefined): UserPreference
     const theme = isTheme(j.theme) ? j.theme : null;
     const accent = typeof j.accent_hex === "string" ? normaliseHex(j.accent_hex) : null;
     if (!theme || !accent) return null;
-    return { theme, accent_hex: accent };
+    return {
+      theme,
+      accent_hex: accent,
+      // Cookie only carries theme + accent (SSR no-flash chrome); track-opens
+      // default isn't needed for the first paint, the composer fetches it.
+      default_track_opens: DEFAULT_PREFERENCES.default_track_opens,
+    };
   } catch {
     return null;
   }

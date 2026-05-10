@@ -50,6 +50,21 @@ export interface SendInput {
   // /signature override the parent mailbox's for the From line. The alias
   // must belong to the same mailbox as fromMailboxId; we re-verify here.
   sendAsAliasId?: string;
+  // #66 Confidential mode. When set, the recipient receives a synthesized
+  // placeholder body ("{sender} sent you a confidential message — view at
+  // <url>") rather than `body` itself; the real body lives in the
+  // confidential_messages row keyed by the generated token, viewable only
+  // via the public /c/<token> URL. expiresAt is unix seconds; passcode is
+  // an optional 4-digit string the recipient must enter on the view page.
+  confidential?: {
+    expiresAt: number;
+    passcode?: string | null;
+  };
+  // #69 Opt-in read receipts. When true, mint a tracking_token, store it on
+  // the message row, and inject a 1x1 transparent PNG <img> into the HTML
+  // body that hits /api/track/<token>.png when the recipient opens. Has no
+  // effect on the plain-text alternative (no inline image to attach to).
+  trackOpens?: boolean;
 }
 
 export interface SendResult {
@@ -197,17 +212,85 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   // synthesise an HTML block + plain-text block listing the download links
   // and append it to both renderings. Using the request host so the link
   // matches whatever vanity/host domain the user has configured.
-  const isHtml = looksLikeHtml(input.body);
-  let bodySource = input.body;
-  if (droppedLinks.length > 0) {
+  //
+  // #66 Confidential mode: we swap input.body for a synthesised placeholder
+  // *before* the multipart/alternative rendering — the actual content is
+  // persisted in confidential_messages and never handed to env.EMAIL.send().
+  // #69 Read-tracking pixel is injected into the HTML after the rest of the
+  // assembly (text body deliberately stays clean — a stripped-out URL in
+  // plain text gives the trick away and serves no purpose).
+  let bodyForSending = input.body;
+  let confidentialToken: string | null = null;
+  let confidentialRecord: {
+    token: string;
+    bodyText: string;
+    bodyHtml: string | null;
+    expiresAt: number;
+    passcode: string | null;
+  } | null = null;
+  if (input.confidential) {
+    const cToken = generateOpaqueToken();
+    const cExpires = Math.floor(input.confidential.expiresAt);
+    if (!Number.isFinite(cExpires) || cExpires <= now) {
+      throw new SendError("invalid", "Confidential expiry must be in the future.");
+    }
+    const cPasscode = normaliseConfidentialPasscode(input.confidential.passcode);
+    if (cPasscode === "invalid") {
+      throw new SendError("invalid", "Passcode must be 4 digits.");
+    }
+    const wasHtml = looksLikeHtml(input.body);
+    confidentialRecord = {
+      token: cToken,
+      bodyText: wasHtml ? htmlToText(input.body) : input.body,
+      bodyHtml: wasHtml ? input.body : null,
+      expiresAt: cExpires,
+      passcode: cPasscode,
+    };
+    confidentialToken = cToken;
+    bodyForSending = buildConfidentialPlaceholderHtml(
+      fromName || fromAddr,
+      await resolveHost(),
+      cToken,
+      cExpires,
+      cPasscode != null,
+    );
+  }
+
+  const isHtml = looksLikeHtml(bodyForSending);
+  let bodySource = bodyForSending;
+  if (droppedLinks.length > 0 && !input.confidential) {
+    // Mail Drop blocks land in the wire body. We skip this entirely in
+    // confidential mode — attachments would defeat the point (the recipient
+    // would see the placeholder + a real download link side by side).
     if (isHtml) {
-      bodySource = `${input.body}${renderDroppedLinksHtml(droppedLinks)}`;
+      bodySource = `${bodyForSending}${renderDroppedLinksHtml(droppedLinks)}`;
     } else {
-      bodySource = `${input.body}\n\n${renderDroppedLinksText(droppedLinks)}`;
+      bodySource = `${bodyForSending}\n\n${renderDroppedLinksText(droppedLinks)}`;
     }
   }
   const textBody = isHtml ? htmlToText(bodySource) : bodySource;
-  const html = isHtml ? wrapHtmlFragment(bodySource) : buildHtmlFromText(bodySource);
+  let html = isHtml ? wrapHtmlFragment(bodySource) : buildHtmlFromText(bodySource);
+
+  // #69 — inject a 1x1 read-tracking pixel into the HTML body just before
+  // </body>. The plain-text alternative is left alone (no way to embed an
+  // invisible URL there that wouldn't tip the recipient off, and mail clients
+  // that prefer text/plain don't fire the open anyway — which is the right
+  // outcome for a strictly opt-in feature).
+  let trackingToken: string | null = null;
+  if (input.trackOpens && !input.confidential) {
+    trackingToken = generateOpaqueToken();
+    const host = await resolveHost();
+    const pixelUrl = `https://${host}/api/track/${trackingToken}.png`;
+    const pixelTag = `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;outline:none;" />`;
+    // wrapHtmlFragment / buildHtmlFromText both close with </body></html>;
+    // insert the pixel immediately before </body> so it sits inside the
+    // document tree (some clients strip floating <img> tags after </body>).
+    if (html.includes("</body>")) {
+      html = html.replace("</body>", `${pixelTag}</body>`);
+    } else {
+      html = `${html}${pixelTag}`;
+    }
+  }
 
   const sendBuilder = {
     from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
@@ -293,14 +376,19 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     );
   }
 
+  // tracking_token is NULL when "Track opens" was off at send time. The mail
+  // DB column comes from the 0033 bootstrap addition; existing overflow DBs
+  // that haven't run the migration yet will reject the column — that's the
+  // operator's signal to apply 0033 before flipping the feature on.
   mailStmts.push(
     mailDb
       .prepare(
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
-          subject, date, snippet, raw_r2_key, text_body, read, starred, sent_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)`,
+          subject, date, snippet, raw_r2_key, text_body, read, starred, sent_by_user_id,
+          tracking_token)
+         VALUES (?, ?, ?, ?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)`,
       )
       .bind(
         messageId,
@@ -322,6 +410,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
         rawKey,
         textBody,
         userId,
+        trackingToken,
       ),
   );
 
@@ -380,6 +469,34 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
         .bind(input.draftId, userId),
     );
   }
+
+  // #66 — persist the confidential payload last so a failure here surfaces
+  // before we delete the draft and clean up uploads. The recipient at this
+  // point already has the placeholder email in their inbox; if the row
+  // insert fails the /c/<token> URL will 404 and the sender will see it as
+  // a failed send (the SendError is raised after the batch). Keeping the
+  // row in the same batch as the draft delete means the two ops succeed or
+  // fail atomically.
+  if (confidentialRecord) {
+    controlStmts.push(
+      controlDb
+        .prepare(
+          `INSERT INTO confidential_messages
+           (id, source_message_id, body_text, body_html, expires_at, view_passcode, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          confidentialRecord.token,
+          messageId,
+          confidentialRecord.bodyText,
+          confidentialRecord.bodyHtml,
+          confidentialRecord.expiresAt,
+          confidentialRecord.passcode,
+          userId,
+        ),
+    );
+  }
+  void confidentialToken;
 
   // Clean up the temp_uploads rows now that the message is on the wire.
   // The R2 blobs themselves are left for a future sweeper — they're harmless
@@ -636,6 +753,61 @@ function serializeError(e: unknown): Record<string, unknown> {
   }
   if (e.cause !== undefined) out.cause = serializeError(e.cause);
   return out;
+}
+
+// Cryptographically-random URL-safe token. Used for confidential view URLs
+// and read-tracking pixels. 22 base64url chars ≈ 132 bits of entropy — plenty
+// for the "the token IS the auth" use case, and short enough to keep the
+// emitted URL on a single line in the recipient's preview pane.
+function generateOpaqueToken(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Returns the validated 4-digit string, null when the caller didn't pass one,
+// or the literal string "invalid" so the caller can distinguish "not set"
+// from "set but malformed". Trims so a trailing newline from a copy-paste
+// doesn't reject the input.
+function normaliseConfidentialPasscode(
+  raw: string | null | undefined,
+): string | null | "invalid" {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === "") return null;
+  if (!/^\d{4}$/.test(trimmed)) return "invalid";
+  return trimmed;
+}
+
+// HTML body shown to the recipient when confidential mode is on. The visible
+// content is intentionally short and contains the view URL + a human-readable
+// expiry; the real message lives behind the /c/<token> route.
+function buildConfidentialPlaceholderHtml(
+  senderLabel: string,
+  host: string,
+  token: string,
+  expiresAt: number,
+  hasPasscode: boolean,
+): string {
+  const url = `https://${host}/c/${token}`;
+  const expires = new Date(expiresAt * 1000).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const passLine = hasPasscode
+    ? `<p style="margin:0 0 8px 0;color:#374151;font-size:13px;">The sender will share a 4-digit passcode out-of-band — you'll be prompted for it.</p>`
+    : "";
+  return `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:520px;">
+  <p style="margin:0 0 12px 0;"><strong>${escapeHtml(senderLabel)}</strong> sent you a confidential message.</p>
+  <p style="margin:0 0 16px 0;"><a href="${escapeHtml(url)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:8px 14px;border-radius:6px;font-weight:500;">View the message</a></p>
+  ${passLine}
+  <p style="margin:0;color:#6b7280;font-size:12px;">Link expires ${escapeHtml(expires)}. The message content is not delivered to your mail server — clicking the link is the only way to read it.</p>
+</div>`;
 }
 
 export type { Identity };

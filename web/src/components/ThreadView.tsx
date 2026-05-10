@@ -372,6 +372,9 @@ function MessageBlock({
               alreadyUnsubscribed={!!showUnsubbedPill}
             />
           )}
+          {isOutbound && m.tracking_token && (
+            <ReadReceiptPill count={m.read_count} lastOpenedAt={m.last_opened_at} />
+          )}
           <span className="text-xs text-neutral-500">{formatFullDate(m.date)}</span>
           <MessageMenu messageId={m.id} fromAddr={m.from_addr} direction={m.direction} isVip={isVip} />
         </div>
@@ -497,6 +500,62 @@ function domainOf(addr: string): string | null {
   const at = addr.lastIndexOf("@");
   if (at === -1) return null;
   return addr.slice(at + 1).toLowerCase() || null;
+}
+
+// Read-receipt pill (#69). Rendered only on outbound messages whose
+// tracking_token is non-null — i.e. the sender had "Track opens" enabled
+// when this message went out. We deliberately do NOT render anything when
+// count=0; an empty pill saying "Not yet read" reads as noise on every
+// just-sent outbound, and "still ✓ pending" is the obvious default. Once
+// the recipient opens, the pill flips on.
+//
+// Note (limitation): some mail clients fetch images through privacy proxies
+// (Gmail does this by default). We see the proxy's IP, not the recipient's,
+// and the count still increments. Mail clients that strip remote images
+// outright (orange-inbox itself does this — see issue #11) won't fire the
+// open at all, so a "0 reads" pill against an actually-read message is the
+// expected outcome there. Worth documenting; no way around it.
+function ReadReceiptPill({
+  count,
+  lastOpenedAt,
+}: {
+  count: number;
+  lastOpenedAt: number | null;
+}) {
+  if (count === 0) {
+    return (
+      <span
+        className="inline-flex items-center rounded-full bg-neutral-100 dark:bg-neutral-800 px-1.5 py-px text-[10px] font-medium text-neutral-600 dark:text-neutral-400"
+        title="You enabled read receipts on this message. The pill will update when (and if) the recipient's mail client loads remote images."
+      >
+        <span aria-hidden className="mr-0.5">{"◌"}</span>
+        Track opens
+      </span>
+    );
+  }
+  const lastLabel = lastOpenedAt ? formatLastOpened(lastOpenedAt) : null;
+  const tooltip = lastOpenedAt
+    ? `Last opened ${new Date(lastOpenedAt * 1000).toLocaleString()}`
+    : undefined;
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 px-1.5 py-px text-[10px] font-medium"
+      title={tooltip}
+    >
+      <span aria-hidden className="mr-0.5">{"✓"}</span>
+      Read {count}× {lastLabel ? `· ${lastLabel}` : ""}
+    </span>
+  );
+}
+
+function formatLastOpened(unixSec: number): string {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - unixSec);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
+  const d = new Date(unixSec * 1000);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function InContactsChip() {

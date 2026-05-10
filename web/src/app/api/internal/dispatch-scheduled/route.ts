@@ -22,6 +22,11 @@ interface PayloadJson {
   reply_to_message_id?: string;
   draft_id?: string;
   attachment_ids?: string[];
+  // #66 / #69 forwarding through the scheduled-dispatch path. Same shape the
+  // composer / /api/messages route accepts, snapshotted verbatim at queue
+  // time. Re-validated by sendMessage at dispatch time.
+  confidential?: { expires_at?: number; passcode?: string | null };
+  track_opens?: boolean;
 }
 
 // Internal endpoint hit by the email-worker's cron (via service binding) to
@@ -66,6 +71,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "payload_invalid" }, { status: 400 });
     }
 
+    // Re-validate confidential expiry against *current* time, not queue
+    // time — a stale row that's been sitting in the queue past its expiry
+    // would be useless anyway. Pass through unchanged for the happy path.
+    let confidential: { expiresAt: number; passcode?: string | null } | undefined;
+    if (payload.confidential) {
+      const expires = Number(payload.confidential.expires_at);
+      if (Number.isFinite(expires) && expires > Math.floor(Date.now() / 1000)) {
+        confidential = {
+          expiresAt: Math.floor(expires),
+          passcode: payload.confidential.passcode ?? null,
+        };
+      } else {
+        await markFailed(b.id, "confidential_expired_before_send");
+        return NextResponse.json({ error: "confidential_expired" }, { status: 400 });
+      }
+    }
+
     try {
       const result = await sendMessage(row.user_id, {
         fromMailboxId: payload.from_mailbox_id,
@@ -78,6 +100,8 @@ export async function POST(req: NextRequest) {
         replyToMessageId: payload.reply_to_message_id,
         draftId: payload.draft_id,
         attachmentIds: payload.attachment_ids,
+        confidential,
+        trackOpens: payload.track_opens === true,
       });
       await db
         .prepare(

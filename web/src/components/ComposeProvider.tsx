@@ -108,11 +108,16 @@ interface UndoToastState {
 export default function ComposeProvider({
   identities,
   undoSendSeconds,
+  defaultTrackOpens = false,
   children,
 }: {
   identities: Identity[];
   // 0 = Undo Send disabled; otherwise the configured hold window in seconds.
   undoSendSeconds: number;
+  // Whether new compose modals open with "Track opens" pre-checked. Loaded
+  // from the user's preferences in the server layout; defaults to off so a
+  // privacy-respecting default holds when the prop is absent.
+  defaultTrackOpens?: boolean;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -138,6 +143,7 @@ export default function ComposeProvider({
           key={instanceKey}
           identities={identities}
           undoSendSeconds={undoSendSeconds}
+          defaultTrackOpens={defaultTrackOpens}
           args={args}
           onClose={() => setArgs(null)}
           onQueuedUndoSend={(scheduledId, delaySeconds) =>
@@ -166,12 +172,14 @@ export default function ComposeProvider({
 function ComposeModal({
   identities,
   undoSendSeconds,
+  defaultTrackOpens,
   args,
   onClose,
   onQueuedUndoSend,
 }: {
   identities: Identity[];
   undoSendSeconds: number;
+  defaultTrackOpens: boolean;
   args: ComposeOpenArgs;
   onClose: () => void;
   onQueuedUndoSend: (scheduledId: string, delaySeconds: number) => void;
@@ -250,6 +258,22 @@ function ComposeModal({
   // older standalone schedule popover — both options now live in this menu.
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const sendMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // #66 Confidential mode state. `confidential` is the user-facing toggle
+  // (off by default). `confidentialTtlDays` picks one of 1/7/30 day windows
+  // for the public /c/<token> URL; `confidentialPasscode` is the optional
+  // 4-digit out-of-band code (empty = no passcode prompt). The expiry is
+  // re-computed on submit (now + ttl), so a long compose session doesn't
+  // shrink the window unexpectedly.
+  //
+  // #69 Track-opens state. `trackOpens` defaults to the user's preference
+  // (Settings → Sending → Track opens by default). The composer still lets
+  // them flip it per-message either way — privacy-by-default by virtue of
+  // the off-by-default preference.
+  const [confidential, setConfidential] = useState(false);
+  const [confidentialTtlDays, setConfidentialTtlDays] = useState<1 | 7 | 30>(7);
+  const [confidentialPasscode, setConfidentialPasscode] = useState("");
+  const [trackOpens, setTrackOpens] = useState(defaultTrackOpens);
   // "Send and archive" only makes sense for replies. We track threadId so
   // the post-send PATCH knows which thread to archive; no-op when null.
   const archiveThreadId = args.threadId ?? null;
@@ -542,6 +566,26 @@ function ComposeModal({
     });
   }
 
+  // #66 — compute the confidential payload right at send time so a long
+  // compose session doesn't shrink the recipient's view window. Returns
+  // undefined when the toggle is off OR when the passcode is malformed
+  // (caller surfaces that as an error). Treating empty-string passcode as
+  // "no passcode" matches the UX of the input — the placeholder reads
+  // "Optional 4-digit code".
+  function buildConfidentialField(): { ok: true; value: { expires_at: number; passcode: string | null } | null } | { ok: false; error: string } {
+    if (!confidential) return { ok: true, value: null };
+    const ttlSec = confidentialTtlDays * 86400;
+    const expires = Math.floor(Date.now() / 1000) + ttlSec;
+    const cleaned = confidentialPasscode.trim();
+    if (cleaned !== "" && !/^\d{4}$/.test(cleaned)) {
+      return { ok: false, error: "Passcode must be 4 digits or blank." };
+    }
+    return {
+      ok: true,
+      value: { expires_at: expires, passcode: cleaned === "" ? null : cleaned },
+    };
+  }
+
   function submit(opts?: { archiveAfterSend?: boolean }) {
     setError(null);
     const toList = splitList(to);
@@ -554,6 +598,16 @@ function ComposeModal({
       setError("Body can't be empty");
       return;
     }
+    const confidentialPayload = buildConfidentialField();
+    if (!confidentialPayload.ok) {
+      setError(confidentialPayload.error);
+      return;
+    }
+    // Confidential + track-opens are mutually exclusive: the recipient
+    // never receives the real body, so there's nothing for the tracker to
+    // attach to. Silently strip rather than reject — the UI already greys
+    // out the tracking toggle when confidential is on.
+    const effectiveTrackOpens = trackOpens && !confidential;
     // Archive only fires after a successful send and only when we have a
     // thread to archive. New-compose flows pass undefined → no-op.
     const shouldArchive = !!opts?.archiveAfterSend && !!archiveThreadId;
@@ -579,6 +633,8 @@ function ComposeModal({
             attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
             scheduled_for: scheduledFor,
             kind: "undo_send",
+            confidential: confidentialPayload.value ?? undefined,
+            track_opens: effectiveTrackOpens ? true : undefined,
           }),
         });
         if (!res.ok) {
@@ -605,6 +661,8 @@ function ComposeModal({
         reply_to_message_id: args.replyToMessageId,
         draft_id: draftId ?? undefined,
         attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
+        confidential: confidentialPayload.value ?? undefined,
+        track_opens: effectiveTrackOpens ? true : undefined,
       };
       let res: Response;
       try {
@@ -710,6 +768,12 @@ function ComposeModal({
       setError("Scheduled time must be in the future");
       return;
     }
+    const confidentialPayload = buildConfidentialField();
+    if (!confidentialPayload.ok) {
+      setError(confidentialPayload.error);
+      return;
+    }
+    const effectiveTrackOpens = trackOpens && !confidential;
     startSending(async () => {
       const res = await fetch("/api/scheduled", {
         method: "POST",
@@ -725,6 +789,8 @@ function ComposeModal({
           draft_id: draftId ?? undefined,
           attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
           scheduled_for: scheduledForUnix,
+          confidential: confidentialPayload.value ?? undefined,
+          track_opens: effectiveTrackOpens ? true : undefined,
         }),
       });
       if (!res.ok) {
@@ -1054,6 +1120,19 @@ function ComposeModal({
                   </div>
                 </button>
                 <div className="border-t border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
+                  <div className="text-xs uppercase tracking-wider text-neutral-500">Privacy</div>
+                  <PrivacyToggles
+                    confidential={confidential}
+                    onConfidentialChange={setConfidential}
+                    confidentialTtlDays={confidentialTtlDays}
+                    onConfidentialTtlChange={setConfidentialTtlDays}
+                    confidentialPasscode={confidentialPasscode}
+                    onConfidentialPasscodeChange={setConfidentialPasscode}
+                    trackOpens={trackOpens}
+                    onTrackOpensChange={setTrackOpens}
+                  />
+                </div>
+                <div className="border-t border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
                   <div className="text-xs uppercase tracking-wider text-neutral-500">Schedule send</div>
                   <SchedulePresets
                     recipientEmail={splitList(to)[0] ?? ""}
@@ -1105,6 +1184,116 @@ function ComposeModal({
         </div>
       </footer>
     </ModalShell>
+  );
+}
+
+// ─── Privacy toggles (issue #66 + #69) ─────────────────────────────────────
+//
+// Two related but independent controls in the send-menu dropdown:
+//   - Confidential mode: recipient gets a placeholder body + link; the real
+//     content lives at /c/<token> until expiry. Optional 4-digit passcode is
+//     shared out-of-band by the sender.
+//   - Track opens: outbound HTML carries a 1×1 PNG that pings the server.
+//     Mutually exclusive with confidential (no real body to attach to).
+//
+// Both default off. Track-opens default can be flipped per-user under
+// Settings → Sending; confidential is always opt-in per-message.
+function PrivacyToggles({
+  confidential,
+  onConfidentialChange,
+  confidentialTtlDays,
+  onConfidentialTtlChange,
+  confidentialPasscode,
+  onConfidentialPasscodeChange,
+  trackOpens,
+  onTrackOpensChange,
+}: {
+  confidential: boolean;
+  onConfidentialChange: (next: boolean) => void;
+  confidentialTtlDays: 1 | 7 | 30;
+  onConfidentialTtlChange: (next: 1 | 7 | 30) => void;
+  confidentialPasscode: string;
+  onConfidentialPasscodeChange: (next: string) => void;
+  trackOpens: boolean;
+  onTrackOpensChange: (next: boolean) => void;
+}) {
+  const tracksDisabled = confidential;
+  return (
+    <div className="space-y-2">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={confidential}
+          onChange={e => onConfidentialChange(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span className="flex-1">
+          <span className="font-medium">Confidential</span>
+          <span className="block text-xs text-neutral-500">
+            Recipient sees a placeholder + link; the message body never leaves our server.
+          </span>
+        </span>
+      </label>
+      {confidential && (
+        <div className="ml-6 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-wider text-neutral-500">Expires</span>
+            <div className="inline-flex rounded-md border border-neutral-300 dark:border-neutral-700 overflow-hidden text-xs">
+              {[1, 7, 30].map(d => (
+                <button
+                  key={d}
+                  type="button"
+                  aria-pressed={confidentialTtlDays === d}
+                  onClick={() => onConfidentialTtlChange(d as 1 | 7 | 30)}
+                  className={`px-2 py-1 ${
+                    confidentialTtlDays === d
+                      ? "bg-[var(--color-brand)] text-white"
+                      : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  }`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="block text-xs">
+            <span className="uppercase tracking-wider text-neutral-500">Passcode (optional)</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={4}
+              pattern="\d{4}"
+              placeholder="4 digits"
+              value={confidentialPasscode}
+              onChange={e => onConfidentialPasscodeChange(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              className="mt-1 w-24 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1 font-mono tracking-[0.2em] focus:outline-none focus:border-[var(--color-brand)]"
+            />
+            <span className="block mt-1 text-[11px] text-neutral-500">
+              Share it with the recipient yourself (text/voice). They&apos;ll be prompted on the view page.
+            </span>
+          </label>
+        </div>
+      )}
+      <label
+        className={`flex items-start gap-2 text-sm ${tracksDisabled ? "opacity-50" : ""}`}
+        title={tracksDisabled ? "Not available in Confidential mode" : undefined}
+      >
+        <input
+          type="checkbox"
+          checked={!tracksDisabled && trackOpens}
+          onChange={e => onTrackOpensChange(e.target.checked)}
+          disabled={tracksDisabled}
+          className="mt-0.5"
+        />
+        <span className="flex-1">
+          <span className="font-medium">Track opens</span>
+          <span className="block text-xs text-neutral-500">
+            Notify you when the recipient&apos;s mail client loads the message. Image-stripping clients won&apos;t register.
+          </span>
+        </span>
+      </label>
+    </div>
   );
 }
 
