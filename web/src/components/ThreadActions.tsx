@@ -96,6 +96,10 @@ export default function ThreadActions({
   const [isMutePending, startMuteTransition] = useTransition();
   const [isPinPending, startPinTransition] = useTransition();
   const [isFollowUpPending, startFollowUpTransition] = useTransition();
+  // Overflow menu — Pin / Mute / Mark unread / Delete live here so the
+  // primary toolbar stays compact. Mirrors the MessageMenu pattern.
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   function toggleStar() {
     const next = !starred;
@@ -269,6 +273,20 @@ export default function ThreadActions({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [followUpPopoverOpen]);
+
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (
+        moreMenuRef.current &&
+        !moreMenuRef.current.contains(e.target as Node)
+      ) {
+        setMoreMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [moreMenuOpen]);
 
   function archive() {
     if (pending) return;

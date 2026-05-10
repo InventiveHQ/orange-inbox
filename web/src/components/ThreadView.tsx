@@ -108,7 +108,10 @@ export default function ThreadView({
                 );
               })()}
             </h1>
-            <div className="mt-1 text-xs text-neutral-500 break-all">
+            <div
+              className="mt-1 text-xs text-neutral-500 truncate"
+              title={`${thread.mailbox_local_part}@${thread.domain_name}`}
+            >
               {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
               {messages.length === 1 ? "" : "s"}
             </div>

@@ -99,6 +99,7 @@ function ToastStack({
     <div
       role="region"
       aria-label="Notifications"
+      data-no-print
       // pointer-events-none on the wrapper so toasts don't block clicks on
       // the page chrome behind them; each toast re-enables pointer events
       // for itself.
