@@ -156,6 +156,16 @@ export type MessageCategory =
 // collect thread IDs that have ANY message in the requested category, then
 // filter the control-DB listing to that set. NULL-category messages are
 // treated as Primary so the migration didn't need a backfill.
+// Triage predicate (#3 / #7). Filters the listing to threads with at least
+// one inbound message whose (is_marketing, is_action_item) pair matches.
+// Same "any message in the thread matches" semantics the category filter
+// uses — passed in by `listThreadsForTriage` after mapping a quadrant
+// label to a (0|1, 0|1) pair.
+export interface TriageFilter {
+  isMarketing: 0 | 1;
+  isActionItem: 0 | 1;
+}
+
 export async function listThreads(
   userId: string,
   opts: {
@@ -164,6 +174,7 @@ export async function listThreads(
     limit?: number;
     includeMuted?: boolean;
     category?: MessageCategory;
+    triage?: TriageFilter;
   } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -204,6 +215,18 @@ export async function listThreads(
     // listing at 200 anyway so a per-mailbox view cannot blow past it. The
     // up-front cap keeps the IN-list bounded; if more are requested we
     // truncate to the first N (most-recent — see the per-DB ORDER BY).
+    const capped = threadIds.slice(0, 1000);
+    const placeholders = capped.map(() => "?").join(",");
+    where.push(`ti.thread_id IN (${placeholders})`);
+    binds.push(...capped);
+  }
+
+  // Triage filter (#3 / #7). Same cross-DB fan-out shape as category — fetch
+  // thread IDs whose inbound messages match the (is_marketing, is_action_item)
+  // pair, intersect into a `ti.thread_id IN (...)` predicate.
+  if (opts.triage) {
+    const threadIds = await collectThreadIdsForTriage(opts.triage);
+    if (threadIds.length === 0) return [];
     const capped = threadIds.slice(0, 1000);
     const placeholders = capped.map(() => "?").join(",");
     where.push(`ti.thread_id IN (${placeholders})`);
@@ -1084,6 +1107,36 @@ async function collectThreadIdsForCategory(
         ? db.prepare(sql)
         : db.prepare(sql).bind(category);
     const { results } = await stmt.all<{ thread_id: string; last_date: number }>();
+    for (const r of results ?? []) seen.add(r.thread_id);
+  }
+  return Array.from(seen);
+}
+
+// ─── Triage quadrants (issues #3 + #7) ───────────────────────────────────
+//
+// Collect thread IDs that have at least one inbound message matching the
+// requested (is_marketing, is_action_item) pair. Same fan-out shape as the
+// category collector — one query per active mail DB, dedup into a Set.
+// Old rows pre-#3 default to (0, 0) so they all surface under the Quiet
+// lane until the backfill runs.
+async function collectThreadIdsForTriage(
+  triage: TriageFilter,
+): Promise<string[]> {
+  const dbs = await getActiveMailDbs();
+  const seen = new Set<string>();
+  const PER_DB_CAP = 1000;
+  const sql = `SELECT thread_id, MAX(date) AS last_date FROM messages
+                WHERE direction = 'inbound'
+                  AND is_marketing = ?
+                  AND is_action_item = ?
+                GROUP BY thread_id
+                ORDER BY last_date DESC
+                LIMIT ${PER_DB_CAP}`;
+  for (const { db } of dbs) {
+    const { results } = await db
+      .prepare(sql)
+      .bind(triage.isMarketing, triage.isActionItem)
+      .all<{ thread_id: string; last_date: number }>();
     for (const r of results ?? []) seen.add(r.thread_id);
   }
   return Array.from(seen);

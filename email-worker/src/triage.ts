@@ -52,6 +52,16 @@ export interface TriageResult {
   isActionItem: boolean;
 }
 
+// Default context — used when callers (or tests) don't have the per-user
+// signals to hand. Everything off, so classify() degrades gracefully to
+// "header-only" inputs.
+const DEFAULT_CONTEXT: TriageContext = {
+  senderDomainInContacts: false,
+  fromAddrIsVip: false,
+  firstContact: false,
+  mailboxIsOwned: false,
+};
+
 // Pure classifier. Both flags are computed independently — a single
 // message can be both marketing and an action item (e.g. a "verify your
 // email" blast).
@@ -64,16 +74,6 @@ export function classify(
     isActionItem: isActionItem(parsed, ctx),
   };
 }
-
-// Default context — used when callers (or tests) don't have the per-user
-// signals to hand. Everything off, so classify() degrades gracefully to
-// "header-only" inputs.
-const DEFAULT_CONTEXT: TriageContext = {
-  senderDomainInContacts: false,
-  fromAddrIsVip: false,
-  firstContact: false,
-  mailboxIsOwned: false,
-};
 
 function isMarketing(parsed: ParsedMessage, ctx: TriageContext): boolean {
   // 1. RFC 2369 List-Unsubscribe headers are the canonical "this is bulk

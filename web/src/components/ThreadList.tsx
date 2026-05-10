@@ -35,9 +35,9 @@ const SWIPE_MAX_VERTICAL_PX = 30;
 const SWIPE_UNDO_SECONDS = 5;
 
 // sessionStorage key prefix for thread-list scroll memory. We key on
-// scope+pathname+search so each filtered view (e.g. ?view=marketing) has its
-// own remembered scroll position. The detail page lives under the same scope
-// path, so coming back to the list naturally restores its position.
+// scope+pathname+search so each filtered view (e.g. ?view=quiet_humans) has
+// its own remembered scroll position. The detail page lives under the same
+// scope path, so coming back to the list naturally restores its position.
 const SCROLL_KEY_PREFIX = "orange-inbox:threadlist-scroll:";
 const SCROLL_SAVE_DEBOUNCE_MS = 120;
 
@@ -54,9 +54,10 @@ function showsTriageBar(scope: string): boolean {
 
 // Category tabs (Primary / Promotions / Updates / Social / Forums) appear
 // on per-mailbox inboxes. The unified "all" view uses the triage strip
-// (Inbox / Marketing / Done / Show all) instead — both rows together is
-// visual noise and the two models overlap. Drafts / VIPs / domain
-// roll-ups have their own filter semantics so we keep them off the strip.
+// (Primary action / Quiet / Bulk action / Newsletters / Show all) instead —
+// both rows together is visual noise and the two models overlap. Drafts /
+// VIPs / domain roll-ups have their own filter semantics so we keep them
+// off the strip.
 const SCOPES_WITHOUT_CATEGORIES: ReadonlySet<string> = new Set([
   "all",
   "drafts",
@@ -498,7 +499,15 @@ function TriageBar({
   current: TriageQuadrant;
   onChange: (q: TriageQuadrant) => void;
 }) {
-  const items: TriageQuadrant[] = ["inbox", "marketing", "done", "all"];
+  // Tab order: Primary action (default) → Quiet (#7) → bulk-mail quadrants
+  // → escape hatch. Keeps the actionable lanes left-of-center.
+  const items: TriageQuadrant[] = [
+    "action_needed",
+    "quiet_humans",
+    "marketing_action",
+    "marketing_quiet",
+    "all",
+  ];
   return (
     <div
       role="tablist"

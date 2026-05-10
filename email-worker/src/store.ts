@@ -10,6 +10,7 @@ import {
 } from "./mail-db";
 import { isFirstContact } from "./parse";
 import { evaluateRules } from "./rules";
+import { classify, type TriageContext } from "./triage";
 import type { Env, ParsedMessage } from "./types";
 import type { Recipient } from "./route";
 import type { ThreadMatch } from "./thread";
@@ -151,6 +152,15 @@ export async function storeMessage(
   // the listing query, so we never need a backfill.
   const category = categorize(parsed);
 
+  // Two-axis triage classifier (#3, #7). parse.ts produced a first pass
+  // from headers-only signals; here we re-run with the per-user context
+  // (VIP / contacts / mailbox-ownership / first-contact) the email-worker
+  // can resolve via control-DB lookups. Best-effort — a lookup failure
+  // degrades to the headers-only classification rather than blocking
+  // ingest.
+  const triageCtx = await loadTriageContext(env, recipient.mailboxId, fromAddrLower, firstContact);
+  const triage = classify(parsed, triageCtx);
+
   stmts.push(
     mailDb
       .prepare(
@@ -159,10 +169,12 @@ export async function storeMessage(
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
           subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred,
           auth_results, first_contact, reply_to_addr,
-          list_unsub_url, list_unsub_mailto, list_unsub_one_click, category)
+          list_unsub_url, list_unsub_mailto, list_unsub_one_click, category,
+          is_marketing, is_action_item)
          VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0,
                  ?, ?, ?,
-                 ?, ?, ?, ?)`,
+                 ?, ?, ?, ?,
+                 ?, ?)`,
       )
       .bind(
         messageId,
@@ -189,6 +201,8 @@ export async function storeMessage(
         parsed.listUnsubMailto,
         parsed.listUnsubOneClick ? 1 : 0,
         category,
+        triage.isMarketing ? 1 : 0,
+        triage.isActionItem ? 1 : 0,
       ),
   );
 
@@ -421,6 +435,87 @@ function buildCalendarInsert(
     }
   }
   return null;
+}
+
+// Per-message context for the triage classifier (#3 / #7). All three of
+// the lookups (VIP membership, sender-domain-in-contacts, mailbox
+// ownership) hit the control DB; any one of them failing falls back to
+// `false` for that signal so a degraded control DB can never block mail
+// ingestion. firstContact is computed upstream and passed in unchanged.
+async function loadTriageContext(
+  env: Env,
+  mailboxId: string,
+  fromAddrLower: string,
+  firstContact: boolean,
+): Promise<TriageContext> {
+  let fromAddrIsVip = false;
+  let senderDomainInContacts = false;
+  let mailboxIsOwned = false;
+
+  try {
+    // VIP is keyed on (user_id, addr) but we don't have a user here — VIPs
+    // are a per-recipient construct. For shared mailboxes there may be
+    // multiple users; we count the address as VIP if ANY owner of this
+    // mailbox has it on their list. That's the same liberal definition the
+    // notification path uses for VIP-bypass-DnD.
+    const vip = await env.DB
+      .prepare(
+        `SELECT 1 AS hit
+           FROM vip_senders v
+           INNER JOIN user_mailbox_access uma
+                   ON uma.user_id = v.user_id
+                  AND uma.mailbox_id = ?
+          WHERE v.addr = ?
+          LIMIT 1`,
+      )
+      .bind(mailboxId, fromAddrLower)
+      .first<{ hit: number }>();
+    fromAddrIsVip = vip !== null;
+  } catch (err) {
+    console.warn("triage: VIP lookup failed", err);
+  }
+
+  try {
+    const atIdx = fromAddrLower.lastIndexOf("@");
+    const fromDomain = atIdx > 0 ? fromAddrLower.slice(atIdx + 1) : "";
+    if (fromDomain) {
+      const row = await env.DB
+        .prepare(
+          `SELECT 1 AS hit FROM contacts
+            WHERE mailbox_id = ? AND email_lc LIKE ?
+            LIMIT 1`,
+        )
+        .bind(mailboxId, `%@${fromDomain}`)
+        .first<{ hit: number }>();
+      senderDomainInContacts = row !== null;
+    }
+  } catch (err) {
+    console.warn("triage: contacts lookup failed", err);
+  }
+
+  try {
+    // Mailbox is "owned" if at least one user has owner role on it. That
+    // matches the semantics the spec calls out — replies-expected business
+    // mail to a mailbox you control.
+    const row = await env.DB
+      .prepare(
+        `SELECT 1 AS hit FROM user_mailbox_access
+          WHERE mailbox_id = ? AND role = 'owner'
+          LIMIT 1`,
+      )
+      .bind(mailboxId)
+      .first<{ hit: number }>();
+    mailboxIsOwned = row !== null;
+  } catch (err) {
+    console.warn("triage: mailbox-owner lookup failed", err);
+  }
+
+  return {
+    senderDomainInContacts,
+    fromAddrIsVip,
+    firstContact,
+    mailboxIsOwned,
+  };
 }
 
 async function notifyWebOfNewMessage(

@@ -2,6 +2,7 @@ import PostalMime, { type Address, type Attachment, type Header } from "postal-m
 import { isExecutable } from "./attachment-safety";
 import { parseAuthenticationResults } from "./auth-results";
 import { findHeader, parseListUnsubscribe } from "./list-unsubscribe";
+import { classify } from "./triage";
 import type { AddressInfo, ParsedAttachment, ParsedMessage } from "./types";
 
 export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
@@ -63,7 +64,7 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
     findHeader(parsed.headers, "list-unsubscribe-post"),
   );
 
-  return {
+  const out: ParsedMessage = {
     messageId: parsed.messageId ?? `<${crypto.randomUUID()}@orange-inbox.local>`,
     inReplyTo: parsed.inReplyTo,
     references: splitReferences(parsed.references),
@@ -86,7 +87,16 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
     listUnsubUrl: unsub.url,
     listUnsubMailto: unsub.mailto,
     listUnsubOneClick: unsub.oneClick,
+    // Placeholder flags — recomputed via classify() once the headers-only
+    // ParsedMessage is assembled. store.ts may re-classify with per-user
+    // context (VIP / contacts / mailbox-ownership) before persisting.
+    isMarketing: false,
+    isActionItem: false,
   };
+  const triage = classify(out);
+  out.isMarketing = triage.isMarketing;
+  out.isActionItem = triage.isActionItem;
+  return out;
 }
 
 // Collect every header value matching the (lowercase) name and join them

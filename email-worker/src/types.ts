@@ -52,6 +52,12 @@ export interface ParsedMessage {
   listUnsubUrl: string | null;
   listUnsubMailto: string | null;
   listUnsubOneClick: boolean;
+  // 0031: two-axis triage classifier (#3, #7). Populated by parse.ts via
+  // triage.classify() over the headers-only signals. The store layer can
+  // re-classify with additional per-user context (VIP, contacts, mailbox
+  // ownership) before persisting.
+  isMarketing: boolean;
+  isActionItem: boolean;
 }
 
 // Parsed Authentication-Results, kept as a small JSON-friendly shape

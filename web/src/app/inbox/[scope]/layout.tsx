@@ -10,7 +10,12 @@ import {
   listVipThreads,
   type MessageCategory,
 } from "@/lib/queries";
-import { DEFAULT_QUADRANT, listThreadsForTriage } from "@/lib/triage";
+import {
+  DEFAULT_QUADRANT,
+  parseQuadrant,
+  type TriageQuadrant,
+  listThreadsForTriage,
+} from "@/lib/triage";
 import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
 import { listSavedSearches } from "@/lib/saved-searches";
@@ -72,6 +77,10 @@ export default async function InboxLayout({
   // CategoryTabs client component calls router.refresh() after pushing so
   // the layout actually re-fetches with the new param.
   const categoryParam = readCategoryFromHeaders(headerStore);
+  // Triage quadrant (#3 + #7). Same `next-url` workaround as category — the
+  // triage bar's client toggle pushes ?view=… and router.refresh()es, so the
+  // RSC payload sees the new param on the next render.
+  const quadrantParam = readQuadrantFromHeaders(headerStore);
   // Default open: this section is the whole point of the saved-search feature,
   // and it's empty for new users so collapsing-by-default would hide the
   // discoverability hint. Toggling writes a cookie that flips the default.
@@ -170,12 +179,12 @@ export default async function InboxLayout({
           // concept, not per-mailbox.
           listVipThreads(user.id)
         : effectiveScope === "all"
-          ? // Layouts can't read searchParams in this Next, so the SSR'd payload
-            // is always the default quadrant. The client toggle re-navigates,
-            // which re-renders the page; once a classifier exists this should
-            // pick up the ?view= param via a wrapping page-level fetch.
+          ? // The triage bar's client toggle pushes ?view=<quadrant> and
+            // router.refresh()es. We read the param off `next-url` /
+            // `referer` headers (same workaround as ?category=) since
+            // layouts can't see searchParams as a prop.
             listThreadsForTriage(user.id, {
-              quadrant: DEFAULT_QUADRANT,
+              quadrant: quadrantParam,
               includeMuted: true,
               category: categoryParam,
             })
@@ -339,6 +348,20 @@ const VALID_CATEGORIES: ReadonlySet<string> = new Set([
   "social",
   "forums",
 ]);
+
+function readQuadrantFromHeaders(
+  headerStore: Awaited<ReturnType<typeof headers>>,
+): TriageQuadrant {
+  const candidate =
+    headerStore.get("next-url") ?? headerStore.get("referer") ?? null;
+  if (!candidate) return DEFAULT_QUADRANT;
+  try {
+    const u = new URL(candidate, "http://localhost");
+    return parseQuadrant(u.searchParams.get("view"));
+  } catch {
+    return DEFAULT_QUADRANT;
+  }
+}
 
 function readCategoryFromHeaders(
   headerStore: Awaited<ReturnType<typeof headers>>,

@@ -85,7 +85,14 @@ CREATE TABLE messages (
   -- carries a <img src="/api/track/<token>.png"> that the recipient's mail
   -- client fetches on display. Open events live in the control DB
   -- (message_read_events) — see migration 0033 for details.
-  tracking_token     TEXT
+  tracking_token     TEXT,
+  -- 0037_triage_axes: two-axis triage classifier set at ingest (see
+  -- email-worker/src/triage.ts). is_marketing flags bulk/promotional mail;
+  -- is_action_item flags messages the user likely needs to act on. The
+  -- web triage bar filters the unified inbox into four quadrants over
+  -- these two columns.
+  is_marketing       INTEGER NOT NULL DEFAULT 0,
+  is_action_item     INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
 CREATE INDEX        messages_thread_date   ON messages(thread_id, date);
@@ -97,6 +104,10 @@ CREATE INDEX messages_list_unsub
   ON messages(mailbox_id, from_addr)
   WHERE list_unsub_url IS NOT NULL OR list_unsub_mailto IS NOT NULL;
 CREATE INDEX messages_category_date ON messages(category, date DESC);
+-- 0031_triage_axes: compound index for the triage listing (filter by
+-- both axes per-mailbox, order by date desc).
+CREATE INDEX messages_triage
+  ON messages(mailbox_id, is_marketing, is_action_item, date DESC);
 
 CREATE TABLE attachments (
   id            TEXT PRIMARY KEY,
