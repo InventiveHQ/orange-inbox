@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
 import type { SavedSearchRow } from "@/lib/saved-searches";
 import type { InboxLayoutRow } from "@/lib/inbox-layouts";
@@ -12,6 +12,110 @@ const COLLAPSED_COOKIE = "sidebar-collapsed";
 const SMART_MAILBOXES_COOKIE = "smart-mailboxes-open";
 const LAYOUTS_OPEN_COOKIE = "inbox-layouts-open";
 const DOMAIN_EXPANDED_PREFIX = "sidebar-domain-expanded:";
+
+// MIME types used by the native HTML5 DnD payload. We carry only an opaque
+// id string; the actual reorder logic reads it from React state, not from
+// the DataTransfer object (the browser strips data on dragover in some
+// engines). The MIME type tag is namespaced so we can ignore drops that
+// originated outside the sidebar.
+const DRAG_MIME_DOMAIN = "application/x-orange-domain-id";
+const DRAG_MIME_MAILBOX = "application/x-orange-mailbox-id";
+
+// Public shape of the drag-handlers bundle produced by useRowDrag, passed
+// into row components so the row's <Link>/<div> can attach them. We type
+// the event handlers loosely (HTMLElement) because they're shared across
+// <Link>, <div>, and child elements with different concrete event types.
+type RowDragHandler = (e: React.DragEvent<HTMLElement>) => void;
+interface RowDrag {
+  onDragStart: RowDragHandler;
+  onDragOver: RowDragHandler;
+  onDragLeave: RowDragHandler;
+  onDrop: RowDragHandler;
+  onDragEnd: RowDragHandler;
+  // Tailwind classes for the row's visual state: "" most of the time,
+  // "opacity-40" while this row is the one being dragged, or
+  // "outline outline-2 outline-[var(--color-brand)]" while a compatible
+  // drag is hovering over it.
+  dragClass: string;
+}
+
+// Shared HTML5 DnD plumbing for both "drag a whole domain entry at the
+// top level" and "drag a child mailbox within its expanded group".
+//
+// Each row has one of two `kind`s ("domain" or "mailbox") which doubles as
+// a drop-compatibility filter — drops only fire when the dragged row's
+// kind matches the drop target's kind. That stops users from accidentally
+// dragging an alias out from under its domain header (which the data
+// model doesn't support), and stops a domain row from landing inside
+// another domain's child list.
+//
+// The DataTransfer payload also carries the row id, but we keep a
+// matching React state copy because Safari and some Chromium versions
+// strip the payload during `dragover` (only `drop` can read it). Without
+// the React-side cache, we couldn't decide compatibility on hover, which
+// in turn would break the drop-indicator highlight.
+function useRowDrag(
+  kind: "domain" | "mailbox",
+  id: string,
+  onMove: (fromId: string, toId: string) => void,
+): RowDrag {
+  const [isDragging, setIsDragging] = useState(false);
+  const [isOver, setIsOver] = useState(false);
+  const mime = kind === "domain" ? DRAG_MIME_DOMAIN : DRAG_MIME_MAILBOX;
+
+  const onDragStart: RowDragHandler = e => {
+    e.dataTransfer.setData(mime, id);
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "move";
+    // Stop the event from bubbling to an ancestor row (a child mailbox
+    // sits inside an ExpandableDomainGroup which is itself draggable).
+    // Without this, dragging an alias would pick up the whole domain.
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const onDragOver: RowDragHandler = e => {
+    // Reject drops from a different kind (mailbox vs domain). Without
+    // this check, dropping a domain row onto a child mailbox would
+    // silently no-op and look like a UI bug.
+    if (!e.dataTransfer.types.includes(mime)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    e.stopPropagation();
+    if (!isOver) setIsOver(true);
+  };
+
+  const onDragLeave: RowDragHandler = () => {
+    if (isOver) setIsOver(false);
+  };
+
+  const onDrop: RowDragHandler = e => {
+    if (!e.dataTransfer.types.includes(mime)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const fromId = e.dataTransfer.getData(mime);
+    setIsOver(false);
+    if (fromId && fromId !== id) {
+      onMove(fromId, id);
+    }
+  };
+
+  const onDragEnd: RowDragHandler = () => {
+    setIsDragging(false);
+    setIsOver(false);
+  };
+
+  // Ghost the dragged row, outline the drop target. The outline is
+  // applied at the wrapper level (not on the inner Link) so it works
+  // for both the row-as-<Link> case and the group-as-<div> case.
+  const dragClass = isDragging
+    ? "opacity-40"
+    : isOver
+      ? "outline outline-2 -outline-offset-2 outline-[var(--color-brand)] rounded-md"
+      : "";
+
+  return { onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, dragClass };
+}
 
 interface Props {
   domains: DomainRow[];
@@ -43,6 +147,24 @@ export default function Sidebar({
   // discoverability isn't hidden behind a chevron click for new users.
   const [layoutsOpen, setLayoutsOpen] = useState(initialLayoutsOpen);
 
+  // Locally-mirrored mailbox order so drag-to-reorder (issue #52) can
+  // optimistically update the sidebar before the PATCH lands. Server is
+  // the source of truth, but we don't want to wait a round-trip for the
+  // row to settle into its new spot.
+  //
+  // We resync whenever the prop changes (e.g. mailbox added/removed via
+  // Settings) by comparing the prop reference against a stash. Updating
+  // state during render — rather than via useEffect — is the React-19
+  // recommended pattern for "derive state from props but allow it to
+  // diverge": it avoids the cascading-renders lint and runs in the same
+  // commit as the prop change instead of one render late.
+  const [orderedMailboxes, setOrderedMailboxes] = useState<MailboxRow[]>(mailboxes);
+  const [lastMailboxesRef, setLastMailboxesRef] = useState(mailboxes);
+  if (lastMailboxesRef !== mailboxes) {
+    setLastMailboxesRef(mailboxes);
+    setOrderedMailboxes(mailboxes);
+  }
+
   function toggleSmart() {
     const next = !smartOpen;
     setSmartOpen(next);
@@ -64,21 +186,93 @@ export default function Sidebar({
   // Group mailboxes by domain so we can render single-mailbox domains as a flat
   // row and multi-mailbox domains as expandable groups. Domains with no
   // accessible mailboxes are dropped — admins should add a mailbox via Settings.
-  const byDomain = new Map<string, MailboxRow[]>();
-  for (const mb of mailboxes) {
-    const list = byDomain.get(mb.domain_name) ?? [];
-    list.push(mb);
-    byDomain.set(mb.domain_name, list);
+  //
+  // Domain ordering follows the user-defined mailbox order (issue #52): a
+  // domain's slot is the position of its first child in `orderedMailboxes`.
+  // That way reordering the underlying mailbox array via drag-and-drop also
+  // moves the domain header it belongs to, without us needing a parallel
+  // "domain sort_order" column. Mailboxes inside a group preserve their
+  // own relative order from the array.
+  const { domainEntries, totalUnread } = useMemo(() => {
+    const byDomain = new Map<string, MailboxRow[]>();
+    const firstIndex = new Map<string, number>();
+    orderedMailboxes.forEach((mb, idx) => {
+      const list = byDomain.get(mb.domain_id) ?? [];
+      list.push(mb);
+      byDomain.set(mb.domain_id, list);
+      if (!firstIndex.has(mb.domain_id)) firstIndex.set(mb.domain_id, idx);
+    });
+
+    const entries = domains
+      .map(d => ({ domain: d, list: byDomain.get(d.id) ?? [] }))
+      .filter(e => e.list.length > 0)
+      .sort((a, b) => {
+        const ai = firstIndex.get(a.domain.id) ?? Number.MAX_SAFE_INTEGER;
+        const bi = firstIndex.get(b.domain.id) ?? Number.MAX_SAFE_INTEGER;
+        return ai - bi;
+      });
+
+    const total = orderedMailboxes.reduce((sum, mb) => sum + (mb.unread_count ?? 0), 0);
+    return { domainEntries: entries, totalUnread: total };
+  }, [orderedMailboxes, domains]);
+
+  // Persist the new order to the server. Fire-and-forget — the optimistic
+  // local state has already moved the row; if the PATCH fails we log it
+  // (and the next page load will resync from the server anyway).
+  function persistOrder(next: MailboxRow[]) {
+    const order = next.map(mb => mb.id);
+    fetch("/api/me/mailbox-order", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ order }),
+    }).catch(err => {
+      // Keep the optimistic UI; log so it shows up in devtools.
+      console.error("mailbox-order PATCH failed", err);
+    });
   }
 
-  // "All inboxes" badge sums the per-mailbox unread counts. The query already
-  // restricts to mailboxes the user can access, so this is the right total
-  // for the unified view.
-  const totalUnread = mailboxes.reduce((sum, mb) => sum + (mb.unread_count ?? 0), 0);
+  // Move a whole domain entry (and the mailboxes it contains) from one
+  // position to another in the top-level domain list. Single-mailbox
+  // domains move just one row; multi-mailbox domains move all their
+  // children as a contiguous block, preserving their internal order.
+  function moveDomain(fromDomainId: string, toDomainId: string) {
+    if (fromDomainId === toDomainId) return;
+    const groups = new Map<string, MailboxRow[]>();
+    const order: string[] = [];
+    for (const mb of orderedMailboxes) {
+      if (!groups.has(mb.domain_id)) {
+        groups.set(mb.domain_id, []);
+        order.push(mb.domain_id);
+      }
+      groups.get(mb.domain_id)!.push(mb);
+    }
+    const fromIdx = order.indexOf(fromDomainId);
+    const toIdx = order.indexOf(toDomainId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    order.splice(fromIdx, 1);
+    order.splice(toIdx, 0, fromDomainId);
+    const next = order.flatMap(id => groups.get(id) ?? []);
+    setOrderedMailboxes(next);
+    persistOrder(next);
+  }
 
-  const domainEntries = domains
-    .map(d => ({ domain: d, list: byDomain.get(d.name) ?? [] }))
-    .filter(e => e.list.length > 0);
+  // Move a single mailbox within its parent domain (intra-group drag).
+  // Cross-domain drags are not supported — a mailbox belongs to its
+  // domain, and rendering a mailbox under the wrong domain group would
+  // be confusing.
+  function moveMailboxWithinDomain(fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const from = orderedMailboxes.find(mb => mb.id === fromId);
+    const to = orderedMailboxes.find(mb => mb.id === toId);
+    if (!from || !to || from.domain_id !== to.domain_id) return;
+    const next = [...orderedMailboxes];
+    const fromIdx = next.indexOf(from);
+    next.splice(fromIdx, 1);
+    const toIdx = next.indexOf(to);
+    next.splice(toIdx, 0, from);
+    setOrderedMailboxes(next);
+    persistOrder(next);
+  }
 
   return (
     <aside
@@ -185,6 +379,8 @@ export default function Sidebar({
             mailboxes={list}
             scope={scope}
             collapsed={collapsed}
+            onMoveDomain={moveDomain}
+            onMoveMailbox={moveMailboxWithinDomain}
           />
         ))}
 
@@ -351,23 +547,34 @@ function DomainEntry({
   mailboxes,
   scope,
   collapsed,
+  onMoveDomain,
+  onMoveMailbox,
 }: {
   domain: DomainRow;
   mailboxes: MailboxRow[];
   scope: string;
   collapsed: boolean;
+  onMoveDomain: (fromDomainId: string, toDomainId: string) => void;
+  onMoveMailbox: (fromMailboxId: string, toMailboxId: string) => void;
 }) {
   const domainScope = `domain:${domain.id}`;
   const domainActive = scope === domainScope;
   const childActive = mailboxes.some(mb => mb.id === scope);
   const totalUnread = mailboxes.reduce((s, mb) => s + (mb.unread_count ?? 0), 0);
+  const domainDrag = useRowDrag("domain", domain.id, onMoveDomain);
 
   if (mailboxes.length === 1) {
+    // Single-mailbox domain: drag/drop is for the *whole entry*, not the
+    // mailbox-within-a-group. We tag the drag with the domain MIME so
+    // top-level rows only swap with other top-level rows (not children
+    // of an expanded group). The mailbox row component itself doesn't
+    // accept drops in this case — the wrapper handles them.
     return (
       <SidebarMailbox
         mb={mailboxes[0]}
         active={scope === mailboxes[0].id}
         collapsed={collapsed}
+        drag={domainDrag}
       />
     );
   }
@@ -385,7 +592,13 @@ function DomainEntry({
           domainActive || childActive
             ? "bg-[var(--color-brand)]/15"
             : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
-        }`}
+        } ${domainDrag.dragClass}`}
+        draggable
+        onDragStart={domainDrag.onDragStart}
+        onDragOver={domainDrag.onDragOver}
+        onDragLeave={domainDrag.onDragLeave}
+        onDrop={domainDrag.onDrop}
+        onDragEnd={domainDrag.onDragEnd}
       >
         <DomainAvatar domain={domain} active={domainActive || childActive} />
         {totalUnread > 0 && (
@@ -407,6 +620,8 @@ function DomainEntry({
       domainActive={domainActive}
       childActive={childActive}
       totalUnread={totalUnread}
+      domainDrag={domainDrag}
+      onMoveMailbox={onMoveMailbox}
     />
   );
 }
@@ -419,6 +634,8 @@ function ExpandableDomainGroup({
   domainActive,
   childActive,
   totalUnread,
+  domainDrag,
+  onMoveMailbox,
 }: {
   domain: DomainRow;
   mailboxes: MailboxRow[];
@@ -427,6 +644,8 @@ function ExpandableDomainGroup({
   domainActive: boolean;
   childActive: boolean;
   totalUnread: number;
+  domainDrag: RowDrag;
+  onMoveMailbox: (fromMailboxId: string, toMailboxId: string) => void;
 }) {
   const storageKey = `${DOMAIN_EXPANDED_PREFIX}${domain.id}`;
   // Default expanded if a child is active (so users can see where they are).
@@ -461,7 +680,15 @@ function ExpandableDomainGroup({
   }
 
   return (
-    <div className="mt-1">
+    <div
+      className={`mt-1 ${domainDrag.dragClass}`}
+      draggable
+      onDragStart={domainDrag.onDragStart}
+      onDragOver={domainDrag.onDragOver}
+      onDragLeave={domainDrag.onDragLeave}
+      onDrop={domainDrag.onDrop}
+      onDragEnd={domainDrag.onDragEnd}
+    >
       <div className="group flex items-stretch">
         <Link
           href={`/inbox/${domainScope}`}
@@ -489,18 +716,37 @@ function ExpandableDomainGroup({
       {expanded && (
         <ul className="mt-0.5 space-y-0.5">
           {mailboxes.map(mb => (
-            <li key={mb.id}>
-              <SidebarMailbox
-                mb={mb}
-                active={scope === mb.id}
-                collapsed={false}
-                indent
-              />
-            </li>
+            <ChildMailboxRow
+              key={mb.id}
+              mb={mb}
+              active={scope === mb.id}
+              onMoveMailbox={onMoveMailbox}
+            />
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+// Wraps SidebarMailbox so each child gets its own `useRowDrag` hook —
+// React requires hooks at a stable position, so we can't call the hook
+// inside the parent's `.map`. The component is intentionally minimal;
+// it exists purely to give each row an independent drag-state slot.
+function ChildMailboxRow({
+  mb,
+  active,
+  onMoveMailbox,
+}: {
+  mb: MailboxRow;
+  active: boolean;
+  onMoveMailbox: (fromMailboxId: string, toMailboxId: string) => void;
+}) {
+  const drag = useRowDrag("mailbox", mb.id, onMoveMailbox);
+  return (
+    <li>
+      <SidebarMailbox mb={mb} active={active} collapsed={false} indent drag={drag} />
+    </li>
   );
 }
 
@@ -509,11 +755,13 @@ function SidebarMailbox({
   active,
   collapsed,
   indent = false,
+  drag,
 }: {
   mb: MailboxRow;
   active: boolean;
   collapsed: boolean;
   indent?: boolean;
+  drag?: RowDrag;
 }) {
   const fullAddress = `${mb.local_part}@${mb.domain_name}`;
   const customName = mb.display_name?.trim();
@@ -547,11 +795,17 @@ function SidebarMailbox({
         title={collapsedTitle}
         aria-label={ariaLabel}
         aria-current={active ? "page" : undefined}
+        draggable={drag ? true : undefined}
+        onDragStart={drag?.onDragStart}
+        onDragOver={drag?.onDragOver}
+        onDragLeave={drag?.onDragLeave}
+        onDrop={drag?.onDrop}
+        onDragEnd={drag?.onDragEnd}
         className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
           active
             ? "bg-[var(--color-brand)]/15"
             : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
-        }`}
+        } ${drag?.dragClass ?? ""}`}
       >
         <MailboxAvatar mb={mb} active={active} />
         {hasUnread && (
@@ -570,13 +824,19 @@ function SidebarMailbox({
       aria-label={ariaLabel}
       aria-current={active ? "page" : undefined}
       title={tooltip}
+      draggable={drag ? true : undefined}
+      onDragStart={drag?.onDragStart}
+      onDragOver={drag?.onDragOver}
+      onDragLeave={drag?.onDragLeave}
+      onDrop={drag?.onDrop}
+      onDragEnd={drag?.onDragEnd}
       className={`flex items-center gap-2 rounded-md py-1.5 text-sm min-w-0 ${
         indent ? "pl-4 pr-2" : "px-2"
       } ${
         active
           ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
           : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-      }`}
+      } ${drag?.dragClass ?? ""}`}
     >
       <MailboxAvatar mb={mb} active={active} />
       <span
