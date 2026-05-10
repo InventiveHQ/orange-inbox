@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { logAudit, mailboxIdForThread, type AuditAction } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { getMailDbForThread } from "@/lib/mail-db";
 import { getThreadDetail } from "@/lib/queries";
@@ -142,6 +143,25 @@ export async function PATCH(
         .run();
     }
 
+    // Audit hook: one entry per state-change in this PATCH. Multiple toggles
+    // in a single request produce multiple audit rows. Wrapped to never throw.
+    try {
+      const mailboxId = await mailboxIdForThread(id);
+      if (mailboxId) {
+        const actions: AuditAction[] = [];
+        if (typeof b.starred === "boolean") actions.push(b.starred ? "star" : "unstar");
+        if (typeof b.archived === "boolean") actions.push(b.archived ? "archive" : "unarchive");
+        if (b.read === false) actions.push("mark_unread");
+        if (typeof b.muted === "boolean") actions.push(b.muted ? "mute" : "unmute");
+        if (typeof b.pinned === "boolean") actions.push(b.pinned ? "pin" : "unpin");
+        for (const action of actions) {
+          await logAudit({ userId: user.id, mailboxId, threadId: id, action });
+        }
+      }
+    } catch (err) {
+      console.error("audit threads PATCH failed", err);
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (e instanceof UnauthenticatedError) {
@@ -167,6 +187,10 @@ export async function DELETE(
     if (!(await userCanAccessThread(user.id, id))) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
+
+    // Capture the mailbox before we delete the threads_index row — afterwards
+    // mailboxIdForThread would return null and the audit entry would be lost.
+    const auditMailboxId = await mailboxIdForThread(id);
 
     const controlDb = getDb();
     const mailDb = await getMailDbForThread(id);
@@ -230,6 +254,19 @@ export async function DELETE(
       controlDb.prepare("DELETE FROM thread_locations WHERE thread_id = ?").bind(id),
       controlDb.prepare("DELETE FROM threads_index WHERE thread_id = ?").bind(id),
     ]);
+
+    if (auditMailboxId) {
+      try {
+        await logAudit({
+          userId: user.id,
+          mailboxId: auditMailboxId,
+          threadId: id,
+          action: "delete",
+        });
+      } catch (err) {
+        console.error("audit threads DELETE failed", err);
+      }
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e) {

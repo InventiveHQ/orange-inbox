@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { logAudit, mailboxIdForThread } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { canApplyLabelToThread } from "@/lib/labels";
 import { getMailDbForThread } from "@/lib/mail-db";
@@ -37,6 +38,21 @@ export async function DELETE(
         .bind(threadId, labelId)
         .run(),
     ]);
+
+    try {
+      const mailboxId = await mailboxIdForThread(threadId);
+      if (mailboxId) {
+        await logAudit({
+          userId: user.id,
+          mailboxId,
+          threadId,
+          action: "label_remove",
+          payload: { label_id: labelId },
+        });
+      }
+    } catch (err) {
+      console.error("audit label remove failed", err);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e) {

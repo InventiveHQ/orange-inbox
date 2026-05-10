@@ -3,8 +3,15 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "./ToastProvider";
+import AssignButton from "./AssignButton";
 import RemindButton from "./RemindButton";
 import UndoToast from "./UndoToast";
+
+interface InitialAssignment {
+  assignee_id: string;
+  assignee_email: string | null;
+  assignee_display_name: string | null;
+}
 
 interface Props {
   threadId: string;
@@ -23,6 +30,13 @@ interface Props {
   // parallel shared-mailbox-assignment work merges cleanly around it.
   initialFollowUpEnabled?: boolean;
   initialFollowUpDays?: number | null;
+  // Mailbox the thread lives on — drives the assignment menu's member fetch.
+  mailboxId: string;
+  // Current user id, needed to render "Claim" vs "Reassign" and to set the
+  // self-claim button's payload.
+  currentUserId: string;
+  // SSR-resolved snapshot of the current assignment. Null when unassigned.
+  initialAssignment: InitialAssignment | null;
 }
 
 // Default day-count surfaced when the user enables nudges on a thread with
@@ -59,6 +73,9 @@ export default function ThreadActions({
   initialRemindAt,
   initialFollowUpEnabled = false,
   initialFollowUpDays = null,
+  mailboxId,
+  currentUserId,
+  initialAssignment,
 }: Props) {
   const router = useRouter();
   const { toast } = useToast();
@@ -337,7 +354,21 @@ export default function ThreadActions({
 
   return (
     <>
-      <div className="flex items-center gap-2">
+      {/*
+        Assignment lives in its own toolbar group so the parallel follow-ups
+        work (issue #26) can drop its Nudge button right next to it without
+        fighting this container for layout. data-toolbar-group is a stable
+        hook for downstream styling / e2e.
+      */}
+      <div className="flex items-center gap-2" data-toolbar-group="assignment-row">
+        <AssignButton
+          threadId={threadId}
+          mailboxId={mailboxId}
+          currentUserId={currentUserId}
+          initialAssignment={initialAssignment}
+        />
+      </div>
+      <div className="flex items-center gap-2" data-toolbar-group="thread-actions">
         {error && <span className="text-xs text-red-600">{error}</span>}
         {isDeletePending ? (
           <span className="text-xs text-neutral-500 italic">Deleting…</span>

@@ -1,6 +1,8 @@
 import { cookies, headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import {
+  countAssignedToUser,
+  listAssignedToUser,
   listDomainsForUser,
   listDueFollowups,
   listMailboxesForUser,
@@ -37,16 +39,27 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, mailboxes, identities, savedSearches, inboxLayouts, cookieStore, headerStore] =
-    await Promise.all([
-      listDomainsForUser(user.id),
-      listMailboxesForUser(user.id),
-      listIdentities(user.id),
-      listSavedSearches(user.id),
-      listInboxLayouts(user.id),
-      cookies(),
-      headers(),
-    ]);
+  const [
+    domains,
+    mailboxes,
+    identities,
+    savedSearches,
+    inboxLayouts,
+    cookieStore,
+    headerStore,
+    assignedCount,
+  ] = await Promise.all([
+    listDomainsForUser(user.id),
+    listMailboxesForUser(user.id),
+    listIdentities(user.id),
+    listSavedSearches(user.id),
+    listInboxLayouts(user.id),
+    cookies(),
+    headers(),
+    // Sidebar badge for "Assigned to me" — keep with the rest of the layout
+    // data fetches so it's a single round-trip from the layout's perspective.
+    countAssignedToUser(user.id),
+  ]);
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
 
   // Auto-categorization tabs (#68). Layouts can't read searchParams in this
@@ -70,6 +83,7 @@ export default async function InboxLayout({
   const SPECIAL_SCOPES = new Set([
     "all",
     "vips",
+    "assigned",
     "drafts",
     "contacts",
     "templates",
@@ -106,6 +120,7 @@ export default async function InboxLayout({
   const isDrafts = effectiveScope === "drafts";
   const isVips = effectiveScope === "vips";
   const isFollowups = effectiveScope === "followups";
+  const isAssigned = effectiveScope === "assigned";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
@@ -128,6 +143,7 @@ export default async function InboxLayout({
     isDrafts ||
     isVips ||
     isFollowups ||
+    isAssigned ||
     isFullPage ||
     isDomainScope ||
     isLayoutScope
@@ -139,9 +155,12 @@ export default async function InboxLayout({
       ? Promise.resolve([])
       : isFollowups
         ? // Follow-ups (issue #26): threads opted into nudges that are now
-          // overdue without a reply. Cross-mailbox by design — same shape as
-          // the VIPs view, no per-mailbox filter.
+          // overdue without a reply. Cross-mailbox by design.
           listDueFollowups(user.id)
+        : isAssigned
+        ? // Assigned-to-me (#27) spans every mailbox the user is a member of,
+          // just like VIPs but filtered on thread_assignments.assignee_id.
+          listAssignedToUser(user.id)
         : isVips
         ? // VIPs view spans every mailbox the user can read — see
           // listVipThreads. Cross-mailbox by design: VIPs are a per-user
@@ -198,6 +217,7 @@ export default async function InboxLayout({
                 savedSearches={savedSearches}
                 inboxLayouts={inboxLayouts}
                 initialSmartOpen={smartMailboxesOpen}
+                assignedCount={assignedCount}
               />
             }
             topBar={<TopBar mailboxes={[]} scope={effectiveScope} />}
@@ -215,7 +235,9 @@ export default async function InboxLayout({
       ? "VIPs"
       : isFollowups
         ? "Follow-ups"
-        : effectiveScope === "all"
+        : isAssigned
+          ? "Assigned to me"
+          : effectiveScope === "all"
           ? "All inboxes"
           : isDomainScope
             ? matchedDomain!.name
@@ -266,6 +288,7 @@ export default async function InboxLayout({
               inboxLayouts={inboxLayouts}
               initialSmartOpen={smartMailboxesOpen}
               initialLayoutsOpen={inboxLayoutsOpen}
+              assignedCount={assignedCount}
             />
           }
           topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}

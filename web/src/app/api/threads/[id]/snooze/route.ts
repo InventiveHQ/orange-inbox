@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { logAudit, mailboxIdForThread } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { userCanAccessThread } from "@/lib/threads-mutate";
 
@@ -33,6 +34,20 @@ export async function POST(
       .prepare("UPDATE threads_index SET snoozed_until = ? WHERE thread_id = ?")
       .bind(until, id)
       .run();
+    try {
+      const mailboxId = await mailboxIdForThread(id);
+      if (mailboxId) {
+        await logAudit({
+          userId: user.id,
+          mailboxId,
+          threadId: id,
+          action: "snooze",
+          payload: { snoozed_until: until },
+        });
+      }
+    } catch (err) {
+      console.error("audit snooze POST failed", err);
+    }
     return NextResponse.json({ ok: true, snoozed_until: until });
   } catch (e) {
     return errorResponse(e);

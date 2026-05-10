@@ -127,6 +127,9 @@ interface Props {
   inboxLayouts?: InboxLayoutRow[];
   initialSmartOpen?: boolean;
   initialLayoutsOpen?: boolean;
+  // "Assigned to me" badge (#27). Optional so existing call sites stay
+  // compatible; defaults to 0 = no badge rendered.
+  assignedCount?: number;
 }
 
 export default function Sidebar({
@@ -139,6 +142,7 @@ export default function Sidebar({
   inboxLayouts = [],
   initialSmartOpen = true,
   initialLayoutsOpen = true,
+  assignedCount = 0,
 }: Props) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [smartOpen, setSmartOpen] = useState(initialSmartOpen);
@@ -336,6 +340,14 @@ export default function Sidebar({
           active={scope === "followups"}
           icon={<FollowUpsIcon />}
           collapsed={collapsed}
+        />
+        <SpecialLink
+          href="/inbox/assigned"
+          label="Assigned to me"
+          active={scope === "assigned"}
+          icon={<AssignedIcon />}
+          collapsed={collapsed}
+          unreadCount={assignedCount}
         />
         <SpecialLink
           href="/inbox/drafts"
@@ -1222,6 +1234,16 @@ function FollowUpsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 1.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Zm.75 2.5a.75.75 0 0 0-1.5 0v3.25c0 .2.08.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94V5Z" />
+    </svg>
+  );
+}
+
+// "Assigned to me" — person-with-check glyph. Matches the geometry of the
+// other 16x16 sidebar icons (filled, currentColor).
+function AssignedIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M6 1.5a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm-4 11c0-2.21 1.79-4 4-4s4 1.79 4 4v.5H2v-.5Zm12.78-5.78a.75.75 0 0 0-1.06-1.06L11 8.44 9.78 7.22a.75.75 0 0 0-1.06 1.06l1.75 1.75a.75.75 0 0 0 1.06 0l3.25-3.31Z" />
     </svg>
   );
 }

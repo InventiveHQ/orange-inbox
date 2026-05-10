@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { logAudit } from "./audit";
 import { getDb, getEnv } from "./db";
 import { htmlToText, looksLikeHtml } from "./html-text";
 import {
@@ -406,6 +407,24 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     await recordSendRecipients(identity.mailbox_id, all);
   } catch (err) {
     console.error("contact auto-add failed", err);
+  }
+
+  // Audit hook for outbound reply (issue #28). Records the send under the
+  // mailbox the message went out on; never throws.
+  try {
+    await logAudit({
+      userId,
+      mailboxId: identity.mailbox_id,
+      threadId,
+      action: "reply",
+      payload: {
+        message_id: messageId,
+        is_new_thread: isNewThread,
+        to_count: input.to.length,
+      },
+    });
+  } catch (err) {
+    console.error("audit reply send failed", err);
   }
 
   return { messageId, threadId };
