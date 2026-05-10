@@ -11,7 +11,7 @@ and want a real inbox UI instead of forwarding everything to a third party.
 
 ## Try it
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/spconroy/orange-inbox)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/InventiveHQ/orange-inbox)
 
 The button forks this repo into your GitHub, creates the D1 / R2 / KV
 resources, and deploys both Workers. Two manual steps remain after that:
