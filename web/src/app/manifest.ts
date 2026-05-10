@@ -10,8 +10,8 @@ type ExtendedManifest = MetadataRoute.Manifest & Record<string, unknown>;
 export default function manifest(): MetadataRoute.Manifest {
   const m: ExtendedManifest = {
     id: "/",
-    name: "orange mail",
-    short_name: "orange",
+    name: "Orange Inbox",
+    short_name: "Orange",
     description: "Gmail-like webmail on Cloudflare",
     categories: ["productivity", "communication"],
     lang: "en",

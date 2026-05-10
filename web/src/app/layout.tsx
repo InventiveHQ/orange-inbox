@@ -15,15 +15,15 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "orange inbox",
+  title: "Orange Inbox",
   description: "Gmail-like webmail on Cloudflare",
-  applicationName: "orange mail",
+  applicationName: "Orange Inbox",
   // manifest link is rendered manually below with crossOrigin="use-credentials"
   // so the browser sends the Cloudflare Access cookie when fetching it.
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "orange mail",
+    title: "Orange Inbox",
   },
   icons: {
     icon: [
