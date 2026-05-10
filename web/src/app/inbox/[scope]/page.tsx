@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { listContactsForUser } from "@/lib/contacts";
 import { listTemplatesForUser } from "@/lib/templates";
@@ -10,6 +11,8 @@ import {
   listVipAddresses,
 } from "@/lib/queries";
 import { listLabelsForUser } from "@/lib/labels";
+import { getInboxLayout, listInboxLayouts } from "@/lib/inbox-layouts";
+import { listSavedSearches } from "@/lib/saved-searches";
 import AliasesManager from "@/components/AliasesManager";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
@@ -18,6 +21,7 @@ import HelpManager from "@/components/HelpManager";
 import StorageManager from "@/components/StorageManager";
 import SubscriptionsList from "@/components/SubscriptionsList";
 import VipsManager from "@/components/VipsManager";
+import MultiInboxLayout from "@/components/MultiInboxLayout";
 
 export default async function InboxIndex({
   params,
@@ -36,6 +40,7 @@ export default async function InboxIndex({
   if (scope === "storage") return <StorageRoute />;
   if (scope === "vips") return <VipsRoute />;
   if (scope === "aliases") return <AliasesRoute />;
+  if (scope.startsWith("layout:")) return <LayoutRoute scope={scope} />;
 
   const message =
     scope === "drafts" ? "Select a draft to edit it." : "Select a thread to read it.";
@@ -44,6 +49,30 @@ export default async function InboxIndex({
       {message}
     </div>
   );
+}
+
+async function LayoutRoute({ scope }: { scope: string }) {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const id = scope.slice("layout:".length);
+  const layout = await getInboxLayout(id, user.id);
+  if (!layout) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-center px-6">
+        <div className="max-w-md">
+          <h1 className="text-base font-semibold mb-2">Layout not found</h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            This layout was deleted or never existed. Try the{" "}
+            <Link href="/inbox/all" className="text-[var(--color-brand)] underline">
+              All inboxes view
+            </Link>
+            .
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return <MultiInboxLayout layout={layout} userId={user.id} />;
 }
 
 async function ContactsRoute({ searchParams }: { searchParams: { mailbox?: string } }) {
@@ -107,12 +136,15 @@ async function SettingsRoute() {
   if (!user) return null;
   // Admins manage every domain and every mailbox; non-admins see only what
   // they have membership in (and the management UI below is hidden anyway).
-  const [domains, labels, manageableIdentities, myIdentities] = await Promise.all([
-    user.is_admin ? listAllDomains() : listDomainsForUser(user.id),
-    listLabelsForUser(user.id),
-    user.is_admin ? listAllIdentities() : listIdentities(user.id),
-    listIdentities(user.id),
-  ]);
+  const [domains, labels, manageableIdentities, myIdentities, layouts, savedSearches] =
+    await Promise.all([
+      user.is_admin ? listAllDomains() : listDomainsForUser(user.id),
+      listLabelsForUser(user.id),
+      user.is_admin ? listAllIdentities() : listIdentities(user.id),
+      listIdentities(user.id),
+      listInboxLayouts(user.id),
+      listSavedSearches(user.id),
+    ]);
   // Signatures are personal-config: any user can edit signatures on mailboxes
   // *they own*, regardless of admin status. Aliases are filtered out here
   // because /api/mailboxes/<id>/signature is the per-mailbox endpoint;
@@ -128,6 +160,8 @@ async function SettingsRoute() {
       ownedIdentities={ownedIdentities}
       isAdmin={user.is_admin}
       initialUndoSendSeconds={user.undo_send_seconds}
+      initialInboxLayouts={layouts}
+      savedSearches={savedSearches}
     />
   );
 }

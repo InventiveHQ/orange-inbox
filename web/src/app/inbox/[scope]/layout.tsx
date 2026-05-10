@@ -11,6 +11,7 @@ import { DEFAULT_QUADRANT, listThreadsForTriage } from "@/lib/triage";
 import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
 import { listSavedSearches } from "@/lib/saved-searches";
+import { listInboxLayouts } from "@/lib/inbox-layouts";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
@@ -34,14 +35,16 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, mailboxes, identities, savedSearches, cookieStore, headerStore] = await Promise.all([
-    listDomainsForUser(user.id),
-    listMailboxesForUser(user.id),
-    listIdentities(user.id),
-    listSavedSearches(user.id),
-    cookies(),
-    headers(),
-  ]);
+  const [domains, mailboxes, identities, savedSearches, inboxLayouts, cookieStore, headerStore] =
+    await Promise.all([
+      listDomainsForUser(user.id),
+      listMailboxesForUser(user.id),
+      listIdentities(user.id),
+      listSavedSearches(user.id),
+      listInboxLayouts(user.id),
+      cookies(),
+      headers(),
+    ]);
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
 
   // Auto-categorization tabs (#68). Layouts can't read searchParams in this
@@ -55,6 +58,8 @@ export default async function InboxLayout({
   // and it's empty for new users so collapsing-by-default would hide the
   // discoverability hint. Toggling writes a cookie that flips the default.
   const smartMailboxesOpen = cookieStore.get("smart-mailboxes-open")?.value !== "0";
+  // Same default-open rationale for the multi-pane Layouts section.
+  const inboxLayoutsOpen = cookieStore.get("inbox-layouts-open")?.value !== "0";
 
   // Validate the scope: "all", "vips", "drafts", "contacts", "templates",
   // "subscriptions", "settings", "help", "storage", "aliases", or a mailbox
@@ -73,19 +78,31 @@ export default async function InboxLayout({
     "aliases",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
-  // a given domain — picked up below in the listThreads filter.
+  // a given domain — picked up below in the listThreads filter. `layout:<id>`
+  // is a multi-pane split view rendered by MultiInboxLayout (see below).
+  // Each prefix is checked at scope-validation time so they coexist without
+  // bleed between features.
   const domainScopeId = scope.startsWith("domain:") ? scope.slice("domain:".length) : null;
   const matchedDomain = domainScopeId ? domains.find(d => d.id === domainScopeId) ?? null : null;
+  const layoutScopeId = scope.startsWith("layout:") ? scope.slice("layout:".length) : null;
+  const matchedLayout = layoutScopeId
+    ? inboxLayouts.find(l => l.id === layoutScopeId) ?? null
+    : null;
   const isValidScope =
     SPECIAL_SCOPES.has(scope) ||
     mailboxes.some(mb => mb.id === scope) ||
-    matchedDomain !== null;
+    matchedDomain !== null ||
+    matchedLayout !== null;
   const effectiveScope = isValidScope ? scope : "all";
 
   const isDrafts = effectiveScope === "drafts";
   const isVips = effectiveScope === "vips";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
+  const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
+  // `layout:<id>` is treated as full-page too: the multi-pane MultiInboxLayout
+  // *is* the main column, and children (thread reader) takes over once a row
+  // is clicked into a /<threadId> URL.
   const isFullPage =
     effectiveScope === "contacts" ||
     effectiveScope === "templates" ||
@@ -93,9 +110,15 @@ export default async function InboxLayout({
     effectiveScope === "settings" ||
     effectiveScope === "help" ||
     effectiveScope === "storage" ||
-    effectiveScope === "aliases";
+    effectiveScope === "aliases" ||
+    isLayoutScope;
   const mailboxId =
-    effectiveScope === "all" || isDrafts || isVips || isFullPage || isDomainScope
+    effectiveScope === "all" ||
+    isDrafts ||
+    isVips ||
+    isFullPage ||
+    isDomainScope ||
+    isLayoutScope
       ? undefined
       : effectiveScope;
 
@@ -154,6 +177,7 @@ export default async function InboxLayout({
                 initialCollapsed={sidebarCollapsed}
                 isAdmin={user.is_admin}
                 savedSearches={savedSearches}
+                inboxLayouts={inboxLayouts}
                 initialSmartOpen={smartMailboxesOpen}
               />
             }
@@ -218,7 +242,9 @@ export default async function InboxLayout({
               initialCollapsed={sidebarCollapsed}
               isAdmin={user.is_admin}
               savedSearches={savedSearches}
+              inboxLayouts={inboxLayouts}
               initialSmartOpen={smartMailboxesOpen}
+              initialLayoutsOpen={inboxLayoutsOpen}
             />
           }
           topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}

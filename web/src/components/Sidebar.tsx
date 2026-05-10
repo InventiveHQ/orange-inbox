@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
 import type { SavedSearchRow } from "@/lib/saved-searches";
+import type { InboxLayoutRow } from "@/lib/inbox-layouts";
 import Avatar from "./Avatar";
 import ComposeButton from "./ComposeButton";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
 const SMART_MAILBOXES_COOKIE = "smart-mailboxes-open";
+const LAYOUTS_OPEN_COOKIE = "inbox-layouts-open";
 const DOMAIN_EXPANDED_PREFIX = "sidebar-domain-expanded:";
 
 interface Props {
@@ -18,7 +20,9 @@ interface Props {
   initialCollapsed?: boolean;
   isAdmin: boolean;
   savedSearches?: SavedSearchRow[];
+  inboxLayouts?: InboxLayoutRow[];
   initialSmartOpen?: boolean;
+  initialLayoutsOpen?: boolean;
 }
 
 export default function Sidebar({
@@ -28,15 +32,27 @@ export default function Sidebar({
   initialCollapsed = false,
   isAdmin,
   savedSearches = [],
+  inboxLayouts = [],
   initialSmartOpen = true,
+  initialLayoutsOpen = true,
 }: Props) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [smartOpen, setSmartOpen] = useState(initialSmartOpen);
+  // Layouts section open/closed pref. Same cookie-driven SSR hydration as
+  // the Smart Mailboxes section above; default open so empty-state
+  // discoverability isn't hidden behind a chevron click for new users.
+  const [layoutsOpen, setLayoutsOpen] = useState(initialLayoutsOpen);
 
   function toggleSmart() {
     const next = !smartOpen;
     setSmartOpen(next);
     document.cookie = `${SMART_MAILBOXES_COOKIE}=${next ? "1" : "0"};path=/;max-age=31536000;samesite=lax`;
+  }
+
+  function toggleLayouts() {
+    const next = !layoutsOpen;
+    setLayoutsOpen(next);
+    document.cookie = `${LAYOUTS_OPEN_COOKIE}=${next ? "1" : "0"};path=/;max-age=31536000;samesite=lax`;
   }
 
   function toggle() {
@@ -178,6 +194,14 @@ export default function Sidebar({
             collapsed={collapsed}
           />
         ))}
+
+        <Layouts
+          collapsed={collapsed}
+          open={layoutsOpen}
+          onToggle={toggleLayouts}
+          inboxLayouts={inboxLayouts}
+          scope={scope}
+        />
 
         <SmartMailboxes
           collapsed={collapsed}
@@ -619,6 +643,115 @@ function DomainAvatar({ domain, active = false }: { domain: DomainRow; active?: 
 // /search?q=<encoded>. Hidden from the collapsed-rail layout because there's
 // nothing meaningful to render in a 14px column for free-form names; users
 // who rely on saved searches will keep the sidebar expanded.
+// Multi-pane Inbox Layouts — like Smart Mailboxes but each entry routes to
+// /inbox/layout:<id>, where MultiInboxLayout fans out the saved panes
+// side-by-side. Empty state nudges the user to Settings to assemble one.
+// Hidden in the collapsed rail for the same reason saved searches are: the
+// names are free-form and don't fit a 14px column.
+function Layouts({
+  collapsed,
+  open,
+  onToggle,
+  inboxLayouts,
+  scope,
+}: {
+  collapsed: boolean;
+  open: boolean;
+  onToggle: () => void;
+  inboxLayouts: InboxLayoutRow[];
+  scope: string;
+}) {
+  if (collapsed) return null;
+
+  return (
+    <div className="mt-4">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1 px-3 pb-1 text-xs uppercase tracking-wider text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+      >
+        <ChevronTwistyIcon open={open} />
+        <span className="truncate">Layouts</span>
+      </button>
+      {open && (
+        <>
+          {inboxLayouts.length === 0 ? (
+            <Link
+              href="/inbox/settings"
+              className="block px-3 py-1 text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+            >
+              Create a layout in Settings →
+            </Link>
+          ) : (
+            <>
+              {inboxLayouts.map(l => (
+                <LayoutLink
+                  key={l.id}
+                  layout={l}
+                  active={scope === `layout:${l.id}`}
+                />
+              ))}
+              <Link
+                href="/inbox/settings"
+                className="block px-3 py-1 text-[11px] text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+              >
+                + Create layout
+              </Link>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LayoutLink({ layout, active }: { layout: InboxLayoutRow; active: boolean }) {
+  return (
+    <Link
+      href={`/inbox/layout:${layout.id}`}
+      title={
+        layout.is_default
+          ? `${layout.name} (default)`
+          : layout.name
+      }
+      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
+        active
+          ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
+          : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+      }`}
+    >
+      <LayoutIcon />
+      <span className="truncate flex-1">{layout.name}</span>
+      {layout.is_default && (
+        <span
+          aria-hidden
+          title="Default layout"
+          className="shrink-0 text-[9px] uppercase tracking-wider text-neutral-500"
+        >
+          ★
+        </span>
+      )}
+    </Link>
+  );
+}
+
+function LayoutIcon() {
+  // Two-column rectangle, signalling "split view".
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+      className="text-neutral-500"
+    >
+      <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h3A1.5 1.5 0 0 1 8 3.5v9A1.5 1.5 0 0 1 6.5 14h-3A1.5 1.5 0 0 1 2 12.5v-9Zm7 0A1.5 1.5 0 0 1 10.5 2h2A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-2A1.5 1.5 0 0 1 9 12.5v-9Z" />
+    </svg>
+  );
+}
+
 function SmartMailboxes({
   collapsed,
   open,
