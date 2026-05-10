@@ -864,6 +864,8 @@ function MailDomainsSection({
 function AddDomainForm() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [createCatchAll, setCreateCatchAll] = useState(true);
+  const [localPart, setLocalPart] = useState("hello");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -874,11 +876,20 @@ function AddDomainForm() {
       setError("Enter a domain");
       return;
     }
+    const trimmedLocal = localPart.trim().toLowerCase();
+    if (createCatchAll && !/^[a-z0-9][a-z0-9._+-]{0,63}$/.test(trimmedLocal)) {
+      setError("Local part must be alphanumeric (letters, digits, . _ + -)");
+      return;
+    }
     startTransition(async () => {
       const res = await fetch("/api/domains", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({
+          name: trimmed,
+          create_catch_all: createCatchAll,
+          default_local_part: createCatchAll ? trimmedLocal : undefined,
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -886,9 +897,14 @@ function AddDomainForm() {
         return;
       }
       setName("");
+      setCreateCatchAll(true);
+      setLocalPart("hello");
       router.refresh();
     });
   }
+
+  const previewName = name.trim().toLowerCase() || "example.com";
+  const previewLocal = localPart.trim().toLowerCase() || "hello";
 
   return (
     <div className="space-y-2">
@@ -912,6 +928,33 @@ function AddDomainForm() {
           {isPending ? "Adding…" : "Add domain"}
         </button>
       </div>
+      <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300">
+        <input
+          type="checkbox"
+          checked={createCatchAll}
+          onChange={e => setCreateCatchAll(e.target.checked)}
+        />
+        <span>Create catch-all mailbox</span>
+      </label>
+      {createCatchAll && (
+        <div className="flex items-center gap-2 text-xs">
+          <label htmlFor="catch-all-local" className="shrink-0 text-neutral-600 dark:text-neutral-400">
+            Local part
+          </label>
+          <input
+            id="catch-all-local"
+            type="text"
+            placeholder="hello"
+            value={localPart}
+            onChange={e => setLocalPart(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") submit();
+            }}
+            className="w-32 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 font-mono focus:border-[var(--color-brand)] focus:outline-none"
+          />
+          <span className="text-neutral-500 truncate">→ {previewLocal}@{previewName}</span>
+        </div>
+      )}
       {error && <div className="text-xs text-red-600">{error}</div>}
     </div>
   );
