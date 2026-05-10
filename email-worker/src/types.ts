@@ -39,4 +39,7 @@ export interface ParsedAttachment {
   disposition: "attachment" | "inline" | null;
   contentId?: string;
   bytes: ArrayBuffer;
+  // Tagged at parse time via attachment-safety.ts. The web UI uses this to
+  // render a warning badge and gate the download behind an explicit confirm.
+  isExecutable: boolean;
 }

@@ -72,7 +72,8 @@ CREATE TABLE attachments (
   content_type  TEXT,
   size          INTEGER NOT NULL,
   inline_cid    TEXT,
-  r2_key        TEXT NOT NULL
+  r2_key        TEXT NOT NULL,
+  is_executable INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX attachments_message ON attachments(message_id);
 
