@@ -55,12 +55,15 @@ CREATE TABLE messages (
   text_body          TEXT,
   read               INTEGER NOT NULL DEFAULT 0,
   starred            INTEGER NOT NULL DEFAULT 0,
-  sent_by_user_id    TEXT
+  sent_by_user_id    TEXT,
+  spam_reported_by_user_id TEXT
 );
 CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
 CREATE INDEX        messages_thread_date   ON messages(thread_id, date);
 CREATE INDEX        messages_mailbox_date  ON messages(mailbox_id, date DESC);
 CREATE INDEX messages_sent_by ON messages(sent_by_user_id) WHERE sent_by_user_id IS NOT NULL;
+CREATE INDEX messages_spam_reported ON messages(spam_reported_by_user_id)
+  WHERE spam_reported_by_user_id IS NOT NULL;
 
 CREATE TABLE attachments (
   id            TEXT PRIMARY KEY,

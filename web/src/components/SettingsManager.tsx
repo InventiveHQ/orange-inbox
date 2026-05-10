@@ -52,6 +52,7 @@ export default function SettingsManager({
       ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
       ...(hasOwnedMailboxes ? [{ id: "signatures", label: "Signatures" }] : []),
       { id: "labels", label: "Labels" },
+      { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
       { id: "about", label: "About" },
@@ -95,6 +96,7 @@ export default function SettingsManager({
               <SignaturesSection id="signatures" identities={ownedIdentities} />
             )}
             <LabelsSection id="labels" initialLabels={initialLabels} />
+            <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
             <AboutSection id="about" />
@@ -880,6 +882,102 @@ function LabelsSection({ id, initialLabels }: { id: string; initialLabels: Label
             </button>
           </div>
         </div>
+      </div>
+      {actionError && <div className="mt-2 text-xs text-red-600">{actionError}</div>}
+    </section>
+  );
+}
+
+interface BlockedSenderRow {
+  mailbox_id: string;
+  addr: string;
+  blocked_at: number;
+  mailbox_label: string;
+}
+
+function BlockedSendersSection({ id }: { id: string }) {
+  const [rows, setRows] = useState<BlockedSenderRow[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch("/api/blocked-senders");
+      if (cancelled) return;
+      if (!res.ok) {
+        setLoadError(`Failed to load (${res.status})`);
+        return;
+      }
+      const j = (await res.json()) as { blocked_senders: BlockedSenderRow[] };
+      if (!cancelled) setRows(j.blocked_senders);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function unblock(mailboxId: string, addr: string) {
+    setActionError(null);
+    startTransition(async () => {
+      const res = await fetch("/api/blocked-senders", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mailbox_id: mailboxId, addr }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setActionError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      setRows(prev =>
+        prev ? prev.filter(r => !(r.mailbox_id === mailboxId && r.addr === addr)) : prev,
+      );
+    });
+  }
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Blocked senders"
+        description="Mail from these addresses lands archived from the start. Unblock to restore normal delivery — past messages stay where they are."
+      />
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+        {loadError && <div className="px-4 py-3 text-sm text-red-600">{loadError}</div>}
+        {!loadError && rows === null && (
+          <div className="px-4 py-8 text-sm text-neutral-500 text-center">Loading…</div>
+        )}
+        {rows && rows.length === 0 && (
+          <div className="px-4 py-8 text-sm text-neutral-500 text-center">
+            Nobody&apos;s blocked. Add someone via the message menu (•••) on a thread.
+          </div>
+        )}
+        {rows && rows.length > 0 && (
+          <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {rows.map(r => (
+              <li
+                key={`${r.mailbox_id}:${r.addr}`}
+                className="flex items-center justify-between gap-3 px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-mono truncate">{r.addr}</div>
+                  <div className="text-[11px] text-neutral-500 truncate">
+                    blocking on {r.mailbox_label}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => unblock(r.mailbox_id, r.addr)}
+                  disabled={isPending}
+                  className="shrink-0 text-xs text-neutral-600 hover:underline disabled:opacity-50 dark:text-neutral-400"
+                >
+                  Unblock
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       {actionError && <div className="mt-2 text-xs text-red-600">{actionError}</div>}
     </section>
