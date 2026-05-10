@@ -2,14 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { type CalendarEvent, type CalendarSummary } from "./CalendarManager";
+import {
+  ALL_WEEKDAYS,
+  type CustomRRuleState,
+  type RRuleByday,
+  buildRRule,
+  formatUntilDate,
+  parseRRule,
+  untilToDateInput,
+} from "@/lib/rrule-parse";
 
 // Create / edit modal for self events. Invites are read-only — for those
 // this form renders a "View original message" link plus the readonly fields
 // and no save button (the API route enforces 403 either way).
 //
 // Heavy file: owns the Repeats dropdown (#80), tz picker (#82), attendee
-// chips (#81), and inline conflict banner (#86). Each block is gated by
-// `isInvite` so invite-mode stays the simple read-only experience.
+// chips (#81), inline conflict banner (#86), reminder chips (#91),
+// "edit this/and-following/all" picker (#92), and the Custom RRULE
+// editor (#95). Each block is gated by `isInvite` so invite-mode stays
+// the simple read-only experience.
 
 interface Props {
   event: CalendarEvent | null; // null = create new
@@ -28,6 +39,15 @@ interface Props {
   // events in Personal; a mailbox id places them on that mailbox's
   // calendar. Edit mode falls back to the existing row's mailbox_id.
   defaultCalendarId?: string;
+  // The seed start time of the specific instance being edited (#92).
+  // Set this when the user clicked a single occurrence of a recurring
+  // series — the "Save mode" picker will offer "this only / this and
+  // following / all" and route the save accordingly. Undefined falls
+  // back to the legacy whole-series PATCH path (the picker is hidden).
+  // Wiring from the grid → form is a follow-up: CalendarManager is owned
+  // by the grid agent and isn't passing this prop yet, so the picker
+  // currently shows only when a future caller provides it.
+  occurrenceStartsAt?: number;
   onClose: () => void;
   onSaved: () => void;
   onDeleted: () => void;
@@ -45,20 +65,52 @@ interface Conflict {
 }
 
 // Repeats dropdown values. The form maps these → RFC 5545 RRULE strings
-// at submit time. v1 is a constrained list; "Custom" is a future TODO.
-type RepeatPreset = "NONE" | "DAILY" | "WEEKLY" | "MONTHLY_DAY" | "YEARLY";
+// at submit time. "CUSTOM" routes through the inline rrule-parse editor;
+// every other preset is a one-line emit at save.
+type RepeatPreset =
+  | "NONE"
+  | "DAILY"
+  | "WEEKLY"
+  | "MONTHLY_DAY"
+  | "YEARLY"
+  | "CUSTOM";
+
+// Save-mode for recurring-event edits (#92). Hidden when the event has no
+// rrule. "all" = master PATCH (existing path); "this" = single override;
+// "following" = split-and-rebrand the rest of the series.
+type SaveScope = "this" | "following" | "all";
+
+// Reminder chip presets (#91 spec). "Custom" prompts for an integer.
+const REMINDER_PRESETS: Array<{ minutes: number; label: string }> = [
+  { minutes: 5, label: "5 minutes before" },
+  { minutes: 10, label: "10 minutes before" },
+  { minutes: 15, label: "15 minutes before" },
+  { minutes: 30, label: "30 minutes before" },
+  { minutes: 60, label: "1 hour before" },
+  { minutes: 120, label: "2 hours before" },
+  { minutes: 1440, label: "1 day before" },
+];
+
+// Cap on chip count — matches the API guard in [id]/reminders/route.ts.
+const MAX_REMINDER_CHIPS = 5;
 
 export default function CalendarEventForm({
   event,
   defaults,
   calendars = [],
   defaultCalendarId = "personal",
+  occurrenceStartsAt,
   onClose,
   onSaved,
   onDeleted,
 }: Props) {
   const isEdit = event !== null;
   const isInvite = event?.source && event.source !== "self";
+  const isRecurring = !!event?.rrule;
+  // Show the save-mode picker only when (a) editing a recurring event and
+  // (b) we know which instance the user opened. Without (b) we default to
+  // whole-series semantics — that's the legacy behaviour pre-#92.
+  const canSplit = isEdit && isRecurring && typeof occurrenceStartsAt === "number";
 
   const initialStartSec = event?.starts_at ?? defaults?.startsAt ?? defaultStartSeconds();
   const initialEndSec =
@@ -81,11 +133,24 @@ export default function CalendarEventForm({
     initialEndSec != null ? toLocalInput(initialEndSec) : "",
   );
 
-  // Repeats (#80). On edit, derive a preset back from the stored RRULE
-  // when it's one of our known shapes; anything else falls back to NONE
-  // and the existing rule is preserved on save (we don't blow it away).
+  // Repeats (#80 + #95). On edit, derive a preset back from the stored
+  // RRULE when it's one of our known shapes; anything else falls back to
+  // CUSTOM with the inline editor pre-populated to the parsed state, so
+  // round-trip works for arbitrary RRULEs.
   const initialRepeats = inferRepeatPreset(event?.rrule ?? null);
   const [repeats, setRepeats] = useState<RepeatPreset>(initialRepeats);
+  const initialCustomState = useMemo(
+    () =>
+      parseRRule(
+        event?.rrule ?? null,
+        new Date((event?.starts_at ?? initialStartSec) * 1000),
+      ),
+    // Run once on mount; subsequent rrule changes go through the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [customRRule, setCustomRRule] =
+    useState<CustomRRuleState>(initialCustomState);
 
   // Time zone (#82). Default order: row.tz → user default_tz → device tz.
   // The user-default is fetched on mount; the device fallback is what
@@ -98,6 +163,18 @@ export default function CalendarEventForm({
   // PUT on save.
   const [attendees, setAttendees] = useState<AttendeeDraft[]>([]);
   const [attendeeInput, setAttendeeInput] = useState("");
+
+  // Reminders (#91). On edit, GET the current set once; create mode
+  // starts empty (the row gets a default 10-minute reminder seeded by
+  // createSelfEvent server-side, but the form will display whatever the
+  // server returns on first edit so the user sees what's set). The PUT
+  // ships on save AFTER the event row write returns ok.
+  const [reminders, setReminders] = useState<number[]>([]);
+  const [showReminderPicker, setShowReminderPicker] = useState(false);
+
+  // Save-mode (#92). Defaults to "all" so the picker is a no-op when
+  // hidden; rendering only flips the value when the user chooses.
+  const [saveScope, setSaveScope] = useState<SaveScope>(canSplit ? "this" : "all");
 
   // Conflict banner (#86). Runs a debounced freebusy fetch as start/end
   // change. Skips itself in edit mode via the `exclude` parameter so the
@@ -172,6 +249,30 @@ export default function CalendarEventForm({
     };
   }, [isEdit, event]);
 
+  // Edit-mode: pull the existing reminder offsets once (#91).
+  useEffect(() => {
+    if (!isEdit || !event) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/calendar/events/${event.id}/reminders`);
+        if (!res.ok) return;
+        const j = (await res.json().catch(() => ({}))) as {
+          minutes_before?: number[];
+        };
+        if (!cancelled && Array.isArray(j.minutes_before)) {
+          setReminders(j.minutes_before);
+        }
+      } catch {
+        // Soft-fail — the form still saves; on next open the chips will
+        // populate once the network settles.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, event]);
+
   // Conflict scan: hits /api/calendar/freebusy whenever the chosen window
   // changes. Debounced so each keystroke in the datetime input doesn't
   // fire a request. Skipped in invite mode (read-only).
@@ -225,6 +326,37 @@ export default function CalendarEventForm({
     setAttendees(prev => prev.filter(a => a.email !== email));
   }
 
+  function addReminder(minutes: number) {
+    if (!Number.isFinite(minutes) || minutes < 0) return;
+    if (minutes > 60 * 24 * 7) return; // 1 week cap mirrors the lib
+    if (reminders.includes(minutes)) {
+      setShowReminderPicker(false);
+      return;
+    }
+    if (reminders.length >= MAX_REMINDER_CHIPS) {
+      setError(`At most ${MAX_REMINDER_CHIPS} reminders per event.`);
+      return;
+    }
+    setReminders(prev => [...prev, minutes].sort((a, b) => a - b));
+    setShowReminderPicker(false);
+    setError(null);
+  }
+
+  function removeReminder(minutes: number) {
+    setReminders(prev => prev.filter(m => m !== minutes));
+  }
+
+  function promptCustomReminder() {
+    const raw = window.prompt("Minutes before the event (0–10080):");
+    if (raw == null) return;
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 0 || n > 10080) {
+      setError("Reminder must be between 0 and 10080 minutes.");
+      return;
+    }
+    addReminder(n);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (isInvite) return; // shouldn't fire; submit button is hidden
@@ -251,9 +383,133 @@ export default function CalendarEventForm({
     // Map the Repeats preset onto an RRULE string. WEEKLY uses BYDAY=
     // for the seed weekday. MONTHLY_DAY uses BYMONTHDAY= for the seed
     // day-of-month. NONE → null (and on edit, we still send `null`
-    // so the row's existing rule clears).
+    // so the row's existing rule clears). CUSTOM serialises the inline
+    // editor's state via buildRRule.
     const seedDate = new Date(startSec * 1000);
-    const rrule = buildRRuleFromPreset(repeats, seedDate);
+    let rrule: string | null;
+    if (repeats === "CUSTOM") {
+      // Validate what the editor can validate: BYDAY non-empty for
+      // WEEKLY, COUNT > 0 already enforced by the input min, UNTIL
+      // after start.
+      if (
+        customRRule.freq === "WEEKLY" &&
+        customRRule.byday.length === 0
+      ) {
+        setError("Pick at least one weekday for the custom recurrence.");
+        return;
+      }
+      if (customRRule.ends.kind === "until") {
+        const until = customRRule.ends.until;
+        const m = /^(\d{4})(\d{2})(\d{2})/.exec(until);
+        if (m) {
+          const untilSec = Date.UTC(+m[1], +m[2] - 1, +m[3], 23, 59, 59) / 1000;
+          if (untilSec <= startSec) {
+            setError("Custom recurrence end date must be after the start.");
+            return;
+          }
+        }
+      }
+      rrule = buildRRule(customRRule);
+    } else {
+      rrule = buildRRuleFromPreset(repeats, seedDate);
+    }
+
+    // Recurring-edit branch (#92). When the user picked "Edit this only"
+    // or "Edit this and following", we route through the dedicated APIs
+    // instead of the master PATCH. "all" + create both fall through to
+    // the legacy path below.
+    if (canSplit && saveScope !== "all" && event && typeof occurrenceStartsAt === "number") {
+      startTransition(async () => {
+        if (saveScope === "this") {
+          // Single-instance override. Only the durable fields the override
+          // table knows how to carry land here — starts/ends/summary/cancel.
+          // location/description/tz/rrule changes don't fit the override
+          // shape, so the form ignores them in this scope. (UX-wise, the
+          // user can fall through to "Edit all" if they need those.)
+          const res = await fetch(
+            `/api/calendar/events/${event.id}/overrides`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                original_starts_at: occurrenceStartsAt,
+                patch: {
+                  starts_at: startSec,
+                  ends_at: endSec,
+                  summary: summary.trim(),
+                },
+              }),
+            },
+          );
+          if (!res.ok) {
+            const j = (await res.json().catch(() => ({}))) as {
+              error?: string;
+              message?: string;
+            };
+            setError(j.message || j.error || `Failed (${res.status})`);
+            return;
+          }
+          onSaved();
+          return;
+        }
+        // "Edit this and following" — split the series.
+        const res = await fetch(`/api/calendar/events/${event.id}/split`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            occurrence_starts_at: occurrenceStartsAt,
+            patch: {
+              summary: summary.trim(),
+              starts_at: startSec,
+              ends_at: endSec,
+              all_day: allDay,
+              location: location.trim() || null,
+              description: description.trim() || null,
+              tz: tz || null,
+            },
+          }),
+        });
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+          event_id?: string;
+        };
+        if (!res.ok) {
+          setError(j.message || j.error || `Failed (${res.status})`);
+          return;
+        }
+        // Mirror reminders + attendees onto the new event id when the
+        // form's local state diverges from what splitRecurrenceAt copied
+        // off the master. The split server-side already mirrors both,
+        // but we PUT here to honour any chip churn the user did before
+        // saving.
+        const newId = j.event_id;
+        if (newId) {
+          try {
+            await fetch(`/api/calendar/events/${newId}/reminders`, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ minutes_before: reminders }),
+            });
+          } catch {
+            // Soft-fail; reminders saved on master copy already mirror.
+          }
+          if (calendarId !== "personal" && attendees.length > 0) {
+            try {
+              await fetch(`/api/calendar/events/${newId}/attendees`, {
+                method: "PUT",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ attendees }),
+              });
+            } catch {
+              // Soft-fail.
+            }
+          }
+        }
+        onSaved();
+      });
+      return;
+    }
 
     const baseBody = {
       summary: summary.trim(),
@@ -325,6 +581,23 @@ export default function CalendarEventForm({
         } catch {
           // Soft-fail; the event saves either way and the user can
           // re-open and try again.
+        }
+      }
+
+      // Push the reminder set (#91). We always fire on edit so a removed
+      // chip clears the row; on create we fire only when the user
+      // touched the list — leaving it alone keeps the createSelfEvent
+      // server-side default (10-minute reminder) in place rather than
+      // overwriting it with an empty PUT.
+      if (isEdit || reminders.length > 0) {
+        try {
+          await fetch(`/api/calendar/events/${eventId}/reminders`, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ minutes_before: reminders }),
+          });
+        } catch {
+          // Soft-fail; the event saves either way.
         }
       }
 
@@ -491,30 +764,84 @@ export default function CalendarEventForm({
             </label>
           )}
 
-          {/* Repeats (#80). Hidden for invites and override-only edits
-              (we don't model "Edit this and following" yet — see #80
-              "v1 = edit-this-only + edit-all"). */}
+          {/* Repeats (#80 + #95). Hidden for invites. "Custom…" reveals
+              an inline editor whose state round-trips through
+              parseRRule/buildRRule so saved custom shapes re-populate
+              on edit. */}
           {!isInvite && (
-            <label className="block">
-              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                Repeats
-              </span>
-              <select
-                value={repeats}
-                onChange={e => setRepeats(e.target.value as RepeatPreset)}
-                className="mt-1 block w-full rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-2 py-1 text-sm"
-              >
-                <option value="NONE">Does not repeat</option>
-                <option value="DAILY">Daily</option>
-                <option value="WEEKLY">
-                  Weekly on {weekdayName(parseLocalInput(startsAt))}
-                </option>
-                <option value="MONTHLY_DAY">
-                  Monthly on day {monthDayLabel(parseLocalInput(startsAt))}
-                </option>
-                <option value="YEARLY">Annually</option>
-              </select>
-            </label>
+            <div className="space-y-2">
+              <label className="block">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Repeats
+                </span>
+                <select
+                  value={repeats}
+                  onChange={e => setRepeats(e.target.value as RepeatPreset)}
+                  className="mt-1 block w-full rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-2 py-1 text-sm"
+                >
+                  <option value="NONE">Does not repeat</option>
+                  <option value="DAILY">Daily</option>
+                  <option value="WEEKLY">
+                    Weekly on {weekdayName(parseLocalInput(startsAt))}
+                  </option>
+                  <option value="MONTHLY_DAY">
+                    Monthly on day {monthDayLabel(parseLocalInput(startsAt))}
+                  </option>
+                  <option value="YEARLY">Annually</option>
+                  <option value="CUSTOM">Custom…</option>
+                </select>
+              </label>
+              {repeats === "CUSTOM" && (
+                <CustomRRuleEditor
+                  value={customRRule}
+                  onChange={setCustomRRule}
+                  startSec={parseLocalInput(startsAt)}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Save-mode picker (#92). Visible only when editing one
+              instance of a recurring series. The default is "this only"
+              — Google's behaviour. */}
+          {canSplit && (
+            <fieldset className="rounded-md border border-neutral-200 dark:border-neutral-800 px-2 py-1.5">
+              <legend className="px-1 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                Apply changes to
+              </legend>
+              <div className="flex flex-col gap-1 mt-1">
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name="save-scope"
+                    value="this"
+                    checked={saveScope === "this"}
+                    onChange={() => setSaveScope("this")}
+                  />
+                  This event only
+                </label>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name="save-scope"
+                    value="following"
+                    checked={saveScope === "following"}
+                    onChange={() => setSaveScope("following")}
+                  />
+                  This and following events
+                </label>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="radio"
+                    name="save-scope"
+                    value="all"
+                    checked={saveScope === "all"}
+                    onChange={() => setSaveScope("all")}
+                  />
+                  All events in the series
+                </label>
+              </div>
+            </fieldset>
           )}
 
           <label className="block">
@@ -544,6 +871,68 @@ export default function CalendarEventForm({
               placeholder="Notes for yourself."
             />
           </label>
+
+          {/* Reminders (#91). Hidden for invites — invite-source rows
+              don't carry user-side reminder rows (reminders are
+              dispatched via push to the calendar owner, who is the
+              meeting organizer for invite rows). The picker appears
+              inline below the chips. */}
+          {!isInvite && (
+            <div>
+              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                Reminders
+              </span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {reminders.map(m => (
+                  <span
+                    key={m}
+                    className="inline-flex items-center gap-1 rounded-full bg-neutral-100 dark:bg-neutral-900 px-2 py-0.5 text-xs"
+                  >
+                    {humanReminderLabel(m)}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${humanReminderLabel(m)} reminder`}
+                      onClick={() => removeReminder(m)}
+                      className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {reminders.length < MAX_REMINDER_CHIPS && (
+                  <button
+                    type="button"
+                    onClick={() => setShowReminderPicker(s => !s)}
+                    className="inline-flex items-center gap-1 rounded-full border border-dashed border-neutral-300 dark:border-neutral-700 px-2 py-0.5 text-xs text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                  >
+                    + Add
+                  </button>
+                )}
+              </div>
+              {showReminderPicker && (
+                <div className="mt-1 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 p-1 flex flex-wrap gap-1">
+                  {REMINDER_PRESETS.map(p => (
+                    <button
+                      key={p.minutes}
+                      type="button"
+                      disabled={reminders.includes(p.minutes)}
+                      onClick={() => addReminder(p.minutes)}
+                      className="rounded-md px-2 py-0.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-40"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={promptCustomReminder}
+                    className="rounded-md px-2 py-0.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  >
+                    Custom…
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Attendees (#81). Hidden for invites (read-only) and
               when no calendar is selected besides Personal — Personal
@@ -654,6 +1043,290 @@ export default function CalendarEventForm({
     </div>
   );
 }
+
+// Inline editor for a custom RRULE (#95). Renders four sub-fields:
+// Frequency / Interval / (BYDAY|BYMONTHDAY) / Ends. State lives in the
+// parent so save can read it directly.
+function CustomRRuleEditor({
+  value,
+  onChange,
+  startSec,
+}: {
+  value: CustomRRuleState;
+  onChange: (next: CustomRRuleState) => void;
+  startSec: number | null;
+}) {
+  function patch(p: Partial<CustomRRuleState>) {
+    onChange({ ...value, ...p });
+  }
+
+  function toggleByday(d: RRuleByday) {
+    const has = value.byday.includes(d);
+    const next = has
+      ? value.byday.filter(x => x !== d)
+      : [...value.byday, d];
+    patch({ byday: next });
+  }
+
+  // The interval's noun changes per FREQ. "every 2 days" / "every 3 weeks".
+  const intervalNoun =
+    value.freq === "DAILY"
+      ? "day"
+      : value.freq === "WEEKLY"
+        ? "week"
+        : value.freq === "MONTHLY"
+          ? "month"
+          : "year";
+
+  return (
+    <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/40 p-2 space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+            Frequency
+          </span>
+          <select
+            value={value.freq}
+            onChange={e =>
+              patch({
+                freq: e.target.value as CustomRRuleState["freq"],
+              })
+            }
+            className="mt-1 block w-full rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-2 py-1 text-xs"
+          >
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+            <option value="MONTHLY">Monthly</option>
+            <option value="YEARLY">Yearly</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+            Every
+          </span>
+          <div className="mt-1 flex items-center gap-1">
+            <input
+              type="number"
+              min={1}
+              max={99}
+              value={value.interval}
+              onChange={e => {
+                const n = Math.max(1, Math.min(99, Math.floor(Number(e.target.value) || 1)));
+                patch({ interval: n });
+              }}
+              className="w-16 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-2 py-1 text-xs"
+            />
+            <span className="text-xs text-neutral-600 dark:text-neutral-400">
+              {intervalNoun}
+              {value.interval === 1 ? "" : "s"}
+            </span>
+          </div>
+        </label>
+      </div>
+
+      {value.freq === "WEEKLY" && (
+        <div>
+          <span className="text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+            On
+          </span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {ALL_WEEKDAYS.map(d => {
+              const checked = value.byday.includes(d);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => toggleByday(d)}
+                  className={`rounded-md border px-2 py-0.5 text-xs ${
+                    checked
+                      ? "bg-[var(--color-brand)] text-white border-[var(--color-brand)]"
+                      : "border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  }`}
+                  aria-pressed={checked}
+                >
+                  {WEEKDAY_SHORT[d]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {value.freq === "MONTHLY" && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="radio"
+              name="monthly-mode"
+              checked={value.monthlyMode === "by_day"}
+              onChange={() => patch({ monthlyMode: "by_day" })}
+            />
+            On day
+            <input
+              type="number"
+              min={1}
+              max={31}
+              value={value.monthlyByMonthDay}
+              onChange={e => {
+                const n = Math.max(1, Math.min(31, Math.floor(Number(e.target.value) || 1)));
+                patch({ monthlyByMonthDay: n, monthlyMode: "by_day" });
+              }}
+              className="w-14 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-1.5 py-0.5 text-xs"
+            />
+            of the month
+          </label>
+          <label className="flex items-center gap-2 text-xs flex-wrap">
+            <input
+              type="radio"
+              name="monthly-mode"
+              checked={value.monthlyMode === "by_weekday"}
+              onChange={() => patch({ monthlyMode: "by_weekday" })}
+            />
+            On the
+            <select
+              value={String(value.monthlyByWeekdayPos)}
+              onChange={e =>
+                patch({
+                  monthlyByWeekdayPos: Number(e.target.value),
+                  monthlyMode: "by_weekday",
+                })
+              }
+              className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-1.5 py-0.5 text-xs"
+            >
+              <option value="1">first</option>
+              <option value="2">second</option>
+              <option value="3">third</option>
+              <option value="4">fourth</option>
+              <option value="5">fifth</option>
+              <option value="-1">last</option>
+            </select>
+            <select
+              value={value.monthlyByWeekday}
+              onChange={e =>
+                patch({
+                  monthlyByWeekday: e.target.value as RRuleByday,
+                  monthlyMode: "by_weekday",
+                })
+              }
+              className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-1.5 py-0.5 text-xs"
+            >
+              {ALL_WEEKDAYS.map(d => (
+                <option key={d} value={d}>
+                  {WEEKDAY_FULL[d]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      <div className="space-y-1">
+        <span className="text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+          Ends
+        </span>
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="radio"
+            name="ends-mode"
+            checked={value.ends.kind === "never"}
+            onChange={() => patch({ ends: { kind: "never" } })}
+          />
+          Never
+        </label>
+        <label className="flex items-center gap-2 text-xs flex-wrap">
+          <input
+            type="radio"
+            name="ends-mode"
+            checked={value.ends.kind === "until"}
+            onChange={() =>
+              patch({
+                ends: {
+                  kind: "until",
+                  until:
+                    value.ends.kind === "until"
+                      ? value.ends.until
+                      : formatUntilDate(
+                          new Date(
+                            ((startSec ?? Math.floor(Date.now() / 1000)) +
+                              60 * 24 * 3600) *
+                              1000,
+                          )
+                            .toISOString()
+                            .slice(0, 10),
+                        ),
+                },
+              })
+            }
+          />
+          On
+          <input
+            type="date"
+            value={
+              value.ends.kind === "until" ? untilToDateInput(value.ends.until) : ""
+            }
+            onChange={e => {
+              const formatted = formatUntilDate(e.target.value);
+              if (formatted) {
+                patch({ ends: { kind: "until", until: formatted } });
+              }
+            }}
+            disabled={value.ends.kind !== "until"}
+            className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-1.5 py-0.5 text-xs disabled:opacity-60"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="radio"
+            name="ends-mode"
+            checked={value.ends.kind === "count"}
+            onChange={() =>
+              patch({
+                ends: {
+                  kind: "count",
+                  count: value.ends.kind === "count" ? value.ends.count : 10,
+                },
+              })
+            }
+          />
+          After
+          <input
+            type="number"
+            min={1}
+            max={999}
+            value={value.ends.kind === "count" ? value.ends.count : 10}
+            onChange={e => {
+              const n = Math.max(1, Math.min(999, Math.floor(Number(e.target.value) || 1)));
+              patch({ ends: { kind: "count", count: n } });
+            }}
+            disabled={value.ends.kind !== "count"}
+            className="w-14 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-1.5 py-0.5 text-xs disabled:opacity-60"
+          />
+          occurrences
+        </label>
+      </div>
+    </div>
+  );
+}
+
+const WEEKDAY_SHORT: Record<RRuleByday, string> = {
+  MO: "Mon",
+  TU: "Tue",
+  WE: "Wed",
+  TH: "Thu",
+  FR: "Fri",
+  SA: "Sat",
+  SU: "Sun",
+};
+
+const WEEKDAY_FULL: Record<RRuleByday, string> = {
+  MO: "Monday",
+  TU: "Tuesday",
+  WE: "Wednesday",
+  TH: "Thursday",
+  FR: "Friday",
+  SA: "Saturday",
+  SU: "Sunday",
+};
 
 function CloseIcon() {
   return (
@@ -768,13 +1441,19 @@ function buildRRuleFromPreset(
       return `FREQ=MONTHLY;BYMONTHDAY=${seedDate.getDate()}`;
     case "YEARLY":
       return "FREQ=YEARLY";
+    case "CUSTOM":
+      // Caller supplies a buildRRule() string for CUSTOM — we never reach
+      // here for that branch because submit() short-circuits CUSTOM
+      // before calling this function.
+      return null;
   }
 }
 
 // Reverse the build: given an existing RRULE, infer which preset to
 // pre-select on edit. Anything unfamiliar (custom INTERVAL, COUNT, BYDAY
-// list, etc.) falls back to NONE — the form will preserve the existing
-// rule on save unless the user explicitly changes it.
+// list, etc.) falls back to CUSTOM so the user lands in the inline
+// editor with the parsed state already filled in — round-trip then
+// happens through buildRRule on save.
 function inferRepeatPreset(rrule: string | null): RepeatPreset {
   if (!rrule) return "NONE";
   const parts: Record<string, string> = {};
@@ -782,11 +1461,37 @@ function inferRepeatPreset(rrule: string | null): RepeatPreset {
     const eq = seg.indexOf("=");
     if (eq > 0) parts[seg.slice(0, eq).toUpperCase()] = seg.slice(eq + 1);
   }
-  if (parts.FREQ === "DAILY" && !parts.INTERVAL && !parts.BYDAY) return "DAILY";
-  if (parts.FREQ === "WEEKLY" && !parts.INTERVAL) return "WEEKLY";
-  if (parts.FREQ === "MONTHLY" && !parts.INTERVAL) return "MONTHLY_DAY";
-  if (parts.FREQ === "YEARLY" && !parts.INTERVAL) return "YEARLY";
-  return "NONE";
+  // Recognise the four bare presets — a non-trivial extra (INTERVAL,
+  // COUNT, UNTIL, multiple BYDAYs, BYMONTHDAY mismatch) routes to CUSTOM.
+  const onlyKey = (...allowed: string[]) =>
+    Object.keys(parts).every(k => allowed.includes(k));
+  if (
+    parts.FREQ === "DAILY" &&
+    onlyKey("FREQ")
+  ) {
+    return "DAILY";
+  }
+  if (
+    parts.FREQ === "WEEKLY" &&
+    onlyKey("FREQ", "BYDAY") &&
+    (parts.BYDAY ?? "").split(",").length === 1
+  ) {
+    return "WEEKLY";
+  }
+  if (
+    parts.FREQ === "MONTHLY" &&
+    onlyKey("FREQ", "BYMONTHDAY") &&
+    parts.BYMONTHDAY != null
+  ) {
+    return "MONTHLY_DAY";
+  }
+  if (parts.FREQ === "YEARLY" && onlyKey("FREQ")) {
+    return "YEARLY";
+  }
+  // Anything else → custom shape. The editor's initial state is built
+  // from parseRRule on the same string, so the user sees their existing
+  // rule rendered into the form instead of a "None" miss.
+  return "CUSTOM";
 }
 
 function formatRange(c: { start: number; end: number }): string {
@@ -795,4 +1500,15 @@ function formatRange(c: { start: number; end: number }): string {
   const sLabel = s.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   const eLabel = e.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   return `${sLabel}–${eLabel}`;
+}
+
+function humanReminderLabel(m: number): string {
+  if (m === 0) return "At start";
+  if (m < 60) return `${m} min before`;
+  if (m < 1440) {
+    const h = Math.round(m / 60);
+    return `${h} hour${h === 1 ? "" : "s"} before`;
+  }
+  const days = Math.round(m / 1440);
+  return `${days} day${days === 1 ? "" : "s"} before`;
 }

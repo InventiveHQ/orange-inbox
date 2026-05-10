@@ -1363,3 +1363,253 @@ export async function upsertEventOverride(
     .run();
   return true;
 }
+
+// ─── Split recurrence (#92) ───────────────────────────────────────────────
+//
+// "Edit this and following" UX. Splits a recurring series at `instanceStart`:
+//   1. The original master's RRULE gets an UNTIL appended (set to one
+//      second before midnight UTC of the day before `instanceStart`), so
+//      every instance from the split point onward stops expanding from
+//      the master.
+//   2. A fresh self event is INSERTed with the patched fields + the
+//      master's FREQ/INTERVAL/BYDAY (UNTIL/COUNT stripped — the new
+//      series runs forever from here unless the patch overrides). The
+//      new event gets its own UUID **and** a fresh ical_uid — external
+//      calendars need to see this as a separate entity, not an update
+//      to the original UID.
+//   3. Attendees + reminders rows from the master are mirrored onto
+//      the new event so the post-split behaviour matches expectation
+//      (the user's notification cadence carries over).
+//   4. Override rows on the original master that fall AT or AFTER the
+//      split point are deleted — they belong to the new series now,
+//      and leaving them on the master would be dead state (the master's
+//      UNTIL has already pruned those instances).
+//
+// Atomicity: every write goes through a single `db.batch()` call, which
+// D1 executes as one transaction; a failure rolls every step back so we
+// never end up with a half-split series.
+//
+// Authorisation: parent must belong to the caller AND be source='self'.
+// We mirror the same WHERE pattern updateSelfEvent uses.
+//
+// Returns the new event's id on success, or null when the parent doesn't
+// exist / isn't owned by the caller / isn't recurring (no rrule).
+export interface SplitRecurrencePatch {
+  // Patch fields to apply to the NEW event. All optional — a "no edits,
+  // just split" call is valid (the form's "Edit this and following"
+  // option is the same call shape regardless of which fields the user
+  // touched). Anything omitted carries over from the master.
+  startsAt?: number;
+  endsAt?: number | null;
+  allDay?: boolean;
+  summary?: string | null;
+  location?: string | null;
+  description?: string | null;
+  tz?: string | null;
+}
+
+export async function splitRecurrenceAt(
+  userId: string,
+  eventId: string,
+  instanceStart: number,
+  patch: SplitRecurrencePatch,
+): Promise<string | null> {
+  const db = getDb();
+
+  // Pull the master row first — we need its rrule and the carry-over
+  // fields. Authorisation rides on the WHERE.
+  const master = await db
+    .prepare(
+      `SELECT * FROM calendar_events
+        WHERE id = ? AND user_id = ? AND source = 'self'`,
+    )
+    .bind(eventId, userId)
+    .first<CalendarEventRow>();
+  if (!master) return null;
+  if (!master.rrule) return null; // not a recurring series — nothing to split
+
+  // UNTIL for the master: midnight UTC of the day BEFORE the instance.
+  // RFC 5545 says UNTIL is inclusive, so we want the last second of the
+  // day before so the chosen instance and everything after is excluded.
+  const dayBefore = new Date((instanceStart - 86400) * 1000);
+  // Clamp to UTC midnight — UNTIL is "the last instance allowed". Using
+  // 23:59:59 of the day-before keeps any same-day-earlier instance
+  // (rare with WEEKLY but possible with HOURLY-style rules we don't
+  // support yet) safe.
+  const untilDate = new Date(
+    Date.UTC(
+      dayBefore.getUTCFullYear(),
+      dayBefore.getUTCMonth(),
+      dayBefore.getUTCDate(),
+      23,
+      59,
+      59,
+    ),
+  );
+  const untilStr = formatRRuleUntil(untilDate);
+  const cappedRrule = appendOrReplaceUntil(master.rrule, untilStr);
+
+  // Pattern carried to the new series — strip COUNT (was relative to
+  // the master's start) and any pre-existing UNTIL (the new series
+  // continues indefinitely from the split point unless the user
+  // explicitly sets one later). FREQ/INTERVAL/BYDAY/BYMONTHDAY all
+  // carry over verbatim.
+  const carryRrule = stripTerminators(master.rrule);
+
+  // Resolve the new event's fields by overlaying `patch` on top of the
+  // master's values. starts_at defaults to the instance start (the
+  // user's "from this date forward" semantics); ends_at preserves the
+  // master's duration unless explicitly overridden.
+  const newStartsAt = patch.startsAt ?? instanceStart;
+  const masterDuration =
+    master.ends_at != null ? master.ends_at - master.starts_at : null;
+  const newEndsAt =
+    patch.endsAt !== undefined
+      ? patch.endsAt
+      : masterDuration != null
+        ? newStartsAt + masterDuration
+        : null;
+
+  const newId = crypto.randomUUID();
+  const newIcalUid = `${crypto.randomUUID()}@orange-inbox.local`;
+
+  // Pull attendees + reminders to mirror onto the new event. These
+  // run BEFORE the batch so the INSERT statements can be composed
+  // into the same transaction.
+  const [attendees, reminderRows] = await Promise.all([
+    db
+      .prepare(
+        `SELECT email, role FROM calendar_event_attendees WHERE event_id = ?`,
+      )
+      .bind(eventId)
+      .all<{ email: string; role: string | null }>()
+      .then((r) => r.results ?? []),
+    db
+      .prepare(
+        `SELECT minutes_before FROM calendar_event_reminders WHERE event_id = ?`,
+      )
+      .bind(eventId)
+      .all<{ minutes_before: number }>()
+      .then((r) => r.results ?? []),
+  ]);
+
+  const stmts: D1PreparedStatement[] = [];
+
+  // 1. Cap the master with UNTIL.
+  stmts.push(
+    db
+      .prepare(
+        `UPDATE calendar_events
+            SET rrule = ?, updated_at = unixepoch()
+          WHERE id = ? AND user_id = ? AND source = 'self'`,
+      )
+      .bind(cappedRrule, eventId, userId),
+  );
+
+  // 2. Insert the new event with the patched content + carry-over rrule.
+  stmts.push(
+    db
+      .prepare(
+        `INSERT INTO calendar_events
+           (id, user_id, mailbox_id, ical_uid, source, source_message_id,
+            starts_at, ends_at, all_day, summary, location, description,
+            rrule, rdate, exdate, tz)
+         VALUES (?, ?, ?, ?, 'self', NULL, ?, ?, ?, ?, ?, ?,
+                 ?, NULL, NULL, ?)`,
+      )
+      .bind(
+        newId,
+        userId,
+        master.mailbox_id,
+        newIcalUid,
+        newStartsAt,
+        newEndsAt,
+        patch.allDay !== undefined ? (patch.allDay ? 1 : 0) : master.all_day,
+        patch.summary !== undefined ? patch.summary : master.summary,
+        patch.location !== undefined ? patch.location : master.location,
+        patch.description !== undefined ? patch.description : master.description,
+        carryRrule,
+        patch.tz !== undefined ? patch.tz : master.tz,
+      ),
+  );
+
+  // 3. Mirror attendees onto the new event.
+  for (const a of attendees) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO calendar_event_attendees
+             (event_id, email, role, rsvp_status, responded_at)
+           VALUES (?, ?, ?, 'NEEDS-ACTION', NULL)`,
+        )
+        .bind(newId, a.email, a.role),
+    );
+  }
+
+  // 4. Mirror reminders onto the new event.
+  for (const r of reminderRows) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO calendar_event_reminders (event_id, minutes_before)
+             VALUES (?, ?)
+           ON CONFLICT (event_id, minutes_before) DO NOTHING`,
+        )
+        .bind(newId, r.minutes_before),
+    );
+  }
+
+  // 5. Drop overrides on the master that target instances at-or-after
+  //    the split point. Those instances belong to the new series now.
+  stmts.push(
+    db
+      .prepare(
+        `DELETE FROM calendar_event_overrides
+          WHERE parent_event_id = ?
+            AND original_starts_at >= ?`,
+      )
+      .bind(eventId, instanceStart),
+  );
+
+  // Single batch — D1 wraps it in one transaction so any failure
+  // rolls every step back. We never end up with a half-split series.
+  await db.batch(stmts);
+
+  return newId;
+}
+
+// Format a Date as RFC 5545 UTC UNTIL — YYYYMMDDTHHMMSSZ.
+function formatRRuleUntil(d: Date): string {
+  const y = d.getUTCFullYear().toString().padStart(4, "0");
+  const m = (d.getUTCMonth() + 1).toString().padStart(2, "0");
+  const day = d.getUTCDate().toString().padStart(2, "0");
+  const hh = d.getUTCHours().toString().padStart(2, "0");
+  const mm = d.getUTCMinutes().toString().padStart(2, "0");
+  const ss = d.getUTCSeconds().toString().padStart(2, "0");
+  return `${y}${m}${day}T${hh}${mm}${ss}Z`;
+}
+
+// Append `UNTIL=…` to an RRULE, replacing any existing UNTIL or COUNT
+// (UNTIL and COUNT are mutually exclusive per RFC 5545). Other parts
+// pass through verbatim so the master's BYDAY/BYMONTHDAY/INTERVAL etc.
+// keep their behaviour up to the cap point.
+function appendOrReplaceUntil(rrule: string, untilStr: string): string {
+  const segs = rrule.split(";").filter((s) => {
+    const k = s.split("=")[0]?.toUpperCase();
+    return k !== "UNTIL" && k !== "COUNT";
+  });
+  segs.push(`UNTIL=${untilStr}`);
+  return segs.join(";");
+}
+
+// Strip COUNT and UNTIL from an RRULE — the new series's continuation
+// rule shouldn't inherit the master's termination.
+function stripTerminators(rrule: string): string {
+  return rrule
+    .split(";")
+    .filter((s) => {
+      const k = s.split("=")[0]?.toUpperCase();
+      return k !== "UNTIL" && k !== "COUNT";
+    })
+    .join(";");
+}
