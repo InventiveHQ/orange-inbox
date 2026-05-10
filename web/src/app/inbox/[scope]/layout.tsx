@@ -11,6 +11,12 @@ import {
   listVipThreads,
   type MessageCategory,
 } from "@/lib/queries";
+import { listAssignedToUserResolved } from "@/lib/assignments";
+import AssignmentStatusTabs, {
+  parseAssignmentStatus,
+  type AssignmentStatus,
+} from "@/components/AssignmentStatusTabs";
+import ResolvedAssignmentsList from "@/components/ResolvedAssignmentsList";
 import {
   DEFAULT_QUADRANT,
   parseQuadrant,
@@ -82,6 +88,9 @@ export default async function InboxLayout({
   // triage bar's client toggle pushes ?view=… and router.refresh()es, so the
   // RSC payload sees the new param on the next render.
   const quadrantParam = readQuadrantFromHeaders(headerStore);
+  // Assignment status tab (#99). Same next-url workaround — `?status=resolved`
+  // on /inbox/assigned switches the list query from active to resolved.
+  const assignmentStatus = readAssignmentStatusFromHeaders(headerStore);
   // Default open: this section is the whole point of the saved-search feature,
   // and it's empty for new users so collapsing-by-default would hide the
   // discoverability hint. Toggling writes a cookie that flips the default.
@@ -169,7 +178,13 @@ export default async function InboxLayout({
       ? undefined
       : effectiveScope;
 
-  const [threads, drafts] = await Promise.all([
+  // Resolved-history tab (#99) on /inbox/assigned. Fetched separately from
+  // the main `threads` array because the row shape is different (resolved
+  // metadata + Reopen action) and rendered by ResolvedAssignmentsList rather
+  // than ThreadList.
+  const showResolvedAssignments = isAssigned && assignmentStatus === "resolved";
+
+  const [threads, drafts, resolvedAssignments] = await Promise.all([
     isDrafts || isFullPage
       ? Promise.resolve([])
       : isFollowups
@@ -177,9 +192,13 @@ export default async function InboxLayout({
           // overdue without a reply. Cross-mailbox by design.
           listDueFollowups(user.id)
         : isAssigned
-        ? // Assigned-to-me (#27) spans every mailbox the user is a member of,
-          // just like VIPs but filtered on thread_assignments.assignee_id.
-          listAssignedToUser(user.id)
+        ? showResolvedAssignments
+          ? // The resolved tab uses its own list component — keep `threads`
+            // empty here so the active ThreadList doesn't briefly render.
+            Promise.resolve([])
+          : // Assigned-to-me (#27) spans every mailbox the user is a member of,
+            // just like VIPs but filtered on thread_assignments.assignee_id.
+            listAssignedToUser(user.id)
         : isSpam
         ? // Spam (#74) spans every mailbox — reported-spam messages were
           // auto-archived so this view is the only place to review them.
@@ -212,6 +231,9 @@ export default async function InboxLayout({
               category: isDomainScope ? undefined : categoryParam,
             }),
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
+    showResolvedAssignments
+      ? listAssignedToUserResolved(user.id)
+      : Promise.resolve([]),
   ]);
 
   if (
@@ -286,8 +308,11 @@ export default async function InboxLayout({
       <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
         {scopeLabel}
       </header>
+      {isAssigned && <AssignmentStatusTabs />}
       {isDrafts ? (
         <DraftsList drafts={drafts} />
+      ) : showResolvedAssignments ? (
+        <ResolvedAssignmentsList items={resolvedAssignments} />
       ) : (
         <ThreadList
           threads={threads}
@@ -373,6 +398,20 @@ function readQuadrantFromHeaders(
     return parseQuadrant(u.searchParams.get("view"));
   } catch {
     return DEFAULT_QUADRANT;
+  }
+}
+
+function readAssignmentStatusFromHeaders(
+  headerStore: Awaited<ReturnType<typeof headers>>,
+): AssignmentStatus {
+  const candidate =
+    headerStore.get("next-url") ?? headerStore.get("referer") ?? null;
+  if (!candidate) return "active";
+  try {
+    const u = new URL(candidate, "http://localhost");
+    return parseAssignmentStatus(u.searchParams.get("status"));
+  } catch {
+    return "active";
   }
 }
 
