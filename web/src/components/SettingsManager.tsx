@@ -71,6 +71,7 @@ export default function SettingsManager({
   const sections = useMemo(
     () => [
       { id: "mail-domains", label: "Mail domains" },
+      ...(isAdmin ? [{ id: "mailbox-names", label: "Mailbox names" }] : []),
       ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
       ...(hasOwnedMailboxes ? [{ id: "signatures", label: "Signatures" }] : []),
       ...(hasOwnedMailboxes ? [{ id: "vacation", label: "Vacation responder" }] : []),
@@ -114,6 +115,12 @@ export default function SettingsManager({
           </aside>
           <div className="flex-1 min-w-0 space-y-12">
             <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
+            {isAdmin && (
+              <MailboxNamesSection
+                id="mailbox-names"
+                identities={manageableIdentities}
+              />
+            )}
             {isAdmin && (
               <MailboxAccessSection
                 id="mailbox-access"
@@ -603,6 +610,99 @@ interface Member {
   created_at: number;
 }
 const MEMBER_ROLES: Member["role"][] = ["owner", "member", "reader"];
+
+// Optional, per-mailbox friendly name shown in the sidebar nav drawer in
+// place of the bare email address ("Sales", "Founders", "Personal" — instead
+// of `hello@founders.example.com`). Stored on mailboxes.display_name; the
+// existing PATCH /api/mailboxes/<id> already accepts display_name, so this
+// is wiring only.
+function MailboxNamesSection({ id, identities }: { id: string; identities: Identity[] }) {
+  // Aliases inherit from their parent mailbox — show only the underlying
+  // mailbox identities so we don't list the same row twice.
+  const mailboxes = identities.filter(i => i.kind === "mailbox");
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Mailbox names"
+        description="Friendly names shown in the sidebar drawer. Leave blank to fall back to the email address."
+      />
+      {mailboxes.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-8 text-sm text-neutral-500 text-center">
+          No mailboxes yet.
+        </div>
+      ) : (
+        <ul className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 divide-y divide-neutral-200 dark:divide-neutral-800">
+          {mailboxes.map(i => (
+            <li key={i.mailbox_id}>
+              <MailboxNameRow identity={i} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function MailboxNameRow({ identity }: { identity: Identity }) {
+  const router = useRouter();
+  const address = `${identity.local_part}@${identity.domain_name}`;
+  const initial = identity.display_name ?? "";
+  const [value, setValue] = useState(initial);
+  const [saved, setSaved] = useState<string>(initial);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function commit() {
+    const next = value.trim();
+    if (next === saved) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${identity.mailbox_id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ display_name: next || null }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      setSaved(next);
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1 basis-48 text-sm font-mono truncate" title={address}>
+        {address}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={value}
+          placeholder="Display name"
+          onChange={e => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            } else if (e.key === "Escape") {
+              setValue(saved);
+              e.currentTarget.blur();
+            }
+          }}
+          disabled={isPending}
+          className="w-56 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2.5 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
+        />
+        <span className="text-xs text-neutral-500 w-16 text-right">
+          {isPending ? "Saving…" : value.trim() === saved ? "" : "Press ⏎"}
+        </span>
+      </div>
+      {error && <span className="text-xs text-red-600 basis-full">{error}</span>}
+    </div>
+  );
+}
 
 function MailboxAccessSection({ id, identities }: { id: string; identities: Identity[] }) {
   // One row per mailbox in the system (admin view). Each row lazily fetches

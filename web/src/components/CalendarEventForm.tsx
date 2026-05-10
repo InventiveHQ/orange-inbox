@@ -9,32 +9,51 @@ import { type CalendarEvent } from "./CalendarManager";
 
 interface Props {
   event: CalendarEvent | null; // null = create new
+  // For new events: prefill start/end/all-day from a click on the grid.
+  // Ignored when `event` is non-null (edit mode uses the row's values).
+  defaults?: {
+    startsAt?: number;
+    endsAt?: number;
+    allDay?: boolean;
+  };
   onClose: () => void;
   onSaved: () => void;
   onDeleted: () => void;
 }
 
-export default function CalendarEventForm({ event, onClose, onSaved, onDeleted }: Props) {
+export default function CalendarEventForm({
+  event,
+  defaults,
+  onClose,
+  onSaved,
+  onDeleted,
+}: Props) {
   const isEdit = event !== null;
   const isInvite = event?.source && event.source !== "self";
+
+  const initialStartSec = event?.starts_at ?? defaults?.startsAt ?? defaultStartSeconds();
+  const initialEndSec =
+    event?.ends_at ?? defaults?.endsAt ?? (event ? null : initialStartSec + 3600);
+  const initialAllDay = event ? event.all_day === 1 : !!defaults?.allDay;
 
   const [summary, setSummary] = useState(event?.summary ?? "");
   const [location, setLocation] = useState(event?.location ?? "");
   const [description, setDescription] = useState(event?.description ?? "");
-  const [allDay, setAllDay] = useState(event?.all_day === 1);
-  const [startsAt, setStartsAt] = useState<string>(
-    event ? toLocalInput(event.starts_at) : toLocalInput(defaultStartSeconds()),
-  );
+  const [allDay, setAllDay] = useState(initialAllDay);
+  const [startsAt, setStartsAt] = useState<string>(toLocalInput(initialStartSec));
   const [endsAt, setEndsAt] = useState<string>(
-    event?.ends_at != null
-      ? toLocalInput(event.ends_at)
-      : event
-        ? ""
-        : toLocalInput(defaultStartSeconds() + 3600),
+    initialEndSec != null ? toLocalInput(initialEndSec) : "",
   );
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const summaryRef = useRef<HTMLInputElement>(null);
+
+  // Pop the cursor straight into the summary field for new events — click on
+  // a slot → start typing the title is the Google flow.
+  useEffect(() => {
+    if (!isEdit) summaryRef.current?.focus();
+  }, [isEdit]);
 
   // ESC to close — basic keyboard affordance; the rest is covered by the
   // backdrop click.
@@ -141,6 +160,7 @@ export default function CalendarEventForm({ event, onClose, onSaved, onDeleted }
               Summary
             </span>
             <input
+              ref={summaryRef}
               type="text"
               required
               disabled={isInvite}

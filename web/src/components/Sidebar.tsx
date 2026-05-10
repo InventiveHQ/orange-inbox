@@ -516,17 +516,26 @@ function SidebarMailbox({
   indent?: boolean;
 }) {
   const fullAddress = `${mb.local_part}@${mb.domain_name}`;
-  // Indented under a multi-mailbox domain header → the domain is right above,
-  // so showing it again is noise. Top-level (single-mailbox domain) shows the
-  // full address so the domain is still visible.
-  const label = indent
+  const customName = mb.display_name?.trim();
+  // Display-name preference order:
+  //   - When a custom display_name is set, use it verbatim and keep the email
+  //     in the tooltip (full disambiguation is one hover away).
+  //   - Otherwise fall back to the address: indented children show
+  //     `local@` since the domain header is right above them; top-level rows
+  //     show the full `local@domain`.
+  const fallback = indent
     ? mb.is_catch_all
       ? `${mb.local_part}@ (catch-all)`
       : `${mb.local_part}@`
     : mb.is_catch_all
       ? `${fullAddress} (catch-all)`
       : fullAddress;
-  const tooltip = mb.is_catch_all ? `${fullAddress} (catch-all)` : fullAddress;
+  const label = customName || fallback;
+  const tooltip = customName
+    ? `${customName} — ${fullAddress}${mb.is_catch_all ? " (catch-all)" : ""}`
+    : mb.is_catch_all
+      ? `${fullAddress} (catch-all)`
+      : fullAddress;
   const hasUnread = mb.unread_count > 0;
   const ariaLabel = hasUnread ? `${label}, ${mb.unread_count} unread` : label;
   const collapsedTitle = hasUnread ? `${tooltip} (${mb.unread_count} unread)` : tooltip;

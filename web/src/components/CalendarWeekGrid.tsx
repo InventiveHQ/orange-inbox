@@ -1,22 +1,25 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type CalendarEvent, startOfWeek } from "./CalendarManager";
+import { type CalendarEvent, type NewEventDraft, startOfWeek } from "./CalendarManager";
 
 // Week view: 7 columns × 24 hour rows + an all-day strip across the top.
 // Events are absolute-positioned by their start hour + duration; clicks on
 // an invite navigate back to the source thread, clicks on a self event
-// open the edit form.
+// open the edit form. Clicks on empty hour cells / all-day strip open the
+// New Event modal prefilled with that slot's time.
 
 interface Props {
   cursor: Date;
   events: CalendarEvent[];
   onEditEvent: (ev: CalendarEvent) => void;
+  onCreateAt: (draft: NewEventDraft) => void;
 }
 
 const HOUR_HEIGHT = 40; // px — also drives slot row height in the grid template
+const SLOT_MINUTES = 30; // quick-create snap granularity
 
-export default function CalendarWeekGrid({ cursor, events, onEditEvent }: Props) {
+export default function CalendarWeekGrid({ cursor, events, onEditEvent, onCreateAt }: Props) {
   const router = useRouter();
   const weekStart = startOfWeek(cursor);
   const days: Date[] = Array.from({ length: 7 }, (_, i) => {
@@ -66,6 +69,7 @@ export default function CalendarWeekGrid({ cursor, events, onEditEvent }: Props)
           date={d}
           events={allDayEventsForDay(allDay, d)}
           onClick={handleClick}
+          onCreate={() => onCreateAt(allDayDraftForDate(d))}
         />
       ))}
 
@@ -77,6 +81,7 @@ export default function CalendarWeekGrid({ cursor, events, onEditEvent }: Props)
           date={d}
           events={timedEventsForDay(timed, d)}
           onClick={handleClick}
+          onCreate={draft => onCreateAt(draft)}
         />
       ))}
     </div>
@@ -105,13 +110,29 @@ function AllDayCell({
   date,
   events,
   onClick,
+  onCreate,
 }: {
   date: Date;
   events: CalendarEvent[];
   onClick: (e: CalendarEvent) => void;
+  onCreate: () => void;
 }) {
+  // Empty space in the strip is the click target — event chips below
+  // stopPropagation so clicking a chip doesn't also fire create.
   return (
-    <div className="border-b border-r border-neutral-200 dark:border-neutral-800 min-h-[28px] py-1 px-1 flex flex-col gap-0.5 sticky top-[44px] z-10 bg-white dark:bg-neutral-950">
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Create all-day event on ${date.toDateString()}`}
+      onClick={onCreate}
+      onKeyDown={e => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onCreate();
+        }
+      }}
+      className="border-b border-r border-neutral-200 dark:border-neutral-800 min-h-[28px] py-1 px-1 flex flex-col gap-0.5 sticky top-[44px] z-10 bg-white dark:bg-neutral-950 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
+    >
       {events.map(ev => (
         <EventChip key={ev.id} event={ev} onClick={onClick} compact />
       ))}
@@ -142,12 +163,16 @@ function DayColumn({
   date,
   events,
   onClick,
+  onCreate,
 }: {
   date: Date;
   events: CalendarEvent[];
   onClick: (e: CalendarEvent) => void;
+  onCreate: (draft: NewEventDraft) => void;
 }) {
   // Absolute-positioned event blocks over a 24×HOUR_HEIGHT column.
+  // Each hour row is a click target — y-offset within the row snaps to
+  // SLOT_MINUTES so clicking the top half of a row → :00, bottom half → :30.
   return (
     <div
       className="relative border-r border-neutral-200 dark:border-neutral-800"
@@ -156,7 +181,14 @@ function DayColumn({
       {Array.from({ length: 24 }, (_, h) => (
         <div
           key={h}
-          className="border-b border-neutral-100 dark:border-neutral-900"
+          role="button"
+          tabIndex={-1}
+          aria-label={`Create event at ${formatSlot(h, 0)}`}
+          onClick={e => {
+            const slot = slotFromClick(e, h);
+            onCreate(slotDraftForDate(date, slot.hour, slot.minute));
+          }}
+          className="border-b border-neutral-100 dark:border-neutral-900 cursor-pointer hover:bg-[var(--color-brand)]/5"
           style={{ height: HOUR_HEIGHT }}
         />
       ))}
@@ -166,7 +198,10 @@ function DayColumn({
           <button
             key={ev.id}
             type="button"
-            onClick={() => onClick(ev)}
+            onClick={e => {
+              e.stopPropagation();
+              onClick(ev);
+            }}
             className={`absolute left-1 right-1 rounded text-left text-[11px] px-1.5 py-0.5 truncate border ${eventTone(ev)}`}
             style={{ top, height: Math.max(height, 16) }}
             title={ev.summary || "(no title)"}
@@ -181,6 +216,52 @@ function DayColumn({
   );
 }
 
+// Convert a click on an hour row into a (hour, minute) slot. offsetY is
+// the y-coordinate within the row (0..HOUR_HEIGHT); we bucket it to
+// SLOT_MINUTES so the user lands on a half-hour boundary.
+function slotFromClick(
+  e: React.MouseEvent<HTMLDivElement>,
+  hour: number,
+): { hour: number; minute: number } {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const offsetY = e.clientY - rect.top;
+  const fraction = Math.max(0, Math.min(1, offsetY / HOUR_HEIGHT));
+  const minute = Math.floor((fraction * 60) / SLOT_MINUTES) * SLOT_MINUTES;
+  return { hour, minute };
+}
+
+function slotDraftForDate(date: Date, hour: number, minute: number): NewEventDraft {
+  const start = new Date(date);
+  start.setHours(hour, minute, 0, 0);
+  const end = new Date(start);
+  end.setHours(end.getHours() + 1);
+  return {
+    kind: "new",
+    startsAt: Math.floor(start.getTime() / 1000),
+    endsAt: Math.floor(end.getTime() / 1000),
+    allDay: false,
+  };
+}
+
+function allDayDraftForDate(date: Date): NewEventDraft {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return {
+    kind: "new",
+    startsAt: Math.floor(start.getTime() / 1000),
+    endsAt: Math.floor(end.getTime() / 1000),
+    allDay: true,
+  };
+}
+
+function formatSlot(hour: number, minute: number): string {
+  const h12 = ((hour + 11) % 12) + 1;
+  const ampm = hour < 12 ? "AM" : "PM";
+  return `${h12}:${minute.toString().padStart(2, "0")} ${ampm}`;
+}
+
 function EventChip({
   event,
   onClick,
@@ -193,7 +274,12 @@ function EventChip({
   return (
     <button
       type="button"
-      onClick={() => onClick(event)}
+      onClick={e => {
+        // Don't let the click bubble to the parent all-day cell, which
+        // would also open a New Event modal on top of the edit modal.
+        e.stopPropagation();
+        onClick(event);
+      }}
       className={`text-left text-[11px] truncate rounded px-1.5 ${compact ? "py-0" : "py-0.5"} border ${eventTone(event)}`}
       title={event.summary || "(no title)"}
     >
@@ -203,6 +289,8 @@ function EventChip({
     </button>
   );
 }
+
+export { allDayDraftForDate, slotDraftForDate, SLOT_MINUTES };
 
 // Tone selection: cancelled is loud (rose) regardless of source so the user
 // can spot dead events at a glance; invites are sky, self events use brand

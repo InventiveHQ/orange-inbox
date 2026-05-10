@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type CalendarEvent, startOfWeek } from "./CalendarManager";
-import { eventTone } from "./CalendarWeekGrid";
+import { type CalendarEvent, type NewEventDraft, startOfWeek } from "./CalendarManager";
+import { allDayDraftForDate, eventTone } from "./CalendarWeekGrid";
 
 // Month view: 6×7 day-cell grid. Each cell shows up to MAX_PER_CELL event
 // titles with a "+ N more" overflow indicator. Clicking the date number
@@ -16,6 +16,7 @@ interface Props {
   events: CalendarEvent[];
   onEditEvent: (ev: CalendarEvent) => void;
   onSelectDate: (d: Date) => void;
+  onCreateAt: (draft: NewEventDraft) => void;
 }
 
 export default function CalendarMonthGrid({
@@ -23,6 +24,7 @@ export default function CalendarMonthGrid({
   events,
   onEditEvent,
   onSelectDate,
+  onCreateAt,
 }: Props) {
   const router = useRouter();
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
@@ -62,6 +64,7 @@ export default function CalendarMonthGrid({
             events={eventsForDay(events, d)}
             onEventClick={handleClick}
             onSelectDate={onSelectDate}
+            onCreate={() => onCreateAt(allDayDraftForDate(d))}
           />
         ))}
       </div>
@@ -75,27 +78,45 @@ function DayCell({
   events,
   onEventClick,
   onSelectDate,
+  onCreate,
 }: {
   date: Date;
   month: number;
   events: CalendarEvent[];
   onEventClick: (ev: CalendarEvent) => void;
   onSelectDate: (d: Date) => void;
+  onCreate: () => void;
 }) {
   const inMonth = date.getMonth() === month;
   const isToday = isSameDay(date, new Date());
   const visible = events.slice(0, MAX_PER_CELL);
   const overflow = events.length - visible.length;
 
+  // Whole cell is the click target for quick-create; the date number,
+  // event chips, and overflow link below stopPropagation so they keep
+  // their own behavior.
   return (
     <div
-      className={`border-b border-r border-neutral-200 dark:border-neutral-800 p-1 flex flex-col min-h-[6rem] ${
+      role="button"
+      tabIndex={0}
+      aria-label={`Create event on ${date.toDateString()}`}
+      onClick={onCreate}
+      onKeyDown={e => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onCreate();
+        }
+      }}
+      className={`border-b border-r border-neutral-200 dark:border-neutral-800 p-1 flex flex-col min-h-[6rem] cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-900/40 ${
         inMonth ? "bg-white dark:bg-neutral-950" : "bg-neutral-50 dark:bg-neutral-900/50"
       }`}
     >
       <button
         type="button"
-        onClick={() => onSelectDate(date)}
+        onClick={e => {
+          e.stopPropagation();
+          onSelectDate(date);
+        }}
         className={`self-end text-[11px] tabular-nums px-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
           isToday
             ? "bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand)]"
@@ -112,7 +133,10 @@ function DayCell({
           <button
             key={ev.id}
             type="button"
-            onClick={() => onEventClick(ev)}
+            onClick={e => {
+              e.stopPropagation();
+              onEventClick(ev);
+            }}
             className={`text-left text-[10px] leading-tight truncate rounded px-1 py-px border ${eventTone(ev)}`}
             title={ev.summary || "(no title)"}
           >
@@ -124,7 +148,10 @@ function DayCell({
         {overflow > 0 && (
           <button
             type="button"
-            onClick={() => onSelectDate(date)}
+            onClick={e => {
+              e.stopPropagation();
+              onSelectDate(date);
+            }}
             className="text-left text-[10px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 px-1"
           >
             + {overflow} more
