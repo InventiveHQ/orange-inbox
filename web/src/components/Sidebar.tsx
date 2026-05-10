@@ -38,6 +38,11 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
     byDomain.set(mb.domain_name, list);
   }
 
+  // "All inboxes" badge sums the per-mailbox unread counts. The query already
+  // restricts to mailboxes the user can access, so this is the right total
+  // for the unified view.
+  const totalUnread = mailboxes.reduce((sum, mb) => sum + (mb.unread_count ?? 0), 0);
+
   return (
     <aside
       className={`shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col transition-[width] duration-150 ${
@@ -77,6 +82,7 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           active={scope === "all"}
           icon={<InboxIcon />}
           collapsed={collapsed}
+          unreadCount={totalUnread}
         />
         <SpecialLink
           href="/inbox/drafts"
@@ -219,26 +225,35 @@ function SpecialLink({
   active,
   icon,
   collapsed,
+  unreadCount,
 }: {
   href: string;
   label: string;
   active: boolean;
   icon: React.ReactNode;
   collapsed: boolean;
+  unreadCount?: number;
 }) {
+  const hasUnread = (unreadCount ?? 0) > 0;
   if (collapsed) {
     return (
       <Link
         href={href}
-        title={label}
-        aria-label={label}
-        className={`flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
+        title={hasUnread ? `${label} (${unreadCount} unread)` : label}
+        aria-label={hasUnread ? `${label}, ${unreadCount} unread` : label}
+        className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
           active
             ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
             : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
         }`}
       >
         {icon}
+        {hasUnread && (
+          <span
+            aria-hidden
+            className="absolute top-1 right-1 inline-block h-2 w-2 rounded-full bg-[var(--color-brand)]"
+          />
+        )}
       </Link>
     );
   }
@@ -251,7 +266,10 @@ function SpecialLink({
           : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
       }`}
     >
-      <span className="truncate">{label}</span>
+      <span className={`truncate flex-1 ${hasUnread && !active ? "font-semibold text-neutral-900 dark:text-neutral-100" : ""}`}>
+        {label}
+      </span>
+      {hasUnread && <UnreadBadge count={unreadCount ?? 0} active={active} />}
     </Link>
   );
 }
@@ -270,14 +288,17 @@ function SidebarMailbox({
   const fullAddress = `${mb.local_part}@${mb.domain_name}`;
   const label = mb.is_catch_all ? `${mb.local_part}@ (catch-all)` : fullAddress;
   const tooltip = mb.is_catch_all ? `${fullAddress} (catch-all)` : fullAddress;
+  const hasUnread = mb.unread_count > 0;
+  const ariaLabel = hasUnread ? `${label}, ${mb.unread_count} unread` : label;
+  const collapsedTitle = hasUnread ? `${tooltip} (${mb.unread_count} unread)` : tooltip;
 
   if (collapsed) {
     return (
       <Link
         href={`/inbox/${mb.id}`}
-        title={tooltip}
-        aria-label={label}
-        className={`flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
+        title={collapsedTitle}
+        aria-label={ariaLabel}
+        className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
           active ? "bg-[var(--color-brand)]/15" : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
         }`}
       >
@@ -286,6 +307,12 @@ function SidebarMailbox({
           domainName={mb.domain_name}
           active={active}
         />
+        {hasUnread && (
+          <span
+            aria-hidden
+            className="absolute top-1 right-1 inline-block h-2 w-2 rounded-full bg-[var(--color-brand)] ring-2 ring-white dark:ring-neutral-950"
+          />
+        )}
       </Link>
     );
   }
@@ -294,6 +321,7 @@ function SidebarMailbox({
     <div className="group flex items-center gap-1">
       <Link
         href={`/inbox/${mb.id}`}
+        aria-label={ariaLabel}
         className={`flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm min-w-0 ${
           active
             ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
@@ -305,7 +333,13 @@ function SidebarMailbox({
           domainName={mb.domain_name}
           active={active}
         />
-        <span className="truncate flex-1">{label}</span>
+        <span
+          className={`truncate flex-1 ${
+            hasUnread && !active ? "font-semibold text-neutral-900 dark:text-neutral-100" : ""
+          }`}
+        >
+          {label}
+        </span>
         {mb.is_shared === 1 && (
           <span
             title={`${mb.member_count} members`}
@@ -314,9 +348,28 @@ function SidebarMailbox({
             shared
           </span>
         )}
+        {hasUnread && <UnreadBadge count={mb.unread_count} active={active} />}
       </Link>
       {isAdmin && <ManageMailboxButton mailbox={mb} />}
     </div>
+  );
+}
+
+// Pill-style unread count, modelled on LabelChip's chip styling so the sidebar
+// stays visually consistent. Caps at 99+ to keep the chip from blowing out the
+// row width on busy mailboxes.
+function UnreadBadge({ count, active }: { count: number; active: boolean }) {
+  const display = count > 99 ? "99+" : String(count);
+  const tone = active
+    ? "bg-[var(--color-brand)] text-white"
+    : "bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200";
+  return (
+    <span
+      aria-hidden
+      className={`ml-1 shrink-0 inline-flex items-center justify-center rounded-full px-1.5 py-px text-[10px] font-medium tabular-nums min-w-[18px] ${tone}`}
+    >
+      {display}
+    </span>
   );
 }
 
