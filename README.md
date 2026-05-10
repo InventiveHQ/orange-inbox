@@ -240,6 +240,26 @@ sharing, compose features, and search lives at *sidebar → Help*
 updates: it skips resource creation if things already exist and just
 applies any new migrations and redeploys both Workers.
 
+## Operational alerts
+
+If something goes wrong server-side — inbound mail fails to parse, the
+cron tick crashes, a scheduled send errors out — orange-inbox can post
+a structured alert to a Slack-compatible webhook (Discord and most
+generic webhook services also accept the same payload).
+
+Set `ALERT_WEBHOOK_URL` as a worker secret on **both** workers:
+
+```sh
+read -s ALERT_URL
+echo "$ALERT_URL" | (cd web          && npx wrangler secret put ALERT_WEBHOOK_URL)
+echo "$ALERT_URL" | (cd email-worker && npx wrangler secret put ALERT_WEBHOOK_URL)
+unset ALERT_URL
+```
+
+Without the secret, alerts fall back to `console.error` — visible in
+`npx wrangler tail` but not pushed anywhere. Set it before launch and
+you'll get paged when the inbound MX → email-worker path breaks.
+
 ## Storage and overflow
 
 A fresh deploy uses a single D1 database for everything — the simple,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getEnv } from "@/lib/db";
+import { notify } from "@/lib/notify";
 import { sendMessage, SendError } from "@/lib/send";
 
 interface Body {
@@ -83,10 +84,18 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       const reason = e instanceof SendError ? `${e.code}: ${e.message}` : (e instanceof Error ? e.message : String(e));
       await markFailed(b.id, reason);
+      const env2 = getEnv() as unknown as { ALERT_WEBHOOK_URL?: string };
+      await notify(env2.ALERT_WEBHOOK_URL, "error", "Scheduled send failed", {
+        scheduled_id: b.id,
+        reason,
+      });
       return NextResponse.json({ error: "send_failed", reason }, { status: 500 });
     }
   } catch (e) {
-    console.error("dispatch-scheduled error", e);
+    const env2 = getEnv() as unknown as { ALERT_WEBHOOK_URL?: string };
+    await notify(env2.ALERT_WEBHOOK_URL, "error", "dispatch-scheduled crashed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
 }
