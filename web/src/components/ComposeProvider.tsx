@@ -18,6 +18,8 @@ import { substituteVariables, type TemplateContext } from "@/lib/templates";
 import { looksLikeHtml } from "@/lib/html-text";
 import RichTextEditor, { type SlashCommandState, type SlashNavigationHandlers } from "./RichTextEditor";
 import UndoSendToast from "./UndoSendToast";
+import { useToast } from "./ToastProvider";
+import { queueSend } from "@/lib/sw-client";
 
 export interface ComposeOpenArgs {
   replyToMessageId?: string;
@@ -175,6 +177,7 @@ function ComposeModal({
   onQueuedUndoSend: (scheduledId: string, delaySeconds: number) => void;
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const initial = useMemo(() => pickInitialIdentity(identities, args), [identities, args]);
   // Initial body (HTML) = prefill HTML + the chosen identity's signature
   // separator + signature_html, with an optional quoted-original block
@@ -592,21 +595,48 @@ function ComposeModal({
         return;
       }
 
-      const res = await fetch("/api/messages", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          from_mailbox_id: fromMailboxId,
-          send_as_alias_id: sendAsAliasId ?? undefined,
-          to: toList,
-          cc: ccList.length ? ccList : undefined,
-          subject,
-          body: bodyHtml,
-          reply_to_message_id: args.replyToMessageId,
-          draft_id: draftId ?? undefined,
-          attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
-        }),
-      });
+      const sendPayload = {
+        from_mailbox_id: fromMailboxId,
+        send_as_alias_id: sendAsAliasId ?? undefined,
+        to: toList,
+        cc: ccList.length ? ccList : undefined,
+        subject,
+        body: bodyHtml,
+        reply_to_message_id: args.replyToMessageId,
+        draft_id: draftId ?? undefined,
+        attachment_ids: attachments.length ? attachments.map(a => a.id) : undefined,
+      };
+      let res: Response;
+      try {
+        res = await fetch("/api/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(sendPayload),
+        });
+      } catch {
+        // Network failure (offline, DNS, etc). Hand the payload to the
+        // service worker so it can replay once we're back online. Falls
+        // back to surfacing the error if the SW isn't around (e.g. plain
+        // HTTP dev) so the user isn't left thinking it queued silently.
+        const queuedId = await queueSend(sendPayload);
+        if (queuedId === null) {
+          setError("You're offline. Try again when you have a connection.");
+          return;
+        }
+        toast({ message: "Queued — will send when online." });
+        rememberIdentityForFirstRecipient();
+        // Best-effort registration of a Background Sync tag so Chromium can
+        // replay even if the app is closed by the time we reconnect.
+        try {
+          const reg = await navigator.serviceWorker?.ready;
+          // SyncManager isn't in the standard lib.dom types yet.
+          const sync = (reg as unknown as { sync?: { register: (tag: string) => Promise<void> } })
+            ?.sync;
+          await sync?.register("orange-outbox-flush");
+        } catch {}
+        onClose();
+        return;
+      }
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string };
         setError(b.error ?? `Send failed (${res.status})`);

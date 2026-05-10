@@ -19,6 +19,7 @@ import ComposeProvider from "@/components/ComposeProvider";
 import { ToastProvider } from "@/components/ToastProvider";
 import ComposeFromUrl from "@/components/ComposeFromUrl";
 import SearchBar from "@/components/SearchBar";
+import OfflineIndicator from "@/components/OfflineIndicator";
 import MobileShell from "@/components/MobileShell";
 import AppBadgeSync from "@/components/AppBadgeSync";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
@@ -271,8 +272,11 @@ interface SearchMailbox {
 function TopBar({ mailboxes, scope }: { mailboxes: SearchMailbox[]; scope: string }) {
   return (
     <div className="px-3 py-2 sm:px-4">
-      <div className="max-w-3xl">
-        <SearchBar mailboxes={mailboxes} defaultScope={scope} />
+      <div className="max-w-3xl flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <SearchBar mailboxes={mailboxes} defaultScope={scope} />
+        </div>
+        <OfflineIndicator />
       </div>
     </div>
   );
