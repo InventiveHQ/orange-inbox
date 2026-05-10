@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
@@ -93,7 +93,7 @@ export default function RichTextEditor({
             contentEditable={
               <ContentEditable
                 style={{ minHeight }}
-                className="outline-none px-4 py-3 text-sm leading-relaxed prose-sm max-w-none [&_a]:break-words"
+                className="outline-none px-4 py-3 text-sm leading-relaxed prose-sm max-w-none [&_a]:break-words [&[data-quote-collapsed=true]_blockquote]:hidden"
               />
             }
             placeholder={
@@ -106,6 +106,7 @@ export default function RichTextEditor({
             }
             ErrorBoundary={LexicalErrorBoundary}
           />
+          <QuoteCollapsePlugin />
         </div>
         <HistoryPlugin />
         <ListPlugin />
@@ -120,6 +121,105 @@ export default function RichTextEditor({
         />
       </div>
     </LexicalComposer>
+  );
+}
+
+// Compose-mode quoted-reply collapse. We chose a CSS-only fold over a custom
+// Lexical decorator node: the latter would require intercepting HTML import,
+// adding export logic, and a new node class — invasive enough that v1 risk
+// (breaking serialisation on Send) outweighed the UX win. Trade-off is the
+// toggle lives inside the editor wrapper as a sibling DOM button rather than
+// as an inline editable node.
+//
+// Behaviour: when the contenteditable contains any <blockquote>, we render
+// a small "…" toggle absolutely-positioned just above the first one, and
+// stamp `data-quote-collapsed` on the editable so CSS hides every blockquote.
+// Default is collapsed. The blockquote remains in the Lexical state, so
+// Save Draft / Send still serialise the full quoted body.
+function QuoteCollapsePlugin() {
+  const [editor] = useLexicalComposerContext();
+  const [collapsed, setCollapsed] = useState(true);
+  const [hasQuote, setHasQuote] = useState(false);
+  const [topPx, setTopPx] = useState(0);
+  const editableRef = useRef<HTMLElement | null>(null);
+
+  // Cache a ref to the contenteditable element. Lexical exposes it via
+  // `getRootElement()`, but only after the editor mounts — so we register
+  // a root listener.
+  useEffect(() => {
+    return editor.registerRootListener((rootElement) => {
+      editableRef.current = rootElement;
+    });
+  }, [editor]);
+
+  // Re-measure on every editor update — cheap, and necessary because the
+  // first paint of an injected blockquote may happen a tick after mount.
+  // When the quote is collapsed (display:none) its rect is all-zero, which
+  // would yank the button to the top of the editor; so we only update the
+  // position while the quote is visible. The button stays put through the
+  // collapse → expand → collapse cycle.
+  const measure = useCallback(() => {
+    const root = editableRef.current;
+    if (!root) {
+      setHasQuote(false);
+      return;
+    }
+    const quote = root.querySelector("blockquote") as HTMLElement | null;
+    if (!quote) {
+      setHasQuote(false);
+      return;
+    }
+    setHasQuote(true);
+    if (quote.offsetParent === null) return;
+    const rootRect = root.getBoundingClientRect();
+    const qRect = quote.getBoundingClientRect();
+    setTopPx(qRect.top - rootRect.top + root.offsetTop - 6);
+  }, []);
+
+  useEffect(() => {
+    return editor.registerUpdateListener(() => {
+      // Defer to the next frame so DOM mutations from this update have
+      // committed before we measure.
+      requestAnimationFrame(measure);
+    });
+  }, [editor, measure]);
+
+  useLayoutEffect(() => {
+    measure();
+    if (typeof window === "undefined") return;
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
+
+  // Sync the data attribute that drives the CSS rule. After expanding, also
+  // re-measure on the next frame so the button tracks the current blockquote
+  // position (which may have shifted while it was hidden).
+  useEffect(() => {
+    const root = editableRef.current;
+    if (!root) return;
+    if (hasQuote && collapsed) {
+      root.setAttribute("data-quote-collapsed", "true");
+    } else {
+      root.removeAttribute("data-quote-collapsed");
+      if (hasQuote) requestAnimationFrame(measure);
+    }
+  }, [collapsed, hasQuote, measure]);
+
+  if (!hasQuote) return null;
+
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => setCollapsed((c) => !c)}
+      title={collapsed ? "Show quoted text" : "Hide quoted text"}
+      aria-label={collapsed ? "Show quoted text" : "Hide quoted text"}
+      aria-expanded={!collapsed}
+      style={{ top: topPx, left: 16 }}
+      className="absolute z-10 inline-flex items-center justify-center h-5 px-2 rounded text-xs leading-none bg-neutral-200 hover:bg-neutral-300 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300"
+    >
+      …
+    </button>
   );
 }
 
