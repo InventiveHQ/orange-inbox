@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
+import { updateRsvpStatus } from "@/lib/calendar";
 import { getDb, getEnv } from "@/lib/db";
 import { fullAddress } from "@/lib/identities";
 import { getActiveMailDbs } from "@/lib/mail-db";
@@ -119,6 +120,28 @@ export async function POST(
         { error: "send_failed", message: `Cloudflare rejected the send: ${detail}` },
         { status: 502 },
       );
+    }
+
+    // Persist the user's RSVP on calendar_events so the buttons don't
+    // re-prompt on reload (#77). Best-effort — if this fails we still
+    // succeed the request because the REPLY mail already went out and
+    // the next thread-open will lazily promote a NEEDS-ACTION row.
+    try {
+      await updateRsvpStatus({
+        userId: user.id,
+        icalUid: found.uid,
+        status,
+        fallback: {
+          sourceMessageId: id,
+          startsAt: found.startsAt,
+          endsAt: found.endsAt,
+          summary: found.summary,
+          location: null,
+          organizerEmail: found.organizer,
+        },
+      });
+    } catch (e) {
+      console.warn("rsvp persist failed (REPLY still sent)", e);
     }
 
     return NextResponse.json({ ok: true, status });

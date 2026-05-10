@@ -216,8 +216,8 @@ export async function storeMessage(
   // populates message_calendar_events for the inline RSVP card. Wrapped in
   // try/catch — a malformed .ics must never block ingest of an otherwise
   // perfectly good message.
-  const icsInsert = buildCalendarInsert(mailDb, messageId, parsed.attachments);
-  if (icsInsert) stmts.push(icsInsert);
+  const calendarParse = buildCalendarInsert(mailDb, messageId, parsed.attachments);
+  if (calendarParse) stmts.push(calendarParse.stmt);
 
   // Bump thread counters on the mail-DB threads row. Source of truth for the
   // listing UI is threads_index in control (upserted just below); this keeps
@@ -236,6 +236,28 @@ export async function storeMessage(
   );
 
   await mailDb.batch(stmts);
+
+  // Calendar CANCEL handling (#77). A METHOD=CANCEL invite marks every
+  // promoted `calendar_events` row for the same ical_uid as cancelled —
+  // cross-user, since a shared mailbox can have many subscribers. Done
+  // against env.DB (control plane) because that's where per-user state
+  // lives. Best-effort: a failure here can't roll back the message, and
+  // worst case the user's calendar still shows the original event until
+  // they clear it manually.
+  if (calendarParse && calendarParse.parsedMethod === "CANCEL" && calendarParse.parsedUid) {
+    try {
+      await env.DB
+        .prepare(
+          `UPDATE calendar_events
+              SET cancelled = 1, updated_at = unixepoch()
+            WHERE ical_uid = ?`,
+        )
+        .bind(calendarParse.parsedUid)
+        .run();
+    } catch (err) {
+      console.warn("calendar CANCEL propagate failed", err);
+    }
+  }
 
   // Control-side bookkeeping. Independent of the mail batch — failures here
   // mean the message is still on disk and visible via the next read; we just
@@ -343,16 +365,26 @@ export async function storeMessage(
   return { messageId, threadId: thread.threadId, duplicate: false };
 }
 
+interface CalendarParseResult {
+  stmt: D1PreparedStatement;
+  parsedUid: string | null;
+  parsedMethod: string | null;   // uppercase: REQUEST | CANCEL | REPLY | …
+}
+
 // Build the message_calendar_events INSERT for the first text/calendar
 // attachment we can parse, or return null if the message has none / nothing
 // parseable. Decoding is wrapped in try/catch so a hostile/malformed .ics
 // can't poison the ingest pipeline — we'd rather lose the calendar card
 // than the message.
+//
+// Returns the statement plus the parsed METHOD + UID so the caller can act
+// on CANCEL (cross-user UPDATE on the control-DB calendar_events table)
+// without re-decoding the .ics.
 function buildCalendarInsert(
   mailDb: D1Database,
   messageId: string,
   attachments: ParsedMessage["attachments"],
-): D1PreparedStatement | null {
+): CalendarParseResult | null {
   for (const a of attachments) {
     const ct = (a.contentType || "").toLowerCase();
     if (!ct.startsWith("text/calendar")) continue;
@@ -360,7 +392,7 @@ function buildCalendarInsert(
       const ics = new TextDecoder().decode(a.bytes);
       const parsed = parseIcs(ics);
       if (!parsed) continue;
-      return mailDb
+      const stmt = mailDb
         .prepare(
           `INSERT INTO message_calendar_events
              (message_id, starts_at, ends_at, summary, location, organizer, uid, method, raw_ics)
@@ -378,6 +410,11 @@ function buildCalendarInsert(
           parsed.method,
           ics,
         );
+      return {
+        stmt,
+        parsedUid: parsed.uid,
+        parsedMethod: parsed.method ? parsed.method.toUpperCase() : null,
+      };
     } catch (err) {
       console.warn("ics parse failed", err);
       continue;

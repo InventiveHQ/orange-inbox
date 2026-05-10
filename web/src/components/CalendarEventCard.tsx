@@ -2,16 +2,17 @@
 
 import { useState, useTransition } from "react";
 
-// Inline calendar invite card (#70). Rendered above the message body when
-// `m.calendar_event` is set on a ThreadMessage. Click an RSVP button → POST
-// /api/messages/{id}/rsvp → server composes a `text/calendar; method=REPLY`
-// part and sends it back to the organiser via env.EMAIL.send. There's no
-// external-calendar integration in v1; the deliverable is purely the reply.
+// Inline calendar invite card (#70, extended in #77). Rendered above the
+// message body when `m.calendar_event` is set on a ThreadMessage. RSVP
+// buttons POST /api/messages/{id}/rsvp → server composes a `text/calendar;
+// method=REPLY` and sends it via env.EMAIL.send, then stamps the user's
+// response on `calendar_events` (control DB) so a reload doesn't re-prompt.
 //
-// We deliberately keep the card stateless from the server's perspective —
-// nothing in `message_calendar_events` records the user's response, so a
-// page reload re-shows the buttons. That mirrors how Gmail behaves until
-// the destination calendar service writes back, and keeps v1 tiny.
+// State priorities, top down:
+//   - cancelled = 1            → "Cancelled" pill, RSVP UI hidden
+//   - rsvp_status set + !sent  → pill ("Accepted" / etc.) + "Change response"
+//   - rsvp_status NEEDS-ACTION → three RSVP buttons
+//   - rsvp_status null         → three RSVP buttons (pre-promotion fallback)
 
 interface Props {
   event: {
@@ -21,6 +22,8 @@ interface Props {
     location: string | null;
     organizer: string | null;
     method: string | null;
+    rsvp_status: "NEEDS-ACTION" | "ACCEPTED" | "TENTATIVE" | "DECLINED" | null;
+    cancelled: number;
   };
   threadId: string;
   messageId: string;
@@ -30,10 +33,28 @@ type Status = "ACCEPTED" | "TENTATIVE" | "DECLINED";
 
 export default function CalendarEventCard({ event, messageId }: Props) {
   const [pending, startTransition] = useTransition();
-  const [sent, setSent] = useState<Status | null>(null);
+  // `sent` mirrors the server response when the user RSVPs from this card;
+  // also seeded from the persisted `rsvp_status` so reloads carry the state.
+  const initialSent: Status | null =
+    event.rsvp_status === "ACCEPTED"
+      ? "ACCEPTED"
+      : event.rsvp_status === "TENTATIVE"
+        ? "TENTATIVE"
+        : event.rsvp_status === "DECLINED"
+          ? "DECLINED"
+          : null;
+  const [sent, setSent] = useState<Status | null>(initialSent);
+  // When the user wants to change a previously-sent response we collapse the
+  // pill back into the three buttons. Distinct from `sent` because we still
+  // want to remember the prior state if they cancel out.
+  const [changing, setChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isCancellation = (event.method ?? "").toUpperCase() === "CANCEL";
+  // METHOD=CANCEL on the message itself OR cancelled=1 on the persisted row
+  // both surface as "this event is dead". Either path renders the badge and
+  // suppresses the RSVP UI.
+  const isCancellation =
+    event.cancelled === 1 || (event.method ?? "").toUpperCase() === "CANCEL";
 
   function send(status: Status) {
     setError(null);
@@ -53,6 +74,7 @@ export default function CalendarEventCard({ event, messageId }: Props) {
         return;
       }
       setSent(status);
+      setChanging(false);
     });
   }
 
@@ -72,14 +94,18 @@ export default function CalendarEventCard({ event, messageId }: Props) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold break-words">
-            {event.summary || "(no title)"}
+            <span className={isCancellation ? "line-through text-neutral-500" : ""}>
+              {event.summary || "(no title)"}
+            </span>
             {isCancellation && (
               <span className="ml-2 align-middle inline-flex items-center rounded-full bg-rose-100 dark:bg-rose-900/40 px-2 py-0.5 text-[10px] font-medium text-rose-800 dark:text-rose-300">
                 Cancelled
               </span>
             )}
           </div>
-          <div className="mt-1 text-xs text-neutral-700 dark:text-neutral-300">
+          <div
+            className={`mt-1 text-xs ${isCancellation ? "line-through text-neutral-500" : "text-neutral-700 dark:text-neutral-300"}`}
+          >
             {formatRange(event.starts_at, event.ends_at)}
           </div>
           {event.location && (
@@ -96,13 +122,17 @@ export default function CalendarEventCard({ event, messageId }: Props) {
 
           {!isCancellation && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {sent ? (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300"
-                  role="status"
-                >
-                  Sent {labelFor(sent)}
-                </span>
+              {sent && !changing ? (
+                <>
+                  <RsvpPill status={sent} />
+                  <button
+                    type="button"
+                    onClick={() => setChanging(true)}
+                    className="text-[11px] underline text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100"
+                  >
+                    Change response
+                  </button>
+                </>
               ) : (
                 <>
                   <RsvpButton
@@ -123,6 +153,15 @@ export default function CalendarEventCard({ event, messageId }: Props) {
                     disabled={pending || !event.organizer}
                     onClick={() => send("DECLINED")}
                   />
+                  {sent && changing && (
+                    <button
+                      type="button"
+                      onClick={() => setChanging(false)}
+                      className="text-[11px] underline text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100"
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </>
               )}
               {!event.organizer && !sent && (
@@ -140,6 +179,39 @@ export default function CalendarEventCard({ event, messageId }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+function RsvpPill({ status }: { status: Status }) {
+  const map: Record<Status, { label: string; tone: string; glyph: string }> = {
+    ACCEPTED: {
+      label: "Accepted",
+      tone:
+        "border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300",
+      glyph: "✓",
+    },
+    TENTATIVE: {
+      label: "Tentative",
+      tone:
+        "border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300",
+      glyph: "?",
+    },
+    DECLINED: {
+      label: "Declined",
+      tone:
+        "border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300",
+      glyph: "✗",
+    },
+  };
+  const m = map[status];
+  return (
+    <span
+      role="status"
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${m.tone}`}
+    >
+      <span aria-hidden>{m.glyph}</span>
+      <span>{m.label}</span>
+    </span>
   );
 }
 
@@ -172,12 +244,6 @@ function RsvpButton({
       {label}
     </button>
   );
-}
-
-function labelFor(s: Status): string {
-  if (s === "ACCEPTED") return "Accept";
-  if (s === "TENTATIVE") return "Tentative";
-  return "Decline";
 }
 
 // Format the start/end pair compactly. All-day events (DTSTART of date-only

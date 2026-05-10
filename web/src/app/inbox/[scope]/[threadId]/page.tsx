@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { promoteInvitesForThread } from "@/lib/calendar";
 import { getThreadDetail, listVipAddresses } from "@/lib/queries";
 import { markThreadRead } from "@/lib/threads-mutate";
 import {
@@ -51,6 +52,15 @@ export default async function ScopedDetailPage({
   // Side-effect during render is fine here: this page is dynamic, the
   // mutation is idempotent, and it's auth-gated inside markThreadRead.
   await markThreadRead(user.id, threadId);
+
+  // Lazy promote any inbound invites in this thread to the user's
+  // calendar_events (#77). Fire-and-forget — render must not block on the
+  // write, and the function is idempotent so repeat opens are a no-op.
+  // Errors are swallowed; the next open will retry the same INSERT.
+  promoteInvitesForThread(
+    user.id,
+    detail.messages.map(m => ({ id: m.id, calendar_event: m.calendar_event })),
+  ).catch(err => console.warn("promoteInvitesForThread", err));
   return (
     <>
       {wasUnread && <MarkReadRefresh />}

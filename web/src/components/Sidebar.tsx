@@ -137,6 +137,13 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
+          href="/inbox/calendar"
+          label="Calendar"
+          active={scope === "calendar"}
+          icon={<CalendarIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/inbox/drafts"
           label="Drafts"
           active={scope === "drafts"}
@@ -950,6 +957,16 @@ function VipIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1.25 9.86 5l4.14.6-3 2.93.71 4.13L8 10.71l-3.71 1.95.71-4.13-3-2.93L6.14 5 8 1.25Z" />
+    </svg>
+  );
+}
+
+// Calendar icon — month grid with a header strip, mirrors the geometry of
+// the other 16x16 sidebar glyphs (filled, currentColor).
+function CalendarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M4.5 1a.5.5 0 0 1 .5.5V2h6v-.5a.5.5 0 0 1 1 0V2h.5A2 2 0 0 1 14 4v8.5A2 2 0 0 1 12 14.5H4A2 2 0 0 1 2 12.5V4a2 2 0 0 1 2-2H4v-.5A.5.5 0 0 1 4.5 1ZM3 6v6.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6H3Z" />
     </svg>
   );
 }

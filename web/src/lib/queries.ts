@@ -303,6 +303,12 @@ export interface AttachmentRow {
 // VEVENT into message_calendar_events at ingest, the reader LEFT JOINs it
 // back here so ThreadView can render an inline RSVP card without a second
 // round-trip.
+//
+// #77 adds per-user state on top: once the user has opened the thread we
+// promote the invite into `calendar_events` (control DB) and surface the
+// caller's rsvp_status + cancelled flag + the per-user event id alongside
+// the mail-DB parse. The reader uses these to render an RSVP pill (so
+// page reload doesn't re-prompt) and a "Cancelled" badge.
 export interface CalendarEvent {
   starts_at: number;          // unix seconds
   ends_at: number | null;
@@ -311,6 +317,12 @@ export interface CalendarEvent {
   organizer: string | null;
   uid: string | null;
   method: string | null;
+  // Per-user state (NULL until the user opens the thread once, then
+  // promoted lazily). When NULL the reader falls back to the v1 stateless
+  // behaviour — Accept/Tentative/Decline buttons.
+  rsvp_status: "NEEDS-ACTION" | "ACCEPTED" | "TENTATIVE" | "DECLINED" | null;
+  cancelled: number;          // 1 when a METHOD=CANCEL has arrived for this UID
+  event_id: string | null;    // control-DB calendar_events.id, NULL pre-promotion
 }
 
 export interface ThreadMessage {
@@ -387,7 +399,10 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
   // Mail-DB row shape — sent_by_user_id stays here; we resolve it to email +
   // display_name via a follow-up control-DB lookup since users live there.
   // Calendar fields come from a LEFT JOIN against message_calendar_events
-  // and are repacked into the nested `calendar_event` shape below.
+  // and are repacked into the nested `calendar_event` shape below. The
+  // per-user state (rsvp_status, cancelled, event_id from calendar_events
+  // in the CONTROL DB) is layered on after this fetch — the mail DB and
+  // control DB are independent D1 instances so we can't join across them.
   type RawMessageRow = Omit<
     ThreadMessage,
     "attachments" | "sent_by_email" | "sent_by_display_name" | "calendar_event"
@@ -467,6 +482,51 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     else attachmentsByMessage.set(a.message_id, [a]);
   }
 
+  // Per-user calendar state (#77). For each message that carries an invite
+  // with a UID, pull the caller's matching calendar_events row from the
+  // control DB so the reader can render the RSVP pill / Cancelled badge
+  // without a second round-trip on the client. Skips messages with no UID
+  // — those can't be matched and stay stateless (the v1 RSVP-via-reply
+  // path is unaffected).
+  const uids = Array.from(
+    new Set(
+      messageRows
+        .map(m => m.cal_uid)
+        .filter((u): u is string => !!u),
+    ),
+  );
+  const stateByUid = new Map<
+    string,
+    {
+      rsvp_status: CalendarEvent["rsvp_status"];
+      cancelled: number;
+      event_id: string;
+    }
+  >();
+  if (uids.length > 0) {
+    const placeholders = uids.map(() => "?").join(",");
+    const { results: stateRows } = await getDb()
+      .prepare(
+        `SELECT id, ical_uid, rsvp_status, cancelled
+           FROM calendar_events
+          WHERE user_id = ? AND ical_uid IN (${placeholders})`,
+      )
+      .bind(userId, ...uids)
+      .all<{
+        id: string;
+        ical_uid: string;
+        rsvp_status: CalendarEvent["rsvp_status"];
+        cancelled: number;
+      }>();
+    for (const r of stateRows ?? []) {
+      stateByUid.set(r.ical_uid, {
+        rsvp_status: r.rsvp_status,
+        cancelled: r.cancelled,
+        event_id: r.id,
+      });
+    }
+  }
+
   const messages: ThreadMessage[] = messageRows.map(m => {
     const sender = m.sent_by_user_id ? senderMap.get(m.sent_by_user_id) ?? null : null;
     const {
@@ -479,6 +539,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     // The LEFT JOIN nulls every cal_* field for messages without a row in
     // message_calendar_events. cal_starts_at is NOT NULL in the table, so
     // a non-null value there is the unambiguous "we have an event" signal.
+    const state = cal_uid ? stateByUid.get(cal_uid) ?? null : null;
     const calendar_event: CalendarEvent | null =
       cal_starts_at != null
         ? {
@@ -489,6 +550,9 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
             organizer: cal_organizer,
             uid: cal_uid,
             method: cal_method,
+            rsvp_status: state?.rsvp_status ?? null,
+            cancelled: state?.cancelled ?? 0,
+            event_id: state?.event_id ?? null,
           }
         : null;
     return {
