@@ -15,6 +15,7 @@ import SearchBar from "@/components/SearchBar";
 import MobileShell from "@/components/MobileShell";
 import AppBadgeSync from "@/components/AppBadgeSync";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
+import CommandPaletteShortcut from "@/components/CommandPaletteShortcut";
 
 export default async function InboxLayout({
   children,
@@ -184,6 +185,7 @@ export default async function InboxLayout({
         <ComposeFromUrl />
         <AppBadgeSync />
         <KeyboardShortcuts />
+        <CommandPaletteShortcut />
         <MobileShell
           sidebar={
             <Sidebar

@@ -180,6 +180,8 @@ export default function Sidebar({
         />
       </nav>
 
+      {!collapsed && <QuickSearchHint />}
+
       {/*
         Settings + Help sit at the bottom of the drawer — common Gmail/Slack
         pattern, and an out-of-the-way home for things you only touch
@@ -658,6 +660,36 @@ function SmartMailboxLink({ saved }: { saved: SavedSearchRow }) {
       <SearchPinIcon />
       <span className="truncate flex-1">{saved.name}</span>
     </Link>
+  );
+}
+
+// Tiny "⌘K Quick search" affordance above the utility row — text-only by
+// design so it doesn't compete with the BottomLink icons. Renders the right
+// modifier glyph for the visitor's platform (⌘ on macOS, Ctrl elsewhere)
+// and stays visually quiet via muted text + no border / no background.
+//
+// We avoid a useEffect/setState dance for platform detection — the kbd
+// glyph is purely cosmetic, so reading navigator.userAgent directly via
+// useState's lazy initialiser (client-only since the parent is "use client")
+// keeps the render single-pass. SSR can't reach this branch because the
+// Sidebar is a client component.
+function QuickSearchHint() {
+  const isMac = useState(() => {
+    if (typeof navigator === "undefined") return false;
+    // userAgentData.platform is the modern source of truth, but Safari still
+    // doesn't ship it; fall back to the user-agent string for now.
+    const platform =
+      (navigator as Navigator & { userAgentData?: { platform?: string } })
+        .userAgentData?.platform ?? navigator.userAgent;
+    return /mac/i.test(platform);
+  })[0];
+  const mod = isMac ? "⌘" : "Ctrl";
+  return (
+    <div className="px-3 pb-1.5 text-[11px] text-neutral-500 dark:text-neutral-500 select-none">
+      <kbd className="font-mono">{mod}</kbd>
+      <kbd className="ml-0.5 font-mono">K</kbd>
+      <span className="ml-1.5">Quick search</span>
+    </div>
   );
 }
 
