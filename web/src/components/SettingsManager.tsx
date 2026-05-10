@@ -6,6 +6,7 @@ import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
 import type { LabelRow } from "@/lib/labels";
 import { APP_VERSION } from "@/lib/version";
+import AddMailboxDialog from "./AddMailboxDialog";
 import LabelChip from "./LabelChip";
 import PushNotificationToggle from "./PushNotificationToggle";
 import RichTextEditor from "./RichTextEditor";
@@ -847,6 +848,9 @@ function MailDomainsSection({
                     <div className="text-xs text-neutral-500 truncate">{d.display_name}</div>
                   )}
                 </div>
+                {isAdmin && (
+                  <AddMailboxToDomainButton domainId={d.id} domainName={d.name} />
+                )}
               </li>
             ))}
           </ul>
@@ -858,6 +862,34 @@ function MailDomainsSection({
         )}
       </div>
     </section>
+  );
+}
+
+function AddMailboxToDomainButton({
+  domainId,
+  domainName,
+}: {
+  domainId: string;
+  domainName: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+      >
+        Add mailbox
+      </button>
+      {open && (
+        <AddMailboxDialog
+          domainId={domainId}
+          domainName={domainName}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }
 

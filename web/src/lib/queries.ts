@@ -128,7 +128,7 @@ interface ThreadListRow extends Omit<ThreadListItem, "labels"> {
 // every field needed for a row in the inbox view is denormalised here.
 export async function listThreads(
   userId: string,
-  opts: { mailboxId?: string; limit?: number; includeMuted?: boolean } = {},
+  opts: { mailboxId?: string; domainId?: string; limit?: number; includeMuted?: boolean } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   // Hide threads that are still in a future-snooze. The cron clears
@@ -150,6 +150,11 @@ export async function listThreads(
   if (opts.mailboxId) {
     where.push("ti.mailbox_id = ?");
     binds.push(opts.mailboxId);
+  }
+
+  if (opts.domainId) {
+    where.push("mb.domain_id = ?");
+    binds.push(opts.domainId);
   }
 
   // Labels per thread come from `thread_labels` (the cache maintained by the
