@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import CalendarDayGrid from "./CalendarDayGrid";
 import CalendarEventForm from "./CalendarEventForm";
 import CalendarMonthGrid from "./CalendarMonthGrid";
+import CalendarSidebar from "./CalendarSidebar";
 import CalendarWeekGrid from "./CalendarWeekGrid";
 
 // Top-level page component for /inbox/calendar (#77). Owns the view-switch
@@ -424,9 +425,10 @@ export default function CalendarManager() {
         scope={scope}
         onScopeChange={setScope}
         onUpdate={updateCalendar}
+        onReordered={fetchCalendars}
       />
       <div className="flex flex-col flex-1 min-w-0 min-h-0">
-      <header className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 flex flex-wrap items-center gap-3 print:hidden">
+      <header className="border-b border-neutral-200 dark:border-neutral-800 pl-12 pr-4 md:px-4 py-3 flex flex-wrap items-center gap-3 print:hidden">
         <h1 className="text-base font-semibold mr-2">Calendar</h1>
 
         <div className="flex items-center gap-1">
@@ -613,126 +615,9 @@ export default function CalendarManager() {
   );
 }
 
-// Left-rail sidebar: one row per calendar with a color swatch + visibility
-// checkbox. Clicking a row name scopes the grid to that calendar; clicking
-// "All calendars" returns to the consolidated view. Colors are clickable
-// → opens an inline picker with a fixed Tailwind palette so the user
-// doesn't have to type hex codes (the API still accepts free-form hex on
-// the wire, but UX defaults stay constrained).
-const COLOR_PALETTE: string[] = [
-  "#3b82f6", // blue
-  "#22c55e", // green
-  "#f97316", // orange
-  "#ef4444", // red
-  "#a855f7", // purple
-  "#ec4899", // pink
-  "#14b8a6", // teal
-  "#eab308", // yellow
-  "#64748b", // slate
-];
-
-function CalendarSidebar({
-  calendars,
-  scope,
-  onScopeChange,
-  onUpdate,
-}: {
-  calendars: CalendarSummary[];
-  scope: ScopeSelection;
-  onScopeChange: (s: ScopeSelection) => void;
-  onUpdate: (id: string, patch: { color?: string; hidden?: boolean }) => void;
-}) {
-  const [openSwatchId, setOpenSwatchId] = useState<string | null>(null);
-  return (
-    <aside className="hidden md:flex w-56 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50/40 dark:bg-neutral-950/40 overflow-y-auto">
-      <div className="px-3 py-2 text-[11px] uppercase tracking-wider font-medium text-neutral-500">
-        Calendars
-      </div>
-      <button
-        type="button"
-        onClick={() => onScopeChange(SCOPE_ALL)}
-        className={`text-left px-3 py-1.5 text-xs ${
-          scope === SCOPE_ALL
-            ? "bg-[var(--color-brand)]/10 text-[var(--color-brand)] font-medium"
-            : "hover:bg-neutral-100 dark:hover:bg-neutral-900 text-neutral-700 dark:text-neutral-300"
-        }`}
-      >
-        All calendars
-      </button>
-      <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-neutral-400">
-        Filter
-      </div>
-      <ul className="flex-1 px-1 pb-2 space-y-0.5">
-        {calendars.map(c => {
-          const active = scope === c.id;
-          return (
-            <li key={c.id} className="relative">
-              <div
-                className={`group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs ${
-                  active
-                    ? "bg-[var(--color-brand)]/10"
-                    : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={!c.hidden}
-                  onChange={e => onUpdate(c.id, { hidden: !e.target.checked })}
-                  aria-label={`Show ${c.name}`}
-                  className="h-3 w-3 cursor-pointer"
-                />
-                <button
-                  type="button"
-                  onClick={() => setOpenSwatchId(openSwatchId === c.id ? null : c.id)}
-                  aria-label={`Recolor ${c.name}`}
-                  className="h-3 w-3 rounded-full ring-1 ring-black/10 dark:ring-white/10 cursor-pointer shrink-0"
-                  style={{ backgroundColor: c.color }}
-                />
-                <button
-                  type="button"
-                  onClick={() => onScopeChange(c.id)}
-                  className={`flex-1 truncate text-left ${
-                    active
-                      ? "text-[var(--color-brand)] font-medium"
-                      : "text-neutral-700 dark:text-neutral-300"
-                  } ${c.hidden ? "opacity-50" : ""}`}
-                  title={c.name}
-                >
-                  {c.name}
-                </button>
-              </div>
-              {openSwatchId === c.id && (
-                <div
-                  className="absolute z-10 left-2 top-full mt-1 flex flex-wrap gap-1 p-2 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-md"
-                  role="dialog"
-                  aria-label={`Pick color for ${c.name}`}
-                >
-                  {COLOR_PALETTE.map(hex => (
-                    <button
-                      key={hex}
-                      type="button"
-                      aria-label={`Set color ${hex}`}
-                      onClick={() => {
-                        onUpdate(c.id, { color: hex });
-                        setOpenSwatchId(null);
-                      }}
-                      className={`h-4 w-4 rounded-full ring-1 ring-black/10 dark:ring-white/10 ${
-                        c.color.toLowerCase() === hex
-                          ? "outline outline-2 outline-offset-1 outline-[var(--color-brand)]"
-                          : ""
-                      }`}
-                      style={{ backgroundColor: hex }}
-                    />
-                  ))}
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </aside>
-  );
-}
+// (CalendarSidebar lives in ./CalendarSidebar — extracted in #97 to add
+// the mobile drawer + drag-reorder + free-form hex picker without
+// growing this file further.)
 
 function isNewDraft(x: CalendarEvent | NewEventDraft): x is NewEventDraft {
   return (x as NewEventDraft).kind === "new";
