@@ -65,6 +65,35 @@ export function dateBucket(unixSeconds: number, now = Date.now()): string {
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
+// Coarse relative-time string for "happened N ago" annotations on resolved
+// assignments and similar audit-style metadata. Buckets are intentionally
+// chunky — minute / hour / day / week / month / year — because the use case
+// is "give me a glance-level sense of when" rather than precision. Anything
+// in the future renders as "just now" (a clock-skew or pending-resolution
+// edge case rather than a real value).
+//
+// Lives in format.ts (not its own file) because the rest of the app's
+// human-time helpers cluster here; see formatThreadDate / dateBucket.
+export function formatRelativeTime(unixSeconds: number, now = Date.now()): string {
+  const diffSec = Math.floor(now / 1000) - unixSeconds;
+  if (diffSec < 45) return "just now";
+  if (diffSec < 90) return "a minute ago";
+  const minutes = Math.floor(diffSec / 60);
+  if (minutes < 45) return `${minutes} minutes ago`;
+  if (minutes < 90) return "an hour ago";
+  const hours = Math.floor(diffSec / 3600);
+  if (hours < 24) return `${hours} hours ago`;
+  if (hours < 36) return "a day ago";
+  const days = Math.floor(diffSec / 86400);
+  if (days < 7) return `${days} days ago`;
+  if (days < 14) return "a week ago";
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+  if (days < 60) return "a month ago";
+  if (days < 365) return `${Math.floor(days / 30)} months ago`;
+  if (days < 730) return "a year ago";
+  return `${Math.floor(days / 365)} years ago`;
+}
+
 // Human-readable byte size — "1.23 MB" / "456 KB" / "12 B". Uses binary
 // (1024) units, since these numbers describe SQLite storage.
 export function formatBytes(n: number): string {

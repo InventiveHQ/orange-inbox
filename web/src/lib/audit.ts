@@ -19,6 +19,8 @@ export type AuditAction =
   | "label_remove"
   | "assign"
   | "unassign"
+  | "resolve"
+  | "reopen"
   | "note_add"
   | "snooze"
   | "mute"

@@ -1,5 +1,6 @@
 import { getDb } from "./db";
 import { logAudit } from "./audit";
+import type { ThreadListItem } from "./queries";
 
 // Shared-mailbox assignment (issue #27). A thread has at most one assignee
 // (PK on thread_id in thread_assignments). The "Claim" action is just
@@ -184,4 +185,267 @@ export async function unassignThread(
     });
   }
   return { ok: true };
+}
+
+// Resolve / reopen lifecycle (#99). Resolving an assignment marks it as
+// closed-out — `resolved_at` is set and `resolved_by` records who clicked
+// Resolve (not always the assignee). The row stays in `thread_assignments`
+// so the resolved-history view can list it; `listAssignedToUser` filters
+// `resolved_at IS NULL` to keep the active list focused. Reopen flips both
+// columns back to NULL.
+//
+// Permission: caller must be a member of the thread's mailbox. We don't
+// require caller == assignee — a teammate often closes out somebody else's
+// claim once the customer reply lands and the assignee is offline.
+
+export type ResolveResult =
+  | { ok: true }
+  | { ok: false; code: "forbidden" | "not_found" | "not_assigned" | "already_resolved" };
+
+export async function resolveAssignment(
+  threadId: string,
+  byUserId: string,
+): Promise<ResolveResult> {
+  const row = await getDb()
+    .prepare(
+      `SELECT ti.mailbox_id  AS mailbox_id,
+              uma.user_id    AS by_access,
+              ta.assignee_id AS assignee_id,
+              ta.resolved_at AS resolved_at
+         FROM threads_index ti
+         LEFT JOIN user_mailbox_access uma
+           ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?
+         LEFT JOIN thread_assignments ta ON ta.thread_id = ti.thread_id
+        WHERE ti.thread_id = ?`,
+    )
+    .bind(byUserId, threadId)
+    .first<{
+      mailbox_id: string | null;
+      by_access: string | null;
+      assignee_id: string | null;
+      resolved_at: number | null;
+    }>();
+  if (!row || !row.mailbox_id) return { ok: false, code: "not_found" };
+  if (!row.by_access) return { ok: false, code: "forbidden" };
+  if (!row.assignee_id) return { ok: false, code: "not_assigned" };
+  if (row.resolved_at !== null) return { ok: false, code: "already_resolved" };
+
+  const now = Math.floor(Date.now() / 1000);
+  await getDb()
+    .prepare(
+      `UPDATE thread_assignments
+          SET resolved_at = ?, resolved_by = ?
+        WHERE thread_id = ?`,
+    )
+    .bind(now, byUserId, threadId)
+    .run();
+
+  await logAudit({
+    userId: byUserId,
+    mailboxId: row.mailbox_id,
+    threadId,
+    action: "resolve",
+    payload: { assignee_id: row.assignee_id },
+  });
+  return { ok: true };
+}
+
+// Reopen — flip a previously-resolved assignment back to active. Mirrors the
+// resolve-permission shape (must be mailbox member; doesn't require caller
+// to be the assignee or the original resolver).
+export async function reopenAssignment(
+  threadId: string,
+  byUserId: string,
+): Promise<ResolveResult> {
+  const row = await getDb()
+    .prepare(
+      `SELECT ti.mailbox_id  AS mailbox_id,
+              uma.user_id    AS by_access,
+              ta.assignee_id AS assignee_id,
+              ta.resolved_at AS resolved_at
+         FROM threads_index ti
+         LEFT JOIN user_mailbox_access uma
+           ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?
+         LEFT JOIN thread_assignments ta ON ta.thread_id = ti.thread_id
+        WHERE ti.thread_id = ?`,
+    )
+    .bind(byUserId, threadId)
+    .first<{
+      mailbox_id: string | null;
+      by_access: string | null;
+      assignee_id: string | null;
+      resolved_at: number | null;
+    }>();
+  if (!row || !row.mailbox_id) return { ok: false, code: "not_found" };
+  if (!row.by_access) return { ok: false, code: "forbidden" };
+  if (!row.assignee_id) return { ok: false, code: "not_assigned" };
+  // Reopen on an already-active row is a no-op — the UI shouldn't show the
+  // button there, but a stale tab calling it shouldn't 400. Treat as success.
+  if (row.resolved_at === null) return { ok: true };
+
+  await getDb()
+    .prepare(
+      `UPDATE thread_assignments
+          SET resolved_at = NULL, resolved_by = NULL
+        WHERE thread_id = ?`,
+    )
+    .bind(threadId)
+    .run();
+
+  await logAudit({
+    userId: byUserId,
+    mailboxId: row.mailbox_id,
+    threadId,
+    action: "reopen",
+    payload: { assignee_id: row.assignee_id },
+  });
+  return { ok: true };
+}
+
+// Resolved-history row for the /inbox/assigned ?status=resolved tab (#99).
+// Same shape as ThreadListItem (so the list renderer can share most of the
+// markup) plus the resolution metadata the row needs to surface.
+export interface ResolvedAssignmentItem extends ThreadListItem {
+  resolved_at: number;
+  resolved_by_id: string | null;
+  resolved_by_email: string | null;
+  resolved_by_display_name: string | null;
+}
+
+interface ResolvedAssignmentRow {
+  id: string;
+  subject_normalized: string;
+  last_message_at: number;
+  message_count: number;
+  unread_count: number;
+  starred: number;
+  archived: number;
+  muted: number;
+  pinned: number;
+  remind_at: number | null;
+  follow_up_enabled: number;
+  follow_up_days: number | null;
+  domain_id: string;
+  domain_name: string;
+  mailbox_id: string;
+  mailbox_local_part: string;
+  last_subject: string | null;
+  last_from_addr: string | null;
+  last_from_name: string | null;
+  last_snippet: string | null;
+  labels_json: string | null;
+  resolved_at: number;
+  resolved_by_id: string | null;
+  resolved_by_email: string | null;
+  resolved_by_display_name: string | null;
+}
+
+// Resolved assignments belonging to `userId` (assignee). Cross-mailbox by
+// design — same scoping as the active list. Caller still has read access at
+// query time (user_mailbox_access join) so a user removed from a mailbox
+// after resolving a thread there won't see ghosts in the resolved tab.
+//
+// Lives in assignments.ts (not queries.ts) because it's tightly coupled to
+// the resolve/reopen lifecycle — the SQL is the active query with the
+// resolved_at filter inverted plus a LEFT JOIN on users for the
+// "Resolved by …" pill.
+export async function listAssignedToUserResolved(
+  userId: string,
+  opts: { limit?: number } = {},
+): Promise<ResolvedAssignmentItem[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const sql = `
+    SELECT
+      ti.thread_id AS id,
+      ti.subject_normalized,
+      ti.last_message_at,
+      ti.message_count,
+      ti.unread_count,
+      ti.starred,
+      ti.archived,
+      ti.muted,
+      ti.pinned,
+      ti.remind_at,
+      ti.follow_up_enabled,
+      ti.follow_up_days,
+      d.id   AS domain_id,
+      d.name AS domain_name,
+      mb.id  AS mailbox_id,
+      mb.local_part AS mailbox_local_part,
+      ti.last_subject   AS last_subject,
+      ti.last_from_addr AS last_from_addr,
+      ti.last_from_name AS last_from_name,
+      ti.last_snippet   AS last_snippet,
+      (
+        SELECT JSON_GROUP_ARRAY(
+                 JSON_OBJECT('id', l.id, 'name', l.name, 'color', l.color)
+               )
+          FROM (
+            SELECT l.id, l.name, l.color
+              FROM thread_labels tl
+              INNER JOIN labels l ON l.id = tl.label_id
+             WHERE tl.thread_id = ti.thread_id
+             ORDER BY l.name
+          ) AS l
+      ) AS labels_json,
+      ta.resolved_at AS resolved_at,
+      ta.resolved_by AS resolved_by_id,
+      ru.email        AS resolved_by_email,
+      ru.display_name AS resolved_by_display_name
+    FROM thread_assignments ta
+    INNER JOIN threads_index ti ON ti.thread_id = ta.thread_id
+    INNER JOIN mailboxes mb     ON mb.id = ti.mailbox_id
+    INNER JOIN domains d        ON d.id = mb.domain_id
+    INNER JOIN user_mailbox_access uma
+            ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?1
+    LEFT JOIN users ru          ON ru.id = ta.resolved_by
+    WHERE ta.assignee_id = ?1
+      AND ta.resolved_at IS NOT NULL
+    ORDER BY ta.resolved_at DESC
+    LIMIT ?
+  `;
+  const { results } = await getDb()
+    .prepare(sql)
+    .bind(userId, limit)
+    .all<ResolvedAssignmentRow>();
+  return (results ?? []).map(parseResolvedRow);
+}
+
+function parseResolvedRow(row: ResolvedAssignmentRow): ResolvedAssignmentItem {
+  let labels: ThreadListItem["labels"] = [];
+  if (row.labels_json) {
+    try {
+      const parsed = JSON.parse(row.labels_json) as ThreadListItem["labels"];
+      labels = Array.isArray(parsed) ? parsed.filter(l => l && typeof l.id === "string") : [];
+    } catch {
+      labels = [];
+    }
+  }
+  return {
+    id: row.id,
+    subject_normalized: row.subject_normalized,
+    last_message_at: row.last_message_at,
+    message_count: row.message_count,
+    unread_count: row.unread_count,
+    starred: row.starred,
+    archived: row.archived,
+    muted: row.muted,
+    pinned: row.pinned,
+    remind_at: row.remind_at,
+    follow_up_enabled: row.follow_up_enabled,
+    follow_up_days: row.follow_up_days,
+    domain_id: row.domain_id,
+    domain_name: row.domain_name,
+    mailbox_id: row.mailbox_id,
+    mailbox_local_part: row.mailbox_local_part,
+    last_subject: row.last_subject,
+    last_from_addr: row.last_from_addr,
+    last_from_name: row.last_from_name,
+    last_snippet: row.last_snippet,
+    labels,
+    resolved_at: row.resolved_at,
+    resolved_by_id: row.resolved_by_id,
+    resolved_by_email: row.resolved_by_email,
+    resolved_by_display_name: row.resolved_by_display_name,
+  };
 }
