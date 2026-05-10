@@ -26,6 +26,26 @@ function defaultLabel(seed: string): string {
   return "?";
 }
 
+// Extract up to 2 initials from a name, e.g. "Sean Conroy" -> "SC",
+// "emilydavis" -> "EM", "HF" -> "HF".
+function initialsFromLabel(label: string): string {
+  const tokens = label.trim().split(/[\s._-]+/).filter(Boolean);
+  if (tokens.length === 0) return "";
+  if (tokens.length === 1) {
+    const chars = tokens[0].match(/[a-z0-9]/gi);
+    return chars ? chars.slice(0, 2).join("").toUpperCase() : "";
+  }
+  let out = "";
+  for (const tok of tokens) {
+    const m = tok.match(/[a-z0-9]/i);
+    if (m) {
+      out += m[0].toUpperCase();
+      if (out.length >= 2) break;
+    }
+  }
+  return out;
+}
+
 export type AvatarSize = "sm" | "md" | "lg";
 
 const SIZE_CLASSES: Record<AvatarSize, string> = {
@@ -45,7 +65,7 @@ interface Props {
 
 export default function Avatar({ seed, label, size = "md", ringed = false, className = "", title }: Props) {
   const palette = colorForSeed(seed || "?");
-  const text = (label && label.trim()) || defaultLabel(seed || "?");
+  const text = (label && initialsFromLabel(label)) || defaultLabel(seed || "?");
   return (
     <span
       aria-hidden
