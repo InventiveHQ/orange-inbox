@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import { listDomainsForUser, listMailboxesForUser, listThreads } from "@/lib/queries";
+import { DEFAULT_QUADRANT, listThreadsForTriage } from "@/lib/triage";
 import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
 import Sidebar from "@/components/Sidebar";
@@ -52,13 +53,22 @@ export default async function InboxLayout({
   const [threads, drafts] = await Promise.all([
     isDrafts || isFullPage
       ? Promise.resolve([])
-      : listThreads(user.id, {
-          mailboxId,
-          // Per-mailbox views hide muted threads; the unified "all" view
-          // shows them so muted mail is still findable without leaving the
-          // inbox UI.
-          includeMuted: mailboxId === undefined,
-        }),
+      : effectiveScope === "all"
+        ? // Layouts can't read searchParams in this Next, so the SSR'd payload
+          // is always the default quadrant. The client toggle re-navigates,
+          // which re-renders the page; once a classifier exists this should
+          // pick up the ?view= param via a wrapping page-level fetch.
+          listThreadsForTriage(user.id, {
+            quadrant: DEFAULT_QUADRANT,
+            includeMuted: true,
+          })
+        : listThreads(user.id, {
+            mailboxId,
+            // Per-mailbox views hide muted threads; the unified "all" view
+            // shows them so muted mail is still findable without leaving the
+            // inbox UI.
+            includeMuted: mailboxId === undefined,
+          }),
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
 
