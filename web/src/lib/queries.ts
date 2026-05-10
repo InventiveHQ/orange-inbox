@@ -240,6 +240,10 @@ export interface AttachmentRow {
   content_type: string | null;
   size: number;
   inline_cid: string | null;
+  // 1 = parser flagged as executable / dangerous (see email-worker's
+  // attachment-safety.ts). UI uses this to render a warning badge and gate
+  // the download behind a confirm modal.
+  is_executable: number;
 }
 
 export interface ThreadMessage {
@@ -336,7 +340,8 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
   // Avoids an N+1 across messages without joining/duplicating message columns.
   const { results: attachmentRows } = await mailDb
     .prepare(
-      `SELECT a.id, a.message_id, a.filename, a.content_type, a.size, a.inline_cid
+      `SELECT a.id, a.message_id, a.filename, a.content_type, a.size, a.inline_cid,
+              a.is_executable
          FROM attachments a
          INNER JOIN messages m ON m.id = a.message_id
         WHERE m.thread_id = ?

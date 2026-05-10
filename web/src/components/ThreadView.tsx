@@ -4,6 +4,7 @@ import ApplyLabelButton from "./ApplyLabelButton";
 import AttachmentPreview from "./AttachmentPreview";
 import Avatar from "./Avatar";
 import BackToListButton from "./BackToListButton";
+import ExecutableAttachment from "./ExecutableAttachment";
 import ReplyButton from "./ReplyButton";
 import ReplyAllButton from "./ReplyAllButton";
 import SnoozeButton from "./SnoozeButton";
@@ -196,10 +197,17 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
 
 function AttachmentsList({ attachments }: { attachments: AttachmentRow[] }) {
   // Split: images and PDFs are handed to the client previewer (thumbnails +
-  // chip+Preview button + lightbox); everything else stays as a plain
-  // download chip rendered server-side.
-  const previewable = attachments.filter(a => isPreviewable(a.content_type));
-  const other = attachments.filter(a => !isPreviewable(a.content_type));
+  // chip+Preview button + lightbox); executables go through the confirm-
+  // modal client component; everything else stays as a plain download chip
+  // rendered server-side.
+  //
+  // An executable image/pdf is unusual but possible (e.g. a renamed payload
+  // with a misleading content-type) — the safety flag wins over previewable
+  // so we never auto-render the bytes.
+  const executable = attachments.filter(a => a.is_executable === 1);
+  const safe = attachments.filter(a => a.is_executable !== 1);
+  const previewable = safe.filter(a => isPreviewable(a.content_type));
+  const other = safe.filter(a => !isPreviewable(a.content_type));
 
   return (
     <>
@@ -213,8 +221,17 @@ function AttachmentsList({ attachments }: { attachments: AttachmentRow[] }) {
           }))}
         />
       )}
-      {other.length > 0 && (
+      {(other.length > 0 || executable.length > 0) && (
         <ul className="mt-3 flex flex-wrap gap-2">
+          {executable.map(a => (
+            <li key={a.id}>
+              <ExecutableAttachment
+                id={a.id}
+                filename={a.filename}
+                size={a.size}
+              />
+            </li>
+          ))}
           {other.map(a => (
             <li key={a.id}>
               <a

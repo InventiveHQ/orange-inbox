@@ -157,10 +157,19 @@ export async function storeMessage(
     stmts.push(
       mailDb
         .prepare(
-          `INSERT INTO attachments (id, message_id, filename, content_type, size, inline_cid, r2_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO attachments (id, message_id, filename, content_type, size, inline_cid, r2_key, is_executable)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .bind(id, messageId, a.filename, a.contentType, a.bytes.byteLength, a.contentId ?? null, r2Key),
+        .bind(
+          id,
+          messageId,
+          a.filename,
+          a.contentType,
+          a.bytes.byteLength,
+          a.contentId ?? null,
+          r2Key,
+          a.isExecutable ? 1 : 0,
+        ),
     );
   }
 

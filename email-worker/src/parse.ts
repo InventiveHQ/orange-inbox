@@ -1,4 +1,5 @@
 import PostalMime, { type Address, type Attachment } from "postal-mime";
+import { isExecutable } from "./attachment-safety";
 import type { AddressInfo, ParsedAttachment, ParsedMessage } from "./types";
 
 export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
@@ -90,12 +91,15 @@ export function stripHtml(html: string): string {
 }
 
 function toParsedAttachment(a: Attachment): ParsedAttachment {
+  const filename = a.filename ?? null;
+  const contentType = a.mimeType;
   return {
-    filename: a.filename ?? null,
-    contentType: a.mimeType,
+    filename,
+    contentType,
     disposition: a.disposition,
     contentId: a.contentId?.replace(/^<|>$/g, ""),
     bytes: toArrayBuffer(a.content),
+    isExecutable: isExecutable(filename, contentType),
   };
 }
 
