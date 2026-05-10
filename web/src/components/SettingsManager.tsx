@@ -14,6 +14,12 @@ import {
   type Theme,
   type UserPreferences,
 } from "@/lib/preferences";
+import type {
+  DomainRow as StorageDomainRow,
+  SenderRow as StorageSenderRow,
+  ThreadRow as StorageThreadRow,
+} from "@/lib/storage-stats";
+import { formatBytes } from "@/lib/format";
 import { APP_VERSION } from "@/lib/version";
 import AddMailboxDialog from "./AddMailboxDialog";
 import InboxLayoutEditor from "./InboxLayoutEditor";
@@ -75,6 +81,7 @@ export default function SettingsManager({
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
       { id: "export", label: "Import / Export" },
+      ...(isAdmin ? [{ id: "storage", label: "Storage" }] : []),
       { id: "appearance", label: "Appearance" },
       { id: "about", label: "About" },
     ],
@@ -133,6 +140,7 @@ export default function SettingsManager({
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
             <ExportSection id="export" ownedIdentities={ownedIdentities} />
+            {isAdmin && <StorageSection id="storage" />}
             <AppearanceSection id="appearance" />
             <AboutSection id="about" />
           </div>
@@ -1848,6 +1856,171 @@ function GlobeIcon() {
       <path d="M3 12h18" />
       <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
     </svg>
+  );
+}
+
+// Admin-only Storage Explorer — top senders / threads / per-domain summary.
+// Lazy-loads from /api/storage/explorer on first mount because the queries
+// fan out across every mail DB and shouldn't run on every settings page hit.
+function StorageSection({ id }: { id: string }) {
+  const [data, setData] = useState<{
+    senders: StorageSenderRow[];
+    threads: StorageThreadRow[];
+    domains: StorageDomainRow[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/storage/explorer");
+        if (!res.ok) {
+          if (!cancelled) setError(`Failed to load (${res.status})`);
+          return;
+        }
+        const j = (await res.json()) as {
+          senders: StorageSenderRow[];
+          threads: StorageThreadRow[];
+          domains: StorageDomainRow[];
+        };
+        if (!cancelled) setData(j);
+      } catch {
+        if (!cancelled) setError("Failed to load storage stats");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const totalBytes = data?.domains.reduce((s, d) => s + d.bytes, 0) ?? 0;
+  const totalThreads = data?.domains.reduce((s, d) => s + d.thread_count, 0) ?? 0;
+  const totalMessages = data?.domains.reduce((s, d) => s + d.msg_count, 0) ?? 0;
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Storage"
+        description={
+          data
+            ? `${formatBytes(totalBytes)} across ${totalThreads.toLocaleString()} threads / ${totalMessages.toLocaleString()} messages. Bytes are LENGTH(text_body) + attachment sizes; raw .eml and rendered HTML in R2 are excluded, so treat as a relative ranking.`
+            : "Top senders, threads, and per-domain summary across all mail DBs."
+        }
+      />
+      {error ? (
+        <div className="rounded-md border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 px-4 py-3 text-xs text-rose-800 dark:text-rose-300">
+          {error}
+        </div>
+      ) : data === null ? (
+        <div className="rounded-md border border-neutral-200 dark:border-neutral-800 px-4 py-8 text-sm text-neutral-500 text-center">
+          Loading…
+        </div>
+      ) : (
+        <div className="space-y-8">
+          <StorageTable
+            title="Top senders by storage"
+            empty="No messages yet."
+            columns={["Sender", "Messages", "Storage"]}
+            align={["left", "right", "right"]}
+            rows={data.senders.map(s => [
+              <span key="addr" className="truncate inline-block max-w-[28rem] align-bottom">
+                {s.from_addr || <span className="italic text-neutral-500">(unknown)</span>}
+              </span>,
+              s.msg_count.toLocaleString(),
+              formatBytes(s.bytes),
+            ])}
+          />
+          <StorageTable
+            title="Top threads by storage"
+            empty="No threads yet."
+            columns={["Subject", "Mailbox", "Messages", "Storage"]}
+            align={["left", "left", "right", "right"]}
+            rows={data.threads.map(t => [
+              <span key="subj" className="truncate inline-block max-w-[24rem] align-bottom">
+                {t.subject?.trim() || <span className="italic text-neutral-500">(no subject)</span>}
+              </span>,
+              <span key="mbox" className="truncate inline-block max-w-[14rem] align-bottom text-neutral-600 dark:text-neutral-400">
+                {t.mailbox_label ?? <span className="italic text-neutral-500">(missing index row)</span>}
+              </span>,
+              t.msg_count.toLocaleString(),
+              formatBytes(t.bytes),
+            ])}
+          />
+          <StorageTable
+            title="By sender domain"
+            empty="No messages yet."
+            columns={["Domain", "Threads", "Messages", "Storage"]}
+            align={["left", "right", "right", "right"]}
+            rows={data.domains.map(d => [
+              d.domain,
+              d.thread_count.toLocaleString(),
+              d.msg_count.toLocaleString(),
+              formatBytes(d.bytes),
+            ])}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StorageTable({
+  title,
+  empty,
+  columns,
+  align,
+  rows,
+}: {
+  title: string;
+  empty: string;
+  columns: string[];
+  align: ("left" | "right")[];
+  rows: React.ReactNode[][];
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+        {title}
+      </h3>
+      {rows.length === 0 ? (
+        <p className="text-sm text-neutral-500">{empty}</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-neutral-200 dark:border-neutral-800">
+          <table className="w-full text-sm border-collapse">
+            <thead className="bg-neutral-50 dark:bg-neutral-900/50">
+              <tr className="text-xs uppercase tracking-wider text-neutral-500">
+                {columns.map((c, i) => (
+                  <th
+                    key={c}
+                    className={`py-2 px-3 font-medium ${align[i] === "right" ? "text-right" : "text-left"}`}
+                  >
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, idx) => (
+                <tr
+                  key={idx}
+                  className="border-t border-neutral-200 dark:border-neutral-800"
+                >
+                  {row.map((cell, ci) => (
+                    <td
+                      key={ci}
+                      className={`py-2 px-3 ${align[ci] === "right" ? "text-right tabular-nums" : ""}`}
+                    >
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

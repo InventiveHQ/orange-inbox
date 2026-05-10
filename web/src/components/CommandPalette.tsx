@@ -465,7 +465,7 @@ function buildViewItems(): PaletteItem[] {
       href: "/inbox/subscriptions",
       alts: ["unsubscribe", "newsletters"],
     },
-    { label: "Go to Storage", href: "/inbox/storage", alts: ["usage", "quota"] },
+    { label: "Go to Storage", href: "/inbox/settings#storage", alts: ["usage", "quota"] },
     { label: "Go to Settings", href: "/inbox/settings", alts: ["preferences"] },
     { label: "Go to Help", href: "/inbox/help", alts: ["docs", "support"] },
   ];
