@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import UndoToast from "./UndoToast";
 
 interface Props {
   scheduledId: string;
@@ -14,38 +15,14 @@ interface Props {
 // long as the row is still 'pending' on the server, which in practice
 // extends past the displayed countdown (cron only ticks once a minute).
 export default function UndoSendToast({ scheduledId, delaySeconds, onUndone, onDismiss }: Props) {
-  const [secsLeft, setSecsLeft] = useState(delaySeconds);
   const [error, setError] = useState<string | null>(null);
-  const [isUndoing, setIsUndoing] = useState(false);
-
-  useEffect(() => {
-    // Anchor the countdown on mount, not at first render — render-phase calls
-    // to Date.now() trip react-hooks/purity (the value would change across
-    // re-renders before the effect ran).
-    const startedAt = Date.now();
-    const handle = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      const remaining = Math.max(0, delaySeconds - elapsed);
-      setSecsLeft(remaining);
-      if (remaining <= 0) {
-        clearInterval(handle);
-        // Linger briefly at 0 so the user sees the final state, then dismiss.
-        setTimeout(onDismiss, 800);
-      }
-    }, 250);
-    return () => clearInterval(handle);
-  }, [delaySeconds, onDismiss]);
 
   async function undo() {
-    if (isUndoing) return;
-    setIsUndoing(true);
-    setError(null);
     try {
       const res = await fetch(`/api/scheduled/${scheduledId}/undo`, { method: "POST" });
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string };
         setError(b.error === "already_finalised" ? "Too late — message already sent." : (b.error ?? "Undo failed"));
-        setIsUndoing(false);
         return;
       }
       const b = (await res.json()) as { draft_id?: string };
@@ -53,39 +30,16 @@ export default function UndoSendToast({ scheduledId, delaySeconds, onUndone, onD
       else onDismiss();
     } catch {
       setError("Undo failed");
-      setIsUndoing(false);
     }
   }
 
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xl px-4 py-2.5 text-sm"
-    >
-      <span>
-        {secsLeft > 0 ? `Sending in ${secsLeft}s` : "Sending…"}
-      </span>
-      {error ? (
-        <span className="text-red-400 dark:text-red-600">{error}</span>
-      ) : (
-        <button
-          type="button"
-          onClick={undo}
-          disabled={isUndoing || secsLeft <= 0}
-          className="font-medium text-[var(--color-brand)] hover:underline disabled:opacity-50 disabled:no-underline"
-        >
-          {isUndoing ? "Undoing…" : "Undo"}
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dismiss"
-        className="text-neutral-400 hover:text-white dark:text-neutral-500 dark:hover:text-neutral-900 leading-none px-1"
-      >
-        ×
-      </button>
-    </div>
+    <UndoToast
+      message={s => (s > 0 ? `Sending in ${s}s` : "Sending…")}
+      delaySeconds={delaySeconds}
+      onUndo={undo}
+      onDismiss={onDismiss}
+      errorMessage={error}
+    />
   );
 }
