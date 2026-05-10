@@ -8,9 +8,11 @@ import type { Env } from "./types";
 //      mail-DB threads.snoozed_until is no longer authoritative).
 //   2. Dispatch due `scheduled_messages` rows by calling the web worker's
 //      internal dispatcher via the WEB service binding.
-//   3. Sweep `temp_uploads` rows older than 24h (and their R2 blobs).
-//   4. Process the r2_tombstones queue (delete R2 keys, then drop the row).
-//   5. Refresh `mail_dbs.byte_estimate` once per CAPACITY_REFRESH_EVERY_TICKS
+//   3. Dispatch due calendar reminders (`calendar_event_reminders`) via the
+//      web worker's /api/internal/dispatch-reminders endpoint.
+//   4. Sweep `temp_uploads` rows older than 24h (and their R2 blobs).
+//   5. Process the r2_tombstones queue (delete R2 keys, then drop the row).
+//   6. Refresh `mail_dbs.byte_estimate` once per CAPACITY_REFRESH_EVERY_TICKS
 //      ticks so the sidebar capacity bar tracks reality. Done sparingly
 //      because it scans every active mail DB.
 //
@@ -29,6 +31,7 @@ const CAPACITY_REFRESH_EVERY_TICKS = 30;
 export async function runCron(env: Env, ctx: ExecutionContext): Promise<void> {
   ctx.waitUntil(unsnoozeDueThreads(env));
   ctx.waitUntil(dispatchDueScheduled(env));
+  ctx.waitUntil(dispatchDueReminders(env));
   ctx.waitUntil(sweepTempUploads(env));
   ctx.waitUntil(sweepR2Tombstones(env));
 
@@ -133,6 +136,44 @@ async function dispatchDueScheduled(env: Env): Promise<void> {
     }
   } catch (e) {
     console.error("cron: scheduled scan failed", e);
+  }
+}
+
+// Calendar reminders (#85). The web worker owns the actual dispatch logic
+// (it has VAPID keys + the push-send helper); we just poke its internal
+// endpoint once per minute. The endpoint is idempotent — the
+// calendar_reminders_sent ledger dedupes, so a retry on transient failure
+// won't double-fire.
+async function dispatchDueReminders(env: Env): Promise<void> {
+  if (!env.WEB || !env.INTERNAL_SECRET) {
+    // Local dev without the service binding wired up — skip silently.
+    return;
+  }
+  try {
+    const res = await env.WEB.fetch(
+      new Request("https://internal/api/internal/dispatch-reminders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: env.INTERNAL_SECRET }),
+      }),
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.error(
+        `cron: dispatch-reminders failed status=${res.status} body=${text.slice(0, 200)}`,
+      );
+      return;
+    }
+    const body = (await res.json().catch(() => null)) as
+      | { dispatched?: number; pushed?: number }
+      | null;
+    if (body && (body.dispatched ?? 0) > 0) {
+      console.log(
+        `cron: dispatched ${body.dispatched} reminder(s), ${body.pushed ?? 0} push send(s)`,
+      );
+    }
+  } catch (e) {
+    console.error("cron: dispatch-reminders threw", e);
   }
 }
 
