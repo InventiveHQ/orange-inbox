@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 interface InlineAttachment {
   id: string;
@@ -15,6 +22,44 @@ interface Props {
   inlineAttachments: InlineAttachment[];
   // Plain-text fallback shown while the HTML is loading or if it fails.
   fallback: string | null;
+}
+
+const themeStorageKey = (messageId: string) => `email-theme:${messageId}`;
+const themeChangeEvent = "orange-inbox:email-theme-change";
+
+// Read the per-message theme override from localStorage as an external
+// store. useSyncExternalStore gives us a render-time read without the
+// setState-in-effect cycle, and a server snapshot of `false` so SSR
+// renders the auto-dark variant by default.
+function useThemeOverride(messageId: string): boolean {
+  const subscribe = useCallback((cb: () => void) => {
+    function onChange(e: StorageEvent | Event) {
+      if (e instanceof StorageEvent) {
+        if (e.key === themeStorageKey(messageId)) cb();
+        return;
+      }
+      const ce = e as CustomEvent<{ key?: string }>;
+      if (ce.detail?.key === themeStorageKey(messageId)) cb();
+    }
+    window.addEventListener("storage", onChange);
+    window.addEventListener(themeChangeEvent, onChange);
+    return () => {
+      window.removeEventListener("storage", onChange);
+      window.removeEventListener(themeChangeEvent, onChange);
+    };
+  }, [messageId]);
+
+  return useSyncExternalStore(
+    subscribe,
+    () => {
+      try {
+        return localStorage.getItem(themeStorageKey(messageId)) === "light";
+      } catch {
+        return false;
+      }
+    },
+    () => false,
+  );
 }
 
 // Renders email HTML inside a sandboxed iframe.
@@ -32,14 +77,20 @@ interface Props {
 //  - We allow `allow-popups allow-popups-to-escape-sandbox` so users can
 //    click ordinary links and have them open at the parent origin.
 //  - cid: image references are rewritten to authenticated attachment URLs
-//    before the document touches the DOM. We also prepend a small CSS
-//    block + viewport meta to keep wide email layouts from overflowing
-//    horizontally on mobile.
+//    before the document touches the DOM. We also prepend a viewport meta +
+//    reset CSS that auto-darkens the email canvas in dark mode (see
+//    wrapEmailHtml).
 export default function MessageHtmlFrame({ messageId, inlineAttachments, fallback }: Props) {
-  const [srcdoc, setSrcdoc] = useState<string | null>(null);
+  const [rawHtml, setRawHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [height, setHeight] = useState<number>(480);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Per-message override: when true, skip dark-mode CSS so the email
+  // renders in its original light colors. Useful for branded emails where
+  // the auto-darkening produces the wrong look. Persisted in localStorage
+  // and read via useSyncExternalStore so there's no hydration mismatch and
+  // no setState-in-effect cycle.
+  const forceLight = useThemeOverride(messageId);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +104,7 @@ export default function MessageHtmlFrame({ messageId, inlineAttachments, fallbac
         }
         const text = await res.text();
         if (cancelled) return;
-        setSrcdoc(wrapEmailHtml(rewriteCidReferences(text, inlineAttachments)));
+        setRawHtml(text);
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -62,7 +113,14 @@ export default function MessageHtmlFrame({ messageId, inlineAttachments, fallbac
     return () => {
       cancelled = true;
     };
-  }, [messageId, inlineAttachments]);
+  }, [messageId]);
+
+  const srcdoc = useMemo(() => {
+    if (rawHtml === null) return null;
+    return wrapEmailHtml(rewriteCidReferences(rawHtml, inlineAttachments), {
+      forceLight,
+    });
+  }, [rawHtml, inlineAttachments, forceLight]);
 
   // Auto-size the iframe to its content. With `allow-same-origin` in the
   // sandbox, the parent can read the iframe document and grow to fit it.
@@ -104,6 +162,17 @@ export default function MessageHtmlFrame({ messageId, inlineAttachments, fallbac
     };
   }, [srcdoc]);
 
+  function toggleTheme() {
+    const key = themeStorageKey(messageId);
+    try {
+      if (forceLight) localStorage.removeItem(key);
+      else localStorage.setItem(key, "light");
+      window.dispatchEvent(new CustomEvent(themeChangeEvent, { detail: { key } }));
+    } catch {
+      /* ignore */
+    }
+  }
+
   if (error) {
     return (
       <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed text-neutral-800 dark:text-neutral-200">
@@ -121,66 +190,71 @@ export default function MessageHtmlFrame({ messageId, inlineAttachments, fallbac
   }
 
   return (
-    <iframe
-      ref={iframeRef}
-      srcDoc={srcdoc}
-      // NO allow-scripts: untrusted email HTML must not execute JS. We do
-      // include allow-same-origin so the parent can measure scrollHeight to
-      // grow the iframe — safe only because scripts are blocked.
-      sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
-      referrerPolicy="no-referrer"
-      className="mt-3 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
-      style={{ height: `${height}px` }}
-      title="Email body"
-    />
+    <>
+      <iframe
+        ref={iframeRef}
+        srcDoc={srcdoc}
+        // NO allow-scripts: untrusted email HTML must not execute JS. We do
+        // include allow-same-origin so the parent can measure scrollHeight to
+        // grow the iframe — safe only because scripts are blocked.
+        sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+        referrerPolicy="no-referrer"
+        className={`mt-3 w-full rounded border border-neutral-200 dark:border-neutral-800 ${
+          forceLight ? "bg-white" : "bg-white dark:bg-neutral-950"
+        }`}
+        style={{ height: `${height}px` }}
+        title="Email body"
+      />
+      {/* Dark-mode-only escape hatch: branded emails sometimes render
+          better in their original colors. Hidden in light mode where the
+          toggle would be a no-op. */}
+      <button
+        type="button"
+        onClick={toggleTheme}
+        className="hidden dark:inline-flex mt-1 text-[11px] text-neutral-500 hover:text-neutral-300"
+      >
+        {forceLight ? "Use dark theme" : "Show original colors"}
+      </button>
+    </>
   );
 }
 
-// Prepend a viewport meta + reset CSS so wide email layouts (fixed-pixel
-// tables, oversized images) don't overflow horizontally on mobile, and a
-// `prefers-color-scheme: dark` block so simple emails honor the user's dark
-// mode instead of showing as a glaring white card. Email HTML is appended
-// after, so its own styles still apply where they don't conflict; ours use
-// !important to win on the few properties we care about. Emails with their
-// own intentional colors keep them — we only override the cases where the
-// email is relying on browser defaults or the old-school
-// `bgcolor="#ffffff"` wrapper-table pattern that would otherwise punch a
-// bright hole through the dark UI.
-function wrapEmailHtml(emailHtml: string): string {
+// Prepend a viewport meta + reset CSS so wide email layouts don't overflow
+// horizontally on mobile. In dark mode (and unless `forceLight` is set),
+// also apply the `invert(1) hue-rotate(180deg)` filter trick: it flips
+// grayscale (white↔black, so light backgrounds become dark canvases and
+// dark text becomes light) while preserving chromatic colors (a red CTA
+// stays red). Media gets re-inverted so photos and logos render normally.
+function wrapEmailHtml(emailHtml: string, opts: { forceLight: boolean }): string {
+  const darkBlock = opts.forceLight
+    ? ""
+    : `
+  @media (prefers-color-scheme: dark) {
+    html { background-color: #0a0a0a; color-scheme: dark; }
+    body {
+      filter: invert(1) hue-rotate(180deg);
+      /* Filter is applied on top of the body's own background. Keep it
+         white so invert turns it into a true dark canvas instead of an
+         off-color one. */
+      background-color: #ffffff !important;
+    }
+    /* Re-invert media so photos, logos, and inline-styled background
+       images render at their original colors instead of inverted. */
+    img, video, picture, svg, canvas, embed, object, iframe,
+    [background],
+    [style*="background-image"],
+    [style*="background:url"],
+    [style*="background: url"] {
+      filter: invert(1) hue-rotate(180deg);
+    }
+  }`;
+
   const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>
   html, body { margin: 0 !important; padding: 12px !important; max-width: 100% !important; box-sizing: border-box !important; overflow-wrap: break-word !important; word-break: break-word !important; -webkit-text-size-adjust: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #111; }
   img, video, iframe { max-width: 100% !important; height: auto !important; }
   table { max-width: 100% !important; }
   td, th { word-break: break-word; }
-  pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
-
-  @media (prefers-color-scheme: dark) {
-    html, body {
-      background-color: #0a0a0a !important;
-      color: #e5e5e5 !important;
-      color-scheme: dark;
-    }
-    a { color: #fb923c !important; }
-    /* Strip explicit white backgrounds from common wrapper patterns so the
-       dark canvas shows through. Branded emails using non-white colors are
-       left alone. */
-    [bgcolor="#ffffff" i],
-    [bgcolor="#fff" i],
-    [bgcolor="white" i],
-    [style*="background-color:#ffffff" i],
-    [style*="background-color:#fff" i],
-    [style*="background-color: #ffffff" i],
-    [style*="background-color: #fff" i],
-    [style*="background-color:white" i],
-    [style*="background:#ffffff" i],
-    [style*="background:#fff" i],
-    [style*="background: #ffffff" i],
-    [style*="background: #fff" i],
-    [style*="background:white" i] {
-      background-color: transparent !important;
-      background: transparent !important;
-    }
-  }
+  pre, code { white-space: pre-wrap !important; word-break: break-word !important; }${darkBlock}
 </style>`;
   return head + emailHtml;
 }
