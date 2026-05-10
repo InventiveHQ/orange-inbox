@@ -79,7 +79,6 @@ export async function GET(req: Request) {
       },
       // Cloudflare-only hint: cache the upstream response at the edge so
       // repeated views of the same email don't refetch.
-      // @ts-expect-error - cf is a Workers extension on RequestInit
       cf: { cacheTtl: 86400, cacheEverything: true },
     });
   } catch (err) {
