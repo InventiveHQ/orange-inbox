@@ -81,6 +81,7 @@ export default function SettingsManager({
       { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
+      { id: "calendar-subscription", label: "Calendar subscription" },
       { id: "export", label: "Import / Export" },
       ...(isAdmin ? [{ id: "storage", label: "Storage" }] : []),
       { id: "appearance", label: "Appearance" },
@@ -146,6 +147,7 @@ export default function SettingsManager({
             <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
+            <CalendarSubscriptionSection id="calendar-subscription" />
             <ExportSection id="export" ownedIdentities={ownedIdentities} />
             {isAdmin && <StorageSection id="storage" />}
             <AppearanceSection id="appearance" />
@@ -1463,6 +1465,198 @@ function NotificationsSection({ id }: { id: string }) {
       <PushNotificationToggle />
     </section>
   );
+}
+
+interface IcsTokenInfo {
+  token: string;
+  scope: string;
+  created_at: number;
+  last_used_at: number | null;
+  webcal_url: string;
+  https_url: string;
+}
+
+// "Calendar subscription" card — exposes the user's webcal:// feed URL so
+// they can paste it into Google Calendar, Apple Calendar, Outlook, etc.
+//
+// Lazy-mints on first view (the GET /api/calendar/ics/tokens endpoint
+// auto-creates a token if there isn't one). Rotation revokes the old token
+// and mints a new one in a single POST.
+function CalendarSubscriptionSection({ id }: { id: string }) {
+  const [info, setInfo] = useState<IcsTokenInfo | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const [confirmingRotate, setConfirmingRotate] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/calendar/ics/tokens");
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(`Load failed (${res.status})`);
+          setLoaded(true);
+          return;
+        }
+        const j = (await res.json()) as IcsTokenInfo;
+        if (cancelled) return;
+        setInfo(j);
+        setLoaded(true);
+      } catch {
+        if (!cancelled) {
+          setError("Load failed");
+          setLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function rotate() {
+    if (!confirmingRotate) {
+      setConfirmingRotate(true);
+      return;
+    }
+    setConfirmingRotate(false);
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch("/api/calendar/ics/tokens", { method: "POST" });
+      if (!res.ok) {
+        setError(`Rotate failed (${res.status})`);
+        return;
+      }
+      const j = (await res.json()) as IcsTokenInfo;
+      setInfo(j);
+      setCopyMsg("New URL minted — old subscribers will stop syncing.");
+    });
+  }
+
+  async function copyUrl() {
+    if (!info) return;
+    try {
+      await navigator.clipboard.writeText(info.webcal_url);
+      setCopyMsg("Copied.");
+    } catch {
+      // Clipboard write rejected (insecure context, or permission). Surface
+      // a fallback prompt so the URL is still reachable.
+      setCopyMsg("Copy failed — long-press the URL above to copy manually.");
+    }
+  }
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Calendar subscription"
+        description="Mirror your calendar into Google, Apple, or Outlook by subscribing to this URL. The link is read-only and rotates with one click if you ever need to revoke access."
+      />
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 space-y-3">
+        {!loaded && (
+          <p className="text-xs text-neutral-500">Loading…</p>
+        )}
+        {loaded && info && (
+          <>
+            <label className="block text-xs uppercase tracking-wider text-neutral-500">
+              Subscription URL
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                readOnly
+                value={info.webcal_url}
+                onFocus={e => e.currentTarget.select()}
+                className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 px-3 py-1.5 text-xs font-mono select-all focus:outline-none focus:border-[var(--color-brand)]"
+              />
+              <button
+                type="button"
+                onClick={copyUrl}
+                className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+              >
+                Copy
+              </button>
+            </div>
+            <p className="text-xs text-neutral-500">
+              Click below if your calendar app doesn&rsquo;t recognise <code>webcal://</code>:
+              {" "}
+              <a
+                href={info.https_url}
+                className="underline text-[var(--color-brand)]"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {info.https_url}
+              </a>
+            </p>
+            <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-neutral-500 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+              <span>
+                Created{" "}
+                <span className="text-neutral-700 dark:text-neutral-300">
+                  {formatRelativeTimestamp(info.created_at)}
+                </span>
+              </span>
+              <span>
+                Last used{" "}
+                <span className="text-neutral-700 dark:text-neutral-300">
+                  {info.last_used_at
+                    ? formatRelativeTimestamp(info.last_used_at)
+                    : "never"}
+                </span>
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={rotate}
+                disabled={isPending}
+                className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                  confirmingRotate
+                    ? "border-red-500 text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+                    : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                }`}
+              >
+                {isPending
+                  ? "Rotating…"
+                  : confirmingRotate
+                    ? "Confirm: revoke and mint new"
+                    : "Rotate token"}
+              </button>
+              {confirmingRotate && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRotate(false)}
+                  className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                >
+                  Cancel
+                </button>
+              )}
+              {copyMsg && (
+                <span className="text-xs text-neutral-500">{copyMsg}</span>
+              )}
+            </div>
+          </>
+        )}
+        {error && (
+          <p className="text-xs text-red-600">{error}</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// Tiny relative-time formatter scoped to this section. The big i18n libraries
+// are overkill for one timestamp; "5 minutes ago" / "yesterday" is enough.
+function formatRelativeTimestamp(unix: number): string {
+  const now = Math.floor(Date.now() / 1000);
+  const diff = now - unix;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)}d ago`;
+  return new Date(unix * 1000).toLocaleDateString();
 }
 
 // Eight curated swatches across the colour wheel. The Tailwind 500-step hex
