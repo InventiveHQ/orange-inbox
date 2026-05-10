@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useToast } from "./ToastProvider";
 
 interface Props {
   threadId: string;
@@ -69,6 +70,7 @@ function formatSnoozedUntil(secs: number): string {
 
 export default function SnoozeButton({ threadId, initialSnoozedUntil }: Props) {
   const router = useRouter();
+  const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
   const [customValue, setCustomValue] = useState("");
@@ -121,6 +123,22 @@ export default function SnoozeButton({ threadId, initialSnoozedUntil }: Props) {
         return;
       }
       closePopover();
+      toast({
+        message: `Snoozed until ${new Date(seconds * 1000).toLocaleString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}`,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            await fetch(`/api/threads/${threadId}/snooze`, { method: "DELETE" });
+            router.refresh();
+          },
+        },
+      });
       router.refresh();
       router.push("/inbox/all");
     });
