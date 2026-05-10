@@ -7,6 +7,7 @@ import {
   listDueFollowups,
   listMailboxesForUser,
   listSpamReportedThreads,
+  listStarredThreads,
   listThreads,
   listVipThreads,
   type MessageCategory,
@@ -131,6 +132,9 @@ export default async function InboxLayout({
     // messages are auto-archived, so this scope is the only place to
     // review/restore them. Listing logic in queries.ts → listSpamReportedThreads.
     "spam",
+    // Starred: threads the user has hit ★ on. Cross-mailbox, includes
+    // archived rows (starring is how users save things to revisit).
+    "starred",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
   // a given domain — picked up below in the listThreads filter. `layout:<id>`
@@ -155,6 +159,7 @@ export default async function InboxLayout({
   const isFollowups = effectiveScope === "followups";
   const isAssigned = effectiveScope === "assigned";
   const isSpam = effectiveScope === "spam";
+  const isStarred = effectiveScope === "starred";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
@@ -179,6 +184,7 @@ export default async function InboxLayout({
     isFollowups ||
     isAssigned ||
     isSpam ||
+    isStarred ||
     isFullPage ||
     isDomainScope ||
     isLayoutScope
@@ -210,6 +216,11 @@ export default async function InboxLayout({
         ? // Spam (#74) spans every mailbox — reported-spam messages were
           // auto-archived so this view is the only place to review them.
           listSpamReportedThreads(user.id)
+        : isStarred
+        ? // Starred view — cross-mailbox listing of every thread the user
+          // has hit ★ on. Includes archived rows so it doubles as a
+          // "saved for later" stash. See listStarredThreads.
+          listStarredThreads(user.id)
         : isVips
         ? // VIPs view spans every mailbox the user can read — see
           // listVipThreads. Cross-mailbox by design: VIPs are a per-user
@@ -220,10 +231,17 @@ export default async function InboxLayout({
             // router.refresh()es. We read the param off `next-url` /
             // `referer` headers (same workaround as ?category=) since
             // layouts can't see searchParams as a prop.
+            //
+            // When the triage quadrant is "all" (Show all), drop the
+            // category filter too — otherwise the implicit
+            // category=primary default would hide every non-primary
+            // thread and "Show all" would render inbox-zero for users
+            // whose mail is mostly auto-categorised as promotions /
+            // updates / social.
             listThreadsForTriage(user.id, {
               quadrant: quadrantParam,
               includeMuted: true,
-              category: categoryParam,
+              category: quadrantParam === "all" ? undefined : categoryParam,
             })
           : listThreads(user.id, {
               mailboxId,
@@ -295,6 +313,8 @@ export default async function InboxLayout({
           ? "Assigned to me"
           : isSpam
           ? "Spam"
+          : isStarred
+          ? "Starred"
           : effectiveScope === "all"
           ? "All inboxes"
           : isDomainScope

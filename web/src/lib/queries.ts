@@ -964,6 +964,66 @@ export async function listVipThreads(
   return (results ?? []).map(parseThreadListRow);
 }
 
+// Threads the user has starred via the ★ button in the reader toolbar.
+// Cross-mailbox by design — the star is a personal-organisation primitive
+// (analogous to VIPs), so the view spans every mailbox the user can read.
+// Archived threads stay in scope: starring is how users save things they
+// want to revisit independently of inbox/archive state.
+export async function listStarredThreads(
+  userId: string,
+  opts: { limit?: number } = {},
+): Promise<ThreadListItem[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const sql = `
+    SELECT
+      ti.thread_id AS id,
+      ti.subject_normalized,
+      ti.last_message_at,
+      ti.message_count,
+      ti.unread_count,
+      ti.starred,
+      ti.archived,
+      ti.muted,
+      ti.pinned,
+      ti.follow_up_enabled,
+      ti.follow_up_days,
+      ti.follow_up_minutes,
+      d.id   AS domain_id,
+      d.name AS domain_name,
+      mb.id  AS mailbox_id,
+      mb.local_part AS mailbox_local_part,
+      ti.last_subject   AS last_subject,
+      ti.last_from_addr AS last_from_addr,
+      ti.last_from_name AS last_from_name,
+      ti.last_snippet   AS last_snippet,
+      (
+        SELECT JSON_GROUP_ARRAY(
+                 JSON_OBJECT('id', l.id, 'name', l.name, 'color', l.color)
+               )
+          FROM (
+            SELECT l.id, l.name, l.color
+              FROM thread_labels tl
+              INNER JOIN labels l ON l.id = tl.label_id
+             WHERE tl.thread_id = ti.thread_id
+             ORDER BY l.name
+          ) AS l
+      ) AS labels_json
+    FROM threads_index ti
+    INNER JOIN mailboxes mb ON mb.id = ti.mailbox_id
+    INNER JOIN domains d   ON d.id = mb.domain_id
+    INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
+    WHERE uma.user_id = ?
+      AND ti.starred = 1
+    ORDER BY ti.last_message_at DESC
+    LIMIT ?
+  `;
+  const { results } = await getDb()
+    .prepare(sql)
+    .bind(userId, limit)
+    .all<ThreadListRow>();
+  return (results ?? []).map(parseThreadListRow);
+}
+
 // Threads where the user has personally hit "Report spam" on at least one
 // message. Backs the /inbox/spam scope — the reported messages were already
 // archived by the report-spam handler, so this is the only way to find them

@@ -534,6 +534,13 @@ function MailNavBody({
           collapsed={collapsed}
         />
         <SpecialLink
+          href="/inbox/starred"
+          label="Starred"
+          active={scope === "starred"}
+          icon={<StarredIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/inbox/followups"
           label="Follow-ups"
           active={scope === "followups"}
@@ -1379,6 +1386,26 @@ function VipIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1.25 9.86 5l4.14.6-3 2.93.71 4.13L8 10.71l-3.71 1.95.71-4.13-3-2.93L6.14 5 8 1.25Z" />
+    </svg>
+  );
+}
+
+// Starred glyph — same 5-point geometry as VipIcon but rendered as an
+// outline so the two adjacent rows in the sidebar are distinguishable
+// at a glance.
+function StarredIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M8 1.6 9.86 5.35l4.14.6-3 2.93.71 4.13L8 11.06l-3.71 1.95.71-4.13-3-2.93L6.14 5.35 8 1.6Z" />
     </svg>
   );
 }
