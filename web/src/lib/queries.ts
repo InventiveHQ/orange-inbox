@@ -43,10 +43,23 @@ export interface MailboxRow {
   role: "owner" | "member" | "reader";
   member_count: number;
   is_shared: number;
+  // Number of unread threads currently visible in this mailbox's inbox view —
+  // i.e. matching the same archived/snoozed filter as `listThreads`. Muted
+  // threads are intentionally counted: a per-mailbox badge that ignores muted
+  // can leave the user wondering where the unread count came from on the "all
+  // inboxes" badge. The per-mailbox listing hides muted, but the count keeps
+  // them so the badge math is consistent across views.
+  unread_count: number;
 }
 
 // Mailboxes the user can read from. The sidebar groups these under domain
 // headers. `is_shared` is just `member_count > 1`, surfaced for the UI badge.
+//
+// `unread_count` is the number of threads in `threads_index` for this mailbox
+// that have unread_count > 0 and are visible in the inbox listing (not
+// archived, not currently snoozed). Computed via a correlated subquery so
+// each row stays a single round-trip — `threads_index` already has
+// `(mailbox_id, archived, last_message_at)` covered by the listing index.
 export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]> {
   const { results } = await getDb()
     .prepare(
@@ -54,7 +67,13 @@ export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]
               mb.display_name, mb.is_catch_all, uma.role,
               (SELECT COUNT(*) FROM user_mailbox_access WHERE mailbox_id = mb.id) AS member_count,
               CASE WHEN (SELECT COUNT(*) FROM user_mailbox_access WHERE mailbox_id = mb.id) > 1
-                   THEN 1 ELSE 0 END AS is_shared
+                   THEN 1 ELSE 0 END AS is_shared,
+              (SELECT COUNT(*) FROM threads_index ti
+                WHERE ti.mailbox_id = mb.id
+                  AND ti.unread_count > 0
+                  AND ti.archived = 0
+                  AND (ti.snoozed_until IS NULL OR ti.snoozed_until <= unixepoch())
+              ) AS unread_count
          FROM mailboxes mb
          INNER JOIN user_mailbox_access uma ON uma.mailbox_id = mb.id
          INNER JOIN domains d ON d.id = mb.domain_id
