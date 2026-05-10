@@ -4,13 +4,16 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "./ToastProvider";
 import AssignButton from "./AssignButton";
-import RemindButton from "./RemindButton";
 import UndoToast from "./UndoToast";
 
 interface InitialAssignment {
   assignee_id: string;
   assignee_email: string | null;
   assignee_display_name: string | null;
+  resolved_at: number | null;
+  resolved_by: string | null;
+  resolved_by_email: string | null;
+  resolved_by_display_name: string | null;
 }
 
 interface Props {
@@ -19,11 +22,7 @@ interface Props {
   initialArchived: boolean;
   initialMuted: boolean;
   initialPinned: boolean;
-  // Reminder timestamp on the thread (issue #75). Drives the Remind button
-  // sibling-rendered below. Snooze stays in its own component — remind is
-  // intentionally a separate concept and a separate mutation endpoint.
-  initialRemindAt: number | null;
-  // Follow-up nudges (issue #26). When enabled the thread becomes a
+  // Follow-up (issue #26). When enabled the thread becomes a
   // candidate for the Follow-ups view. `initialFollowUpDays` is the
   // per-thread day-count override; NULL falls back to the global default
   // (DEFAULT_FOLLOWUP_DAYS below). Kept in its own toolbar group so the
@@ -39,8 +38,8 @@ interface Props {
   initialAssignment: InitialAssignment | null;
 }
 
-// Default day-count surfaced when the user enables nudges on a thread with
-// no per-thread override. Kept in sync with listDueFollowups' default.
+// Default day-count surfaced when the user enables follow-up on a thread
+// with no per-thread override. Kept in sync with listDueFollowups' default.
 const DEFAULT_FOLLOWUP_DAYS = 4;
 
 // Window during which the user can hit Undo. Mirrors Gmail's "Conversation
@@ -70,7 +69,6 @@ export default function ThreadActions({
   initialArchived,
   initialMuted,
   initialPinned,
-  initialRemindAt,
   initialFollowUpEnabled = false,
   initialFollowUpDays = null,
   mailboxId,
@@ -205,7 +203,7 @@ export default function ThreadActions({
     });
   }
 
-  // Follow-up nudges (issue #26). Toggling the button flips
+  // Follow-up (issue #26). Toggling the button flips
   // `follow_up_enabled` on threads_index; clicking the chevron beside it
   // opens a small popover where the user can override the per-thread day
   // count. Days override survives toggling off/on so users don't lose their
@@ -227,7 +225,7 @@ export default function ThreadActions({
         return;
       }
       toast({
-        message: next ? "Follow-up nudges on" : "Follow-up nudges off",
+        message: next ? "Follow-up on" : "Follow-up off",
       });
       router.refresh();
     });
@@ -374,9 +372,9 @@ export default function ThreadActions({
     <>
       {/*
         Assignment lives in its own toolbar group so the parallel follow-ups
-        work (issue #26) can drop its Nudge button right next to it without
-        fighting this container for layout. data-toolbar-group is a stable
-        hook for downstream styling / e2e.
+        work (issue #26) can drop its Follow-up button right next to it
+        without fighting this container for layout. data-toolbar-group is a
+        stable hook for downstream styling / e2e.
       */}
       <div className="flex items-center gap-2" data-toolbar-group="assignment-row">
         <AssignButton
@@ -418,7 +416,6 @@ export default function ThreadActions({
             >
               {archived ? "Unarchive" : "Archive"}
             </button>
-            <RemindButton threadId={threadId} initialRemindAt={initialRemindAt} />
             <div ref={moreMenuRef} className="relative">
               <button
                 type="button"
@@ -500,7 +497,7 @@ export default function ThreadActions({
           </>
         )}
       </div>
-      {/* Follow-up nudges (issue #26). Own toolbar group so the parallel
+      {/* Follow-up (issue #26). Own toolbar group so the parallel
           shared-mailbox-assignment work merging into ThreadActions doesn't
           collide with the main button row above. */}
       {!isDeletePending && (
@@ -517,8 +514,8 @@ export default function ThreadActions({
               aria-pressed={followUpEnabled}
               title={
                 followUpEnabled
-                  ? `Follow-up nudges on — due in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
-                  : "Follow-up nudges off — turn on to get reminded when waiting on a reply"
+                  ? `Follow-up on — due in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
+                  : "Follow-up off — turn on to get reminded when waiting on a reply"
               }
               className={`rounded-l-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
                 followUpEnabled
@@ -527,8 +524,8 @@ export default function ThreadActions({
               }`}
             >
               {followUpEnabled
-                ? `⏰ Nudge in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
-                : "⏰ Nudge"}
+                ? `⏰ Follow up in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
+                : "⏰ Follow up"}
             </button>
             <button
               type="button"
@@ -558,7 +555,7 @@ export default function ThreadActions({
                 className="absolute right-0 top-full mt-1 z-30 w-56 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg p-3"
               >
                 <label className="block text-xs text-neutral-600 dark:text-neutral-400 mb-1">
-                  Nudge after how many days?
+                  Follow up after how many days?
                 </label>
                 <div className="flex items-center gap-2">
                   <input

@@ -17,11 +17,19 @@ export interface ThreadAssignment {
   assignee_id: string;
   assigned_by: string;
   assigned_at: number;
+  // Resolve lifecycle (0048). NULL = active (still in the assignee's queue);
+  // non-null = resolved, dropped from /inbox/assigned but the row persists
+  // for audit/history. `resolved_by` is the user who hit Resolve — not
+  // necessarily the assignee (anyone with mailbox access can resolve).
+  resolved_at: number | null;
+  resolved_by: string | null;
   // Joined-in for the UI. Both nullable because the user row can have been
   // cascade-deleted (the assignment row also vanishes via FK cascade, but a
   // best-effort query elsewhere might race the cascade).
   assignee_email: string | null;
   assignee_display_name: string | null;
+  resolved_by_email: string | null;
+  resolved_by_display_name: string | null;
 }
 
 // Fetch the current assignment for a thread (NULL when nobody is assigned).
@@ -33,10 +41,14 @@ export async function getAssignment(
   const row = await getDb()
     .prepare(
       `SELECT ta.thread_id, ta.assignee_id, ta.assigned_by, ta.assigned_at,
-              u.email        AS assignee_email,
-              u.display_name AS assignee_display_name
+              ta.resolved_at, ta.resolved_by,
+              u.email         AS assignee_email,
+              u.display_name  AS assignee_display_name,
+              ru.email        AS resolved_by_email,
+              ru.display_name AS resolved_by_display_name
          FROM thread_assignments ta
-         LEFT JOIN users u ON u.id = ta.assignee_id
+         LEFT JOIN users u  ON u.id  = ta.assignee_id
+         LEFT JOIN users ru ON ru.id = ta.resolved_by
         WHERE ta.thread_id = ?`,
     )
     .bind(threadId)
@@ -57,10 +69,14 @@ export async function bulkGetAssignments(
   const { results } = await getDb()
     .prepare(
       `SELECT ta.thread_id, ta.assignee_id, ta.assigned_by, ta.assigned_at,
-              u.email        AS assignee_email,
-              u.display_name AS assignee_display_name
+              ta.resolved_at, ta.resolved_by,
+              u.email         AS assignee_email,
+              u.display_name  AS assignee_display_name,
+              ru.email        AS resolved_by_email,
+              ru.display_name AS resolved_by_display_name
          FROM thread_assignments ta
-         LEFT JOIN users u ON u.id = ta.assignee_id
+         LEFT JOIN users u  ON u.id  = ta.assignee_id
+         LEFT JOIN users ru ON ru.id = ta.resolved_by
         WHERE ta.thread_id IN (${placeholders})`,
     )
     .bind(...threadIds)
@@ -111,8 +127,10 @@ export async function assignThread(
   }
 
   // Upsert: a second assign on the same thread silently replaces the previous
-  // one. The `assigned_at` default fires on INSERT only — explicit unixepoch()
-  // bind so REPLACE refreshes it too.
+  // one. Re-assigning a resolved thread clears the resolved state so the
+  // lifecycle restarts cleanly under the new assignee. The `assigned_at`
+  // default fires on INSERT only — explicit unixepoch() bind so REPLACE
+  // refreshes it too.
   const now = Math.floor(Date.now() / 1000);
   await getDb()
     .prepare(
@@ -121,7 +139,9 @@ export async function assignThread(
        ON CONFLICT (thread_id) DO UPDATE
          SET assignee_id = excluded.assignee_id,
              assigned_by = excluded.assigned_by,
-             assigned_at = excluded.assigned_at`,
+             assigned_at = excluded.assigned_at,
+             resolved_at = NULL,
+             resolved_by = NULL`,
     )
     .bind(threadId, assigneeId, byUserId, now)
     .run();
@@ -199,7 +219,7 @@ export async function unassignThread(
 // claim once the customer reply lands and the assignee is offline.
 
 export type ResolveResult =
-  | { ok: true }
+  | { ok: true; assignment: ThreadAssignment }
   | { ok: false; code: "forbidden" | "not_found" | "not_assigned" | "already_resolved" };
 
 export async function resolveAssignment(
@@ -247,12 +267,16 @@ export async function resolveAssignment(
     action: "resolve",
     payload: { assignee_id: row.assignee_id },
   });
-  return { ok: true };
+
+  const assignment = await getAssignment(threadId);
+  if (!assignment) return { ok: false, code: "not_found" };
+  return { ok: true, assignment };
 }
 
-// Reopen — flip a previously-resolved assignment back to active. Mirrors the
-// resolve-permission shape (must be mailbox member; doesn't require caller
-// to be the assignee or the original resolver).
+// Reopen — flip a previously-resolved assignment back to active. Mirrors
+// the resolve-permission shape (must be mailbox member; doesn't require
+// caller to be the assignee or the original resolver). Idempotent on
+// already-active rows so a stale tab calling DELETE doesn't 400.
 export async function reopenAssignment(
   threadId: string,
   byUserId: string,
@@ -279,27 +303,28 @@ export async function reopenAssignment(
   if (!row || !row.mailbox_id) return { ok: false, code: "not_found" };
   if (!row.by_access) return { ok: false, code: "forbidden" };
   if (!row.assignee_id) return { ok: false, code: "not_assigned" };
-  // Reopen on an already-active row is a no-op — the UI shouldn't show the
-  // button there, but a stale tab calling it shouldn't 400. Treat as success.
-  if (row.resolved_at === null) return { ok: true };
+  if (row.resolved_at !== null) {
+    await getDb()
+      .prepare(
+        `UPDATE thread_assignments
+            SET resolved_at = NULL, resolved_by = NULL
+          WHERE thread_id = ?`,
+      )
+      .bind(threadId)
+      .run();
 
-  await getDb()
-    .prepare(
-      `UPDATE thread_assignments
-          SET resolved_at = NULL, resolved_by = NULL
-        WHERE thread_id = ?`,
-    )
-    .bind(threadId)
-    .run();
+    await logAudit({
+      userId: byUserId,
+      mailboxId: row.mailbox_id,
+      threadId,
+      action: "reopen",
+      payload: { assignee_id: row.assignee_id },
+    });
+  }
 
-  await logAudit({
-    userId: byUserId,
-    mailboxId: row.mailbox_id,
-    threadId,
-    action: "reopen",
-    payload: { assignee_id: row.assignee_id },
-  });
-  return { ok: true };
+  const assignment = await getAssignment(threadId);
+  if (!assignment) return { ok: false, code: "not_found" };
+  return { ok: true, assignment };
 }
 
 // Resolved-history row for the /inbox/assigned ?status=resolved tab (#99).
@@ -322,7 +347,6 @@ interface ResolvedAssignmentRow {
   archived: number;
   muted: number;
   pinned: number;
-  remind_at: number | null;
   follow_up_enabled: number;
   follow_up_days: number | null;
   domain_id: string;
@@ -365,7 +389,6 @@ export async function listAssignedToUserResolved(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       ti.follow_up_enabled,
       ti.follow_up_days,
       d.id   AS domain_id,
@@ -431,7 +454,6 @@ function parseResolvedRow(row: ResolvedAssignmentRow): ResolvedAssignmentItem {
     archived: row.archived,
     muted: row.muted,
     pinned: row.pinned,
-    remind_at: row.remind_at,
     follow_up_enabled: row.follow_up_enabled,
     follow_up_days: row.follow_up_days,
     domain_id: row.domain_id,

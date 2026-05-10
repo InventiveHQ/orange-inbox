@@ -25,13 +25,10 @@ CREATE TABLE threads (
   unread_count        INTEGER NOT NULL DEFAULT 0,
   archived            INTEGER NOT NULL DEFAULT 0,
   starred             INTEGER NOT NULL DEFAULT 0,
-  snoozed_until       INTEGER,
   created_at          INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX threads_mailbox_recent
   ON threads(mailbox_id, archived, last_message_at DESC);
-CREATE INDEX threads_snoozed ON threads(snoozed_until)
-  WHERE snoozed_until IS NOT NULL;
 
 CREATE TABLE messages (
   id                 TEXT PRIMARY KEY,

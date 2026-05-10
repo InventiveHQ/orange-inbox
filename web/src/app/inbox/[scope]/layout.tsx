@@ -116,7 +116,7 @@ export default async function InboxLayout({
     "aliases",
     "calendar",
     "scheduled",
-    // Follow-ups (issue #26): threads the user opted in for nudges that
+    // Follow-ups (issue #26): threads the user opted into follow-up that
     // have passed the per-thread day threshold without a reply. Listing
     // logic lives in queries.ts → listDueFollowups.
     "followups",
@@ -188,8 +188,8 @@ export default async function InboxLayout({
     isDrafts || isFullPage
       ? Promise.resolve([])
       : isFollowups
-        ? // Follow-ups (issue #26): threads opted into nudges that are now
-          // overdue without a reply. Cross-mailbox by design.
+        ? // Follow-ups (issue #26): threads opted into follow-up that are
+          // now overdue without a reply. Cross-mailbox by design.
           listDueFollowups(user.id)
         : isAssigned
         ? showResolvedAssignments

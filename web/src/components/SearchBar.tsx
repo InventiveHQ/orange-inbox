@@ -143,7 +143,7 @@ const SEARCH_OPERATOR_HINT = [
   "Search operators:",
   "  from:alice    to:bob    subject:invoice",
   "  has:attachment",
-  "  is:unread     is:starred    is:snoozed",
+  "  is:unread     is:starred",
   "  before:2024-12-31    after:2024-01-01",
   "  mailbox:hello (or hello@example.com)",
   "",

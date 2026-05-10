@@ -41,7 +41,7 @@ const SWIPE_UNDO_SECONDS = 5;
 const SCROLL_KEY_PREFIX = "orange-inbox:threadlist-scroll:";
 const SCROLL_SAVE_DEBOUNCE_MS = 120;
 
-// Default day-count for follow-up nudges (issue #26). Kept in sync with
+// Default day-count for follow-up (issue #26). Kept in sync with
 // listDueFollowups' defaultDays argument so the inline "Waiting N days"
 // badge here doesn't disagree with the server's "this thread is due" check.
 const DEFAULT_FOLLOWUP_DAYS = 4;
@@ -564,7 +564,7 @@ function ThreadRow({
   // flair reads as a tint, not a stripe of paint.
   const flairHue = hashHue(t.last_from_addr || sender || "?");
 
-  // Follow-up nudges (issue #26). When the user has opted this thread in
+  // Follow-up (issue #26). When the user has opted this thread in
   // AND `last_message_at` is older than `follow_up_days` (or the default),
   // show a subtle "Waiting on reply" badge. We can't tell here whether the
   // most-recent message is outbound — that check lives server-side in

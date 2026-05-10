@@ -384,7 +384,6 @@ export async function loadPaneThreads(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       ti.follow_up_enabled,
       ti.follow_up_days,
       d.id   AS domain_id,
@@ -424,7 +423,6 @@ export async function loadPaneThreads(
     archived: number;
     muted: number;
     pinned: number;
-    remind_at: number | null;
     follow_up_enabled: number;
     follow_up_days: number | null;
     domain_id: string;

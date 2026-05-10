@@ -18,7 +18,7 @@ export type TriageQuadrant =
   | "marketing_quiet"
   | "all";
 
-export const DEFAULT_QUADRANT: TriageQuadrant = "action_needed";
+export const DEFAULT_QUADRANT: TriageQuadrant = "all";
 export const QUADRANT_VALUES: ReadonlySet<string> = new Set([
   "action_needed",
   "quiet_humans",

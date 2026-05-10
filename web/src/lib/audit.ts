@@ -22,7 +22,6 @@ export type AuditAction =
   | "resolve"
   | "reopen"
   | "note_add"
-  | "snooze"
   | "mute"
   | "unmute"
   | "pin"

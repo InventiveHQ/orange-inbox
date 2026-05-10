@@ -37,7 +37,6 @@ export interface SearchFilters {
   hasAttachment?: boolean;
   isUnread?: boolean;
   isStarred?: boolean;
-  isSnoozed?: boolean;
   // Unix-seconds bounds. `before` is exclusive upper, `after` is inclusive lower.
   beforeTs?: number;
   afterTs?: number;
@@ -154,7 +153,6 @@ export function parseSearchQuery(raw: string): ParsedSearch {
         const v = value.toLowerCase();
         if (v === "unread") filters.isUnread = true;
         else if (v === "starred") filters.isStarred = true;
-        else if (v === "snoozed") filters.isSnoozed = true;
         else freeParts.push(tok);
         break;
       }
@@ -246,7 +244,7 @@ interface MailDbHit {
 // Operator filters split by the same DB boundary:
 //   - mail-DB-side: from/to/subject/has:attachment/before/after — applied
 //     inside searchOneDb so they shrink the per-DB result set.
-//   - control-DB-side: is:unread/starred/snoozed and mailbox: — applied here
+//   - control-DB-side: is:unread/starred and mailbox: — applied here
 //     after the fan-out, since threads_index lives in the control DB.
 export async function searchThreads(
   userId: string,
@@ -319,7 +317,7 @@ export async function searchThreads(
   const { results: tiRows } = await getDb()
     .prepare(
       `SELECT thread_id, subject_normalized, last_message_at,
-              unread_count, starred, snoozed_until
+              unread_count, starred
          FROM threads_index
         WHERE thread_id IN (${tiPlaceholders})`,
     )
@@ -330,10 +328,8 @@ export async function searchThreads(
       last_message_at: number;
       unread_count: number;
       starred: number;
-      snoozed_until: number | null;
     }>();
   const tiMap = new Map((tiRows ?? []).map(t => [t.thread_id, t]));
-  const nowSec = Math.floor(Date.now() / 1000);
 
   const seen = new Set<string>();
   const out: SearchResult[] = [];
@@ -348,7 +344,6 @@ export async function searchThreads(
     // these onto every message row.
     if (filters.isUnread && ti.unread_count <= 0) continue;
     if (filters.isStarred && !ti.starred) continue;
-    if (filters.isSnoozed && !(ti.snoozed_until && ti.snoozed_until > nowSec)) continue;
 
     seen.add(h.thread_id);
     out.push({
@@ -377,7 +372,6 @@ function hasAnyFilter(f: SearchFilters): boolean {
       f.hasAttachment ||
       f.isUnread ||
       f.isStarred ||
-      f.isSnoozed ||
       f.beforeTs ||
       f.afterTs ||
       f.mailbox?.length,

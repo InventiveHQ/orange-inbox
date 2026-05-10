@@ -17,8 +17,8 @@ import {
 // This pairs with — but doesn't replace — UndoToast. UndoToast is the
 // timer+countdown affordance for serious optimistic actions (archive,
 // delete, send) where the user needs an obvious "Undo" lifeline. Toast
-// is for lighter feedback ("Snoozed until Mon 9am", "Label applied",
-// "Marked unread") that doesn't need a countdown.
+// is for lighter feedback ("Label applied", "Marked unread") that doesn't
+// need a countdown.
 //
 // Stacking: toasts queue vertically at the bottom-center of the viewport.
 // The newest is visually on top of the stack.

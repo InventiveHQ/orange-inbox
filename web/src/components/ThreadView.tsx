@@ -14,13 +14,11 @@ import MessageThread, { type MessageSummary } from "./MessageThread";
 import ReplyButton from "./ReplyButton";
 import ReplyAllButton from "./ReplyAllButton";
 import RelativeTime from "./RelativeTime";
-import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
 import ThreadNotes from "./ThreadNotes";
 import MessageHtmlFrame from "./MessageHtmlFrame";
 import MessageMenu from "./MessageMenu";
 import UnsubscribeButton from "./UnsubscribeButton";
-import ReminderDueBanner from "./ReminderDueBanner";
 
 interface Props {
   detail: ThreadDetail;
@@ -53,13 +51,6 @@ export default function ThreadView({
   const { thread, messages } = detail;
   const subject = messages[0]?.subject || thread.subject_normalized;
   const lastInbound = [...messages].reverse().find(m => m.direction === "inbound");
-  // Server-side "is the reminder due" check. The query already returns
-  // `remind_at` in unix seconds — comparing against Date.now() at render
-  // time means the banner shows up the first time the user opens the
-  // thread after the timestamp elapses, without needing a polling cron.
-  const nowSec = Math.floor(Date.now() / 1000);
-  const reminderDue = thread.remind_at != null && thread.remind_at <= nowSec;
-  const reminderUpcoming = thread.remind_at != null && thread.remind_at > nowSec;
 
   return (
     <article className="flex-1 overflow-y-auto">
@@ -77,20 +68,30 @@ export default function ThreadView({
                   📌 Pinned
                 </span>
               )}
-              {reminderUpcoming && thread.remind_at != null && (
-                <span
-                  className="ml-2 align-middle inline-flex items-center gap-1 rounded-md bg-sky-100 dark:bg-sky-900/30 px-2 py-0.5 text-xs font-medium text-sky-800 dark:text-sky-300"
-                  title={`Reminder set for ${formatRemindAt(thread.remind_at)}`}
-                >
-                  🔔 Reminder set for {formatRemindAt(thread.remind_at)}
-                </span>
-              )}
               {assignment && (() => {
                 const isMine = assignment.assignee_id === currentUserId;
-                const label =
+                const assigneeLabel =
                   assignment.assignee_display_name?.trim() ||
                   assignment.assignee_email ||
                   "user";
+                if (assignment.resolved_at != null) {
+                  const resolverLabel =
+                    assignment.resolved_by_display_name?.trim() ||
+                    assignment.resolved_by_email ||
+                    "someone";
+                  const resolvedByMe = assignment.resolved_by === currentUserId;
+                  const text = resolvedByMe
+                    ? "Resolved by you"
+                    : `Resolved by ${resolverLabel}`;
+                  return (
+                    <span
+                      className="ml-2 align-middle inline-flex items-center gap-1 rounded-md bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-xs font-medium text-neutral-600 dark:text-neutral-300"
+                      title={`Originally assigned to ${isMine ? "you" : assigneeLabel}`}
+                    >
+                      ✓ {text}
+                    </span>
+                  );
+                }
                 return (
                   <span
                     className={`ml-2 align-middle inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${
@@ -101,10 +102,10 @@ export default function ThreadView({
                     title={
                       isMine
                         ? "Assigned to you"
-                        : `Assigned to ${label}`
+                        : `Assigned to ${assigneeLabel}`
                     }
                   >
-                    {isMine ? "Assigned to you" : `Assigned to ${label}`}
+                    {isMine ? "Assigned to you" : `Assigned to ${assigneeLabel}`}
                   </span>
                 );
               })()}
@@ -125,7 +126,6 @@ export default function ThreadView({
             initialArchived={thread.archived === 1}
             initialMuted={thread.muted === 1}
             initialPinned={thread.pinned === 1}
-            initialRemindAt={thread.remind_at}
             initialFollowUpEnabled={thread.follow_up_enabled === 1}
             initialFollowUpDays={thread.follow_up_days}
             mailboxId={thread.mailbox_id}
@@ -136,12 +136,15 @@ export default function ThreadView({
                     assignee_id: assignment.assignee_id,
                     assignee_email: assignment.assignee_email,
                     assignee_display_name: assignment.assignee_display_name,
+                    resolved_at: assignment.resolved_at,
+                    resolved_by: assignment.resolved_by,
+                    resolved_by_email: assignment.resolved_by_email,
+                    resolved_by_display_name: assignment.resolved_by_display_name,
                   }
                 : null
             }
           />
           <ApplyLabelButton threadId={thread.id} />
-          <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />
           {lastInbound && thread.user_role !== "reader" && (() => {
             const originalTo = parseAddrs(lastInbound.to_json).map(a => a.addr);
             const originalCc = lastInbound.cc_json
@@ -192,10 +195,6 @@ export default function ThreadView({
           })()}
         </div>
       </header>
-
-      {reminderDue && (
-        <ReminderDueBanner threadId={thread.id} remindAt={thread.remind_at!} />
-      )}
 
       {thread.muted === 1 && (
         <div className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 px-4 py-2 sm:px-6 text-xs text-neutral-600 dark:text-neutral-400">
@@ -721,16 +720,6 @@ function parseAddrs(json: string): Array<{ addr: string; name?: string }> {
   } catch {
     return [];
   }
-}
-
-// "Mon, May 12 at 5:00 PM" — long format for the reminder indicator on the
-// header. Same shape SnoozeButton uses for its banner so the wording stays
-// consistent.
-function formatRemindAt(secs: number): string {
-  const d = new Date(secs * 1000);
-  const date = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `${date} at ${time}`;
 }
 
 function formatBytes(n: number): string {

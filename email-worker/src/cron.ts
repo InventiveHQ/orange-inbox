@@ -3,16 +3,13 @@ import type { Env } from "./types";
 
 // Scheduled tasks run every minute (see wrangler.jsonc triggers.crons).
 // We do these things, each idempotent and safe to skip on transient errors:
-//   1. Clear `threads_index.snoozed_until` for threads whose snooze has
-//      elapsed (post-overflow this is the source of truth for listing —
-//      mail-DB threads.snoozed_until is no longer authoritative).
-//   2. Dispatch due `scheduled_messages` rows by calling the web worker's
+//   1. Dispatch due `scheduled_messages` rows by calling the web worker's
 //      internal dispatcher via the WEB service binding.
-//   3. Dispatch due calendar reminders (`calendar_event_reminders`) via the
+//   2. Dispatch due calendar reminders (`calendar_event_reminders`) via the
 //      web worker's /api/internal/dispatch-reminders endpoint.
-//   4. Sweep `temp_uploads` rows older than 24h (and their R2 blobs).
-//   5. Process the r2_tombstones queue (delete R2 keys, then drop the row).
-//   6. Refresh `mail_dbs.byte_estimate` once per CAPACITY_REFRESH_EVERY_TICKS
+//   3. Sweep `temp_uploads` rows older than 24h (and their R2 blobs).
+//   4. Process the r2_tombstones queue (delete R2 keys, then drop the row).
+//   5. Refresh `mail_dbs.byte_estimate` once per CAPACITY_REFRESH_EVERY_TICKS
 //      ticks so the sidebar capacity bar tracks reality. Done sparingly
 //      because it scans every active mail DB.
 //
@@ -29,7 +26,6 @@ const R2_TOMBSTONE_BATCH = 50;
 const CAPACITY_REFRESH_EVERY_TICKS = 30;
 
 export async function runCron(env: Env, ctx: ExecutionContext): Promise<void> {
-  ctx.waitUntil(unsnoozeDueThreads(env));
   ctx.waitUntil(dispatchDueScheduled(env));
   ctx.waitUntil(dispatchDueReminders(env));
   ctx.waitUntil(sweepTempUploads(env));
@@ -41,24 +37,6 @@ export async function runCron(env: Env, ctx: ExecutionContext): Promise<void> {
   const minuteOfHour = new Date().getUTCMinutes();
   if (minuteOfHour % CAPACITY_REFRESH_EVERY_TICKS === 0) {
     ctx.waitUntil(refreshMailDbCapacity(env));
-  }
-}
-
-async function unsnoozeDueThreads(env: Env): Promise<void> {
-  try {
-    const res = await env.DB
-      .prepare(
-        `UPDATE threads_index
-            SET snoozed_until = NULL
-          WHERE snoozed_until IS NOT NULL
-            AND snoozed_until <= unixepoch()`,
-      )
-      .run();
-    if (res.meta.changes && res.meta.changes > 0) {
-      console.log(`cron: unsnoozed ${res.meta.changes} thread(s)`);
-    }
-  } catch (e) {
-    console.error("cron: unsnooze failed", e);
   }
 }
 

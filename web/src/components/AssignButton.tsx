@@ -8,6 +8,13 @@ interface InitialAssignment {
   assignee_id: string;
   assignee_email: string | null;
   assignee_display_name: string | null;
+  // Resolve lifecycle (0048). Non-null resolved_at = the assignment has been
+  // marked done; the row stays but drops out of /inbox/assigned. resolved_by
+  // is the user who clicked Resolve (not necessarily the assignee).
+  resolved_at: number | null;
+  resolved_by: string | null;
+  resolved_by_email: string | null;
+  resolved_by_display_name: string | null;
 }
 
 interface Member {
@@ -32,8 +39,8 @@ interface Props {
 //     (incl. claim it for yourself) or release.
 //
 // Kept as a DISTINCT toolbar group from the star/archive/mute/pin row so the
-// parallel follow-ups agent (issue #26) can land its Nudge button alongside
-// without colliding on the same flex container.
+// parallel follow-ups agent (issue #26) can land its Follow-up button
+// alongside without colliding on the same flex container.
 export default function AssignButton({
   threadId,
   mailboxId,
@@ -76,7 +83,7 @@ export default function AssignButton({
 
   // Close-on-outside-click. Plain document listener; no portal — the menu is
   // anchored to its trigger so the toolbar layout (and the parallel
-  // follow-ups agent's Nudge button) keeps working unchanged.
+  // follow-ups agent's Follow-up button) keeps working unchanged.
   useEffect(() => {
     if (!menuOpen) return;
     function onClick(e: MouseEvent) {
@@ -131,11 +138,50 @@ export default function AssignButton({
     });
   }
 
+  function resolve() {
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}/assignment/resolve`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as { assignment: InitialAssignment };
+      setAssignment(data.assignment);
+      toast({ message: "Resolved" });
+      router.refresh();
+    });
+  }
+
+  function reopen() {
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}/assignment/resolve`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as { assignment: InitialAssignment };
+      setAssignment(data.assignment);
+      toast({ message: "Reopened" });
+      router.refresh();
+    });
+  }
+
   const isMine = assignment?.assignee_id === currentUserId;
+  const isResolved = assignment?.resolved_at != null;
   const chipLabel = assignment
-    ? isMine
-      ? "Assigned to you"
-      : `Assigned to ${labelFor(assignment)}`
+    ? isResolved
+      ? "Resolved"
+      : isMine
+        ? "Assigned to you"
+        : `Assigned to ${labelFor(assignment)}`
     : null;
 
   return (
@@ -178,34 +224,61 @@ export default function AssignButton({
           </div>
         </>
       ) : (
-        <div ref={wrapRef} className="relative">
-          <button
-            type="button"
-            data-action="assign-menu"
-            onClick={() => setMenuOpen(o => !o)}
-            disabled={isPending}
-            title={chipLabel || ""}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
-              isMine
-                ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
-                : "border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-900/30 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50"
-            }`}
-          >
-            <span className="truncate max-w-[14ch]">{chipLabel}</span>
-            <span aria-hidden>▾</span>
-          </button>
-          {menuOpen && (
-            <AssignMenu
-              members={members}
-              currentUserId={currentUserId}
-              onPick={assignTo}
-              onClear={unassign}
-              assignment={assignment}
-            />
+        <>
+          <div ref={wrapRef} className="relative">
+            <button
+              type="button"
+              data-action="assign-menu"
+              onClick={() => setMenuOpen(o => !o)}
+              disabled={isPending}
+              title={chipLabel || ""}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                isResolved
+                  ? "border-neutral-300 bg-neutral-100 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                  : isMine
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+                    : "border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-900/30 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50"
+              }`}
+            >
+              <span className="truncate max-w-[14ch]">{chipLabel}</span>
+              <span aria-hidden>▾</span>
+            </button>
+            {menuOpen && (
+              <AssignMenu
+                members={members}
+                currentUserId={currentUserId}
+                onPick={assignTo}
+                onClear={unassign}
+                assignment={assignment}
+              />
+            )}
+          </div>
+          {isResolved ? (
+            <button
+              type="button"
+              data-action="reopen"
+              onClick={reopen}
+              disabled={isPending}
+              title="Reopen — return to the assignee's active queue"
+              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
+            >
+              Reopen
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-action="resolve"
+              onClick={resolve}
+              disabled={isPending}
+              title="Mark this assignment resolved — clears it from /inbox/assigned"
+              className="rounded-md border border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-900/30 dark:text-emerald-300 px-3 py-1.5 text-sm hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50"
+            >
+              ✓ Resolve
+            </button>
           )}
-        </div>
+        </>
       )}
     </div>
   );

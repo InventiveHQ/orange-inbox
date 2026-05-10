@@ -9,7 +9,6 @@ export type EmptyStateVariant =
   | "drafts"
   | "contacts"
   | "search"
-  | "snooze"
   | "calendar";
 
 interface Props {
@@ -65,10 +64,6 @@ const DEFAULT_COPY: Record<EmptyStateVariant, { title: string; body: string }> =
   search: {
     title: "No matches",
     body: "Try different keywords or check your filters.",
-  },
-  snooze: {
-    title: "Nothing snoozed",
-    body: "Snoozed conversations come back to your inbox at the time you set.",
   },
   calendar: {
     title: "No events",
@@ -126,13 +121,6 @@ function Illustration({ variant }: { variant: EmptyStateVariant }) {
           <rect x="10" y="10" width="44" height="44" rx="6" />
           <circle cx="32" cy="26" r="6" />
           <path d="M20 46c2-6 7-9 12-9s10 3 12 9" />
-        </svg>
-      );
-    case "snooze":
-      // Crescent moon — the snooze icon used elsewhere in the app.
-      return (
-        <svg {...common}>
-          <path d="M44 36a16 16 0 0 1-20-20 16 16 0 1 0 20 20z" />
         </svg>
       );
     case "calendar":

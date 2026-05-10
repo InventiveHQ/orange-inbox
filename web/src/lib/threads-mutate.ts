@@ -82,7 +82,7 @@ export async function muteThread(
 // Toggle the pinned flag on a thread. Pinned threads sort to the top of
 // the inbox regardless of last_message_at — listThreads orders by
 // `pinned DESC, last_message_at DESC`. Pin is purely a UI affordance:
-// archive/snooze/mute still apply normally.
+// archive/mute still apply normally.
 export async function pinThread(
   userId: string,
   threadId: string,
@@ -108,28 +108,12 @@ export async function pinThread(
   }
 }
 
-// Set or clear the reminder timestamp on a thread (issue #75). Pass a
-// future unix-seconds value to set, or null to clear. Different from
-// snooze: the thread stays visible in current views while reminded, and
-// the reader pops a "Reminder due" banner once `remind_at <= now()`.
-export async function remindThread(
-  userId: string,
-  threadId: string,
-  remindAt: number | null,
-): Promise<void> {
-  if (!(await userCanAccessThread(userId, threadId))) return;
-  await getDb()
-    .prepare("UPDATE threads_index SET remind_at = ? WHERE thread_id = ?")
-    .bind(remindAt, threadId)
-    .run();
-}
-
-// Toggle follow-up nudges on a thread (issue #26). When enabled, the thread
+// Toggle follow-up on a thread (issue #26). When enabled, the thread
 // becomes a candidate for the Follow-ups view: it surfaces once
 // `last_message_at` is older than `days` (or the global default) AND the
 // most-recent message is outbound. Passing `days = null` clears the
 // per-thread override so the global default kicks back in. Disabling
-// nudges (enabled = false) leaves `follow_up_days` alone so re-enabling
+// follow-up (enabled = false) leaves `follow_up_days` alone so re-enabling
 // preserves the user's previously chosen day count.
 export async function setFollowUp(
   userId: string,

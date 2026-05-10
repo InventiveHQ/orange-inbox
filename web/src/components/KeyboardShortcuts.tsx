@@ -13,7 +13,7 @@ import { usePathname, useRouter } from "next/navigation";
 //
 // Action buttons in the existing UI carry data-action="<name>" attributes; the
 // handler dispatches click()/focus() on those rather than re-implementing the
-// fetches, so star/archive/snooze/label/reply all reuse their existing
+// fetches, so star/archive/label/reply all reuse their existing
 // optimistic + UndoToast plumbing.
 //
 // `?` navigates to /inbox/help#shortcuts (the cheat sheet now lives as a
@@ -181,10 +181,6 @@ export default function KeyboardShortcuts() {
           return;
         case "l":
           clickAction("label");
-          e.preventDefault();
-          return;
-        case "b":
-          clickAction("snooze");
           e.preventDefault();
           return;
         case "r":

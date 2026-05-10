@@ -44,7 +44,7 @@ export interface MailboxRow {
   member_count: number;
   is_shared: number;
   // Number of unread threads currently visible in this mailbox's inbox view —
-  // i.e. matching the same archived/snoozed filter as `listThreads`. Muted
+  // i.e. matching the same archived filter as `listThreads`. Muted
   // threads are intentionally counted: a per-mailbox badge that ignores muted
   // can leave the user wondering where the unread count came from on the "all
   // inboxes" badge. The per-mailbox listing hides muted, but the count keeps
@@ -61,7 +61,7 @@ export interface MailboxRow {
 //
 // `unread_count` is the number of threads in `threads_index` for this mailbox
 // that have unread_count > 0 and are visible in the inbox listing (not
-// archived, not currently snoozed). Computed via a correlated subquery so
+// archived). Computed via a correlated subquery so
 // each row stays a single round-trip — `threads_index` already has
 // `(mailbox_id, archived, last_message_at)` covered by the listing index.
 export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]> {
@@ -76,7 +76,6 @@ export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]
                 WHERE ti.mailbox_id = mb.id
                   AND ti.unread_count > 0
                   AND ti.archived = 0
-                  AND (ti.snoozed_until IS NULL OR ti.snoozed_until <= unixepoch())
               ) AS unread_count
          FROM mailboxes mb
          INNER JOIN user_mailbox_access uma ON uma.mailbox_id = mb.id
@@ -103,11 +102,7 @@ export interface ThreadListItem {
   archived: number;
   muted: number;
   pinned: number;
-  // Reminder (issue #75) is unrelated to snooze: snooze HIDES a thread
-  // until the time elapses, remind keeps the thread visible and pops a
-  // "Reminder due" banner at the chosen time. NULL when no reminder set.
-  remind_at: number | null;
-  // Follow-up nudges (issue #26). When `follow_up_enabled = 1` the thread is
+  // Follow-up (issue #26). When `follow_up_enabled = 1` the thread is
   // a candidate for the Follow-ups view: it surfaces once `last_message_at`
   // is older than `follow_up_days` AND the most-recent message is outbound
   // (latter check happens at listDueFollowups time — not stored here). NULL
@@ -178,13 +173,9 @@ export async function listThreads(
   } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  // Hide threads that are still in a future-snooze. The cron clears
-  // snoozed_until once it elapses, but if the cron is briefly behind we still
-  // don't want to show those rows — hence the explicit `> unixepoch()` check.
   const where = [
     "uma.user_id = ?",
     "ti.archived = 0",
-    "(ti.snoozed_until IS NULL OR ti.snoozed_until <= unixepoch())",
   ];
   const binds: unknown[] = [userId];
 
@@ -247,7 +238,6 @@ export async function listThreads(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       ti.follow_up_enabled,
       ti.follow_up_days,
       d.id   AS domain_id,
@@ -316,12 +306,7 @@ export interface ThreadDetail {
     // Caller's role on the thread's mailbox — drives "can the Reply button
     // appear" and similar gates in the reader UI.
     user_role: "owner" | "member" | "reader";
-    snoozed_until: number | null;
-    // Reminder timestamp (issue #75). NULL means no reminder. When set and
-    // <= now() the reader shows a "Reminder due" banner; the thread itself
-    // stays visible regardless of the timestamp (unlike snooze).
-    remind_at: number | null;
-    // Follow-up nudge state (issue #26). `follow_up_enabled` is the
+    // Follow-up state (issue #26). `follow_up_enabled` is the
     // per-thread opt-in; `follow_up_days` is an optional per-thread override
     // for the "due after N days" threshold (NULL falls back to the default).
     follow_up_enabled: number;
@@ -439,7 +424,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .prepare(
       `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
               ti.message_count, ti.unread_count, ti.starred, ti.archived,
-              ti.muted, ti.pinned, ti.snoozed_until, ti.remind_at,
+              ti.muted, ti.pinned,
               ti.follow_up_enabled, ti.follow_up_days,
               d.name AS domain_name,
               mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
@@ -835,7 +820,6 @@ export async function listAssignedToUser(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -863,6 +847,7 @@ export async function listAssignedToUser(
     INNER JOIN user_mailbox_access uma
             ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?1
     WHERE ta.assignee_id = ?1
+      AND ta.resolved_at IS NULL
       AND ti.archived = 0
     ORDER BY ti.pinned DESC, ta.assigned_at DESC
     LIMIT ?
@@ -886,6 +871,7 @@ export async function countAssignedToUser(userId: string): Promise<number> {
          INNER JOIN user_mailbox_access uma
                  ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?1
         WHERE ta.assignee_id = ?1
+          AND ta.resolved_at IS NULL
           AND ti.archived = 0`,
     )
     .bind(userId)
@@ -929,7 +915,6 @@ export async function listVipThreads(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       ti.follow_up_enabled,
       ti.follow_up_days,
       d.id   AS domain_id,
@@ -1014,7 +999,6 @@ export async function listSpamReportedThreads(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -1051,7 +1035,7 @@ export async function listSpamReportedThreads(
   return (results ?? []).map(parseThreadListRow);
 }
 
-// ─── Follow-up nudges (issue #26) ────────────────────────────────────────
+// ─── Follow-up (issue #26) ───────────────────────────────────────────────
 //
 // "You sent this N days ago and they haven't replied — bump?" Surfaces
 // threads where:
@@ -1091,7 +1075,6 @@ export async function listDueFollowups(
       ti.archived,
       ti.muted,
       ti.pinned,
-      ti.remind_at,
       ti.follow_up_enabled,
       ti.follow_up_days,
       d.id   AS domain_id,

@@ -32,13 +32,10 @@ interface PatchBody {
   read?: boolean;
   muted?: boolean;
   pinned?: boolean;
-  // Reminder timestamp (unix seconds). null clears the reminder. Different
-  // from snooze — see remindThread / threads_index.remind_at.
-  remind_at?: number | null;
-  // Follow-up nudges (issue #26). `follow_up_enabled` is the per-thread
-  // opt-in. `follow_up_days` is an optional override for the "due after N
-  // days" threshold — explicit null clears the override so the global
-  // default kicks back in.
+  // Follow-up (issue #26). `follow_up_enabled` is the per-thread opt-in.
+  // `follow_up_days` is an optional override for the "due after N days"
+  // threshold — explicit null clears the override so the global default
+  // kicks back in.
   follow_up_enabled?: boolean;
   follow_up_days?: number | null;
 }
@@ -89,19 +86,7 @@ export async function PATCH(
       indexUpdates.push("pinned = ?");
       indexBinds.push(b.pinned ? 1 : 0);
     }
-    // remind_at is explicitly nullable: null clears the reminder, a number
-    // sets it. We accept any finite number — the UI guarantees future-
-    // timestamps but the server doesn't enforce, so an already-elapsed value
-    // immediately surfaces the "due" banner (which is fine).
-    if (b.remind_at === null || typeof b.remind_at === "number") {
-      const v = b.remind_at === null ? null : Math.floor(b.remind_at);
-      if (v !== null && !Number.isFinite(v)) {
-        return NextResponse.json({ error: "remind_at must be finite" }, { status: 400 });
-      }
-      indexUpdates.push("remind_at = ?");
-      indexBinds.push(v);
-    }
-    // Follow-up nudges (issue #26). `follow_up_enabled` toggles tracking on
+    // Follow-up (issue #26). `follow_up_enabled` toggles tracking on
     // the thread; `follow_up_days` is an optional per-thread day count
     // override. Both fields are independent — the caller may set days
     // without touching the on/off bit and vice versa.

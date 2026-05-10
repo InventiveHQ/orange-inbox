@@ -268,13 +268,13 @@ export async function upsertThreadIndex(p: ThreadIndexUpsert): Promise<void> {
       `INSERT INTO threads_index
          (thread_id, mailbox_id, mail_db_id, subject_normalized,
           last_message_at, message_count, unread_count,
-          archived, starred, snoozed_until,
+          archived, starred,
           last_message_id, last_subject, last_from_addr, last_from_name, last_snippet,
           created_at)
        VALUES
          (?, ?, ?, ?,
           ?, 1, ?,
-          0, 0, NULL,
+          0, 0,
           ?, ?, ?, ?, ?,
           ?)
        ON CONFLICT (thread_id) DO UPDATE SET

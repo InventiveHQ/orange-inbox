@@ -121,7 +121,6 @@ function KeyboardShortcutsSection() {
             <ShortcutRow keys={["#"]} desc="Delete" />
             <ShortcutRow keys={["s"]} desc="Star / unstar" />
             <ShortcutRow keys={["l"]} desc="Apply label" />
-            <ShortcutRow keys={["b"]} desc="Snooze" />
             <ShortcutRow keys={["r"]} desc="Reply" />
             <ShortcutRow keys={["c"]} desc="Compose" />
             <ShortcutRow keys={["?"]} desc="Show this section" />
@@ -294,10 +293,6 @@ function OrganizingSection() {
         <li>
           <span className="font-medium">Star</span> and <span className="font-medium">Archive</span> from the
           thread header. Archived threads stay searchable but leave the inbox.
-        </li>
-        <li>
-          <span className="font-medium">Snooze</span> — pick a future time and
-          the thread leaves the inbox until then, when it returns marked unread.
         </li>
         <li>
           <span className="font-medium">Labels</span> — apply via the label
