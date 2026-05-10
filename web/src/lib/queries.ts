@@ -50,6 +50,10 @@ export interface MailboxRow {
   // inboxes" badge. The per-mailbox listing hides muted, but the count keeps
   // them so the badge math is consistent across views.
   unread_count: number;
+  // User's manual sort position from drag-to-reorder (issue #52). 0 means
+  // "unordered" — keep alphabetical default. Non-zero values lead the
+  // alphabetical tail in the sidebar.
+  sort_order: number;
 }
 
 // Mailboxes the user can read from. The sidebar groups these under domain
@@ -64,7 +68,7 @@ export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]
   const { results } = await getDb()
     .prepare(
       `SELECT mb.id, mb.domain_id, d.name AS domain_name, mb.local_part,
-              mb.display_name, mb.is_catch_all, uma.role,
+              mb.display_name, mb.is_catch_all, uma.role, uma.sort_order,
               (SELECT COUNT(*) FROM user_mailbox_access WHERE mailbox_id = mb.id) AS member_count,
               CASE WHEN (SELECT COUNT(*) FROM user_mailbox_access WHERE mailbox_id = mb.id) > 1
                    THEN 1 ELSE 0 END AS is_shared,
@@ -78,7 +82,11 @@ export async function listMailboxesForUser(userId: string): Promise<MailboxRow[]
          INNER JOIN user_mailbox_access uma ON uma.mailbox_id = mb.id
          INNER JOIN domains d ON d.id = mb.domain_id
         WHERE uma.user_id = ?
-        ORDER BY d.name, mb.local_part`,
+        -- sort_order = 0 is the "unordered" default → those rows fall
+        -- through to the alphabetical tie-break below. Any row the user
+        -- has explicitly dragged (sort_order >= 1) leads.
+        ORDER BY CASE WHEN uma.sort_order = 0 THEN 1 ELSE 0 END,
+                 uma.sort_order, d.name, mb.local_part`,
     )
     .bind(userId)
     .all<MailboxRow>();
