@@ -85,6 +85,7 @@ export default function SettingsManager({
   const hasAuditAccess = auditMailboxes.length > 0;
   const sections = useMemo(
     () => [
+      { id: "profile", label: "Profile" },
       { id: "mail-domains", label: "Mail domains" },
       ...(isAdmin ? [{ id: "mailbox-names", label: "Mailbox names" }] : []),
       ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
@@ -131,6 +132,7 @@ export default function SettingsManager({
             </nav>
           </aside>
           <div className="flex-1 min-w-0 space-y-12">
+            <ProfileSection id="profile" />
             <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
             {isAdmin && (
               <MailboxNamesSection
@@ -251,6 +253,190 @@ const UNDO_SEND_OPTIONS: { value: number; label: string }[] = [
   { value: 20, label: "20 seconds" },
   { value: 30, label: "30 seconds" },
 ];
+
+// Curated list of common IANA zones (#90). The full IANA tz database is
+// hundreds of names, most of which are aliases or rarely-used regional
+// identifiers; loading the whole thing into a <datalist> is overkill
+// when 95% of users will pick something from this short list. The input
+// remains free-form text so anyone who needs a less common zone can
+// type it directly — server-side validation via Intl.DateTimeFormat
+// catches typos.
+const COMMON_TIME_ZONES: string[] = [
+  "UTC",
+  // Americas
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Anchorage",
+  "America/Phoenix",
+  "America/Toronto",
+  "America/Vancouver",
+  "America/Mexico_City",
+  "America/Bogota",
+  "America/Lima",
+  "America/Santiago",
+  "America/Sao_Paulo",
+  "America/Buenos_Aires",
+  "America/Halifax",
+  "America/St_Johns",
+  "Pacific/Honolulu",
+  // Europe
+  "Europe/London",
+  "Europe/Dublin",
+  "Europe/Lisbon",
+  "Europe/Paris",
+  "Europe/Madrid",
+  "Europe/Berlin",
+  "Europe/Amsterdam",
+  "Europe/Brussels",
+  "Europe/Zurich",
+  "Europe/Rome",
+  "Europe/Stockholm",
+  "Europe/Oslo",
+  "Europe/Copenhagen",
+  "Europe/Helsinki",
+  "Europe/Warsaw",
+  "Europe/Athens",
+  "Europe/Istanbul",
+  "Europe/Moscow",
+  // Africa / Middle East
+  "Africa/Cairo",
+  "Africa/Johannesburg",
+  "Africa/Lagos",
+  "Asia/Jerusalem",
+  "Asia/Dubai",
+  "Asia/Riyadh",
+  // Asia
+  "Asia/Karachi",
+  "Asia/Kolkata",
+  "Asia/Dhaka",
+  "Asia/Bangkok",
+  "Asia/Singapore",
+  "Asia/Hong_Kong",
+  "Asia/Shanghai",
+  "Asia/Taipei",
+  "Asia/Seoul",
+  "Asia/Tokyo",
+  // Oceania
+  "Australia/Perth",
+  "Australia/Adelaide",
+  "Australia/Sydney",
+  "Pacific/Auckland",
+];
+
+// Profile section (#90). Currently just the time zone picker — kept as
+// its own section so future user-profile fields (display name, avatar,
+// etc.) have an obvious home and the Settings nav doesn't need another
+// rename round.
+function ProfileSection({ id }: { id: string }) {
+  // null means "loaded, nothing set" (legacy users); undefined means
+  // "haven't fetched yet". The picker disables itself in the undefined
+  // state so we don't write before we've read.
+  const [defaultTz, setDefaultTz] = useState<string | null | undefined>(undefined);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  // Device tz is the legacy fallback — surface it next to the input so
+  // users understand what "leave blank" means. Computed once; the
+  // browser tz doesn't change mid-session in any realistic scenario.
+  const deviceTz =
+    typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "";
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/me");
+        if (cancelled || !res.ok) {
+          setDefaultTz(null);
+          return;
+        }
+        const j = (await res.json()) as { default_tz?: string | null };
+        if (!cancelled) setDefaultTz(j.default_tz ?? null);
+      } catch {
+        if (!cancelled) setDefaultTz(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function commit(next: string) {
+    setError(null);
+    const trimmed = next.trim();
+    // Empty string clears the pref so future events fall back to device
+    // tz. Otherwise we send the raw value through and let the server
+    // validate (Intl.DateTimeFormat throws on unknown zones).
+    const payload = trimmed === "" ? null : trimmed;
+    setDefaultTz(payload);
+    startTransition(async () => {
+      const res = await fetch("/api/me", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ default_tz: payload }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      setSavedAt(Date.now());
+    });
+  }
+
+  const inputValue = defaultTz === undefined || defaultTz === null ? "" : defaultTz;
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Profile"
+        description="Personal preferences that follow you across devices."
+      />
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4">
+        <label htmlFor="settings-default-tz" className="block text-sm font-medium mb-2">
+          Time zone
+        </label>
+        <input
+          id="settings-default-tz"
+          type="text"
+          list="settings-default-tz-options"
+          autoComplete="off"
+          spellCheck={false}
+          value={inputValue}
+          placeholder={deviceTz ? `Device: ${deviceTz}` : "America/Los_Angeles"}
+          onChange={e => setDefaultTz(e.target.value)}
+          onBlur={e => {
+            // Commit on blur rather than per-keystroke so we don't fire
+            // a request for every character of "America/Los_Angeles". A
+            // change-then-blur for the same value still no-ops because
+            // the server treats an unchanged write as idempotent.
+            if (defaultTz !== undefined) commit(e.target.value);
+          }}
+          disabled={defaultTz === undefined || isPending}
+          className="w-full sm:w-72 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
+        />
+        <datalist id="settings-default-tz-options">
+          {COMMON_TIME_ZONES.map(tz => (
+            <option key={tz} value={tz} />
+          ))}
+        </datalist>
+        <p className="mt-2 text-xs text-neutral-500">
+          New calendar events default to this zone. Leave blank to fall back
+          to your device&rsquo;s time zone
+          {deviceTz ? ` (currently ${deviceTz})` : ""}.
+        </p>
+        <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
+          {isPending && <span>Saving…</span>}
+          {!isPending && savedAt && <span>Saved</span>}
+          {error && <span className="text-red-600">{error}</span>}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function SendingSection({
   id,
