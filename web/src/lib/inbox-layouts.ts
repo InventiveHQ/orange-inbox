@@ -386,6 +386,7 @@ export async function loadPaneThreads(
       ti.pinned,
       ti.follow_up_enabled,
       ti.follow_up_days,
+      ti.follow_up_minutes,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -425,6 +426,7 @@ export async function loadPaneThreads(
     pinned: number;
     follow_up_enabled: number;
     follow_up_days: number | null;
+    follow_up_minutes: number | null;
     domain_id: string;
     domain_name: string;
     mailbox_id: string;

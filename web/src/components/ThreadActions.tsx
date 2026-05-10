@@ -23,12 +23,12 @@ interface Props {
   initialMuted: boolean;
   initialPinned: boolean;
   // Follow-up (issue #26). When enabled the thread becomes a
-  // candidate for the Follow-ups view. `initialFollowUpDays` is the
-  // per-thread day-count override; NULL falls back to the global default
-  // (DEFAULT_FOLLOWUP_DAYS below). Kept in its own toolbar group so the
-  // parallel shared-mailbox-assignment work merges cleanly around it.
+  // candidate for the Follow-ups view. `initialFollowUpMinutes` is the
+  // per-thread cadence override (in minutes — supports sub-day values
+  // since the bell-icon UX); NULL falls back to the global default
+  // (DEFAULT_FOLLOWUP_MINUTES below).
   initialFollowUpEnabled?: boolean;
-  initialFollowUpDays?: number | null;
+  initialFollowUpMinutes?: number | null;
   // Mailbox the thread lives on — drives the assignment menu's member fetch.
   mailboxId: string;
   // Current user id, needed to render "Claim" vs "Reassign" and to set the
@@ -38,9 +38,10 @@ interface Props {
   initialAssignment: InitialAssignment | null;
 }
 
-// Default day-count surfaced when the user enables follow-up on a thread
-// with no per-thread override. Kept in sync with listDueFollowups' default.
-const DEFAULT_FOLLOWUP_DAYS = 4;
+// Default cadence surfaced when the user enables follow-up on a thread
+// with no per-thread override. 4 days = 5760 minutes; kept in sync with
+// listDueFollowups' default.
+const DEFAULT_FOLLOWUP_MINUTES = 4 * 1440;
 
 // Window during which the user can hit Undo. Mirrors Gmail's "Conversation
 // archived" toast cadence; long enough to be a safety net, short enough that
@@ -70,7 +71,7 @@ export default function ThreadActions({
   initialMuted,
   initialPinned,
   initialFollowUpEnabled = false,
-  initialFollowUpDays = null,
+  initialFollowUpMinutes = null,
   mailboxId,
   currentUserId,
   initialAssignment,
@@ -82,12 +83,22 @@ export default function ThreadActions({
   const [muted, setMuted] = useState(initialMuted);
   const [pinned, setPinned] = useState(initialPinned);
   const [followUpEnabled, setFollowUpEnabled] = useState(initialFollowUpEnabled);
-  const [followUpDays, setFollowUpDays] = useState<number | null>(initialFollowUpDays);
-  const [followUpPopoverOpen, setFollowUpPopoverOpen] = useState(false);
-  const [followUpDaysDraft, setFollowUpDaysDraft] = useState(
-    String(initialFollowUpDays ?? DEFAULT_FOLLOWUP_DAYS),
+  const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(
+    initialFollowUpMinutes,
   );
+  const [followUpPopoverOpen, setFollowUpPopoverOpen] = useState(false);
+  // Two-field draft: a number (string) and a unit. Seeded from the
+  // current cadence — see seedFollowUpDraft.
+  const [followUpDraftValue, setFollowUpDraftValue] = useState("");
+  const [followUpDraftUnit, setFollowUpDraftUnit] = useState<CadenceUnit>("days");
   const followUpPopoverRef = useRef<HTMLDivElement>(null);
+
+  function seedFollowUpDraft(minutes: number | null) {
+    const m = minutes ?? DEFAULT_FOLLOWUP_MINUTES;
+    const split = splitCadence(m);
+    setFollowUpDraftValue(String(split.value));
+    setFollowUpDraftUnit(split.unit);
+  }
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [isStarPending, startStarTransition] = useTransition();
@@ -231,21 +242,28 @@ export default function ThreadActions({
     });
   }
 
-  function submitFollowUpDays() {
-    const parsed = Number(followUpDaysDraft);
-    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 365) {
-      setError("Days must be between 1 and 365");
+  function submitFollowUpCadence() {
+    const parsed = Number(followUpDraftValue);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      setError("Enter a value of at least 1.");
       return;
     }
-    const next = Math.floor(parsed);
-    setFollowUpDays(next);
+    const minutes = toMinutes(parsed, followUpDraftUnit);
+    // 1 minute floor (anything smaller than a minute would just be noise
+    // given the cron cadence) and 1-year ceiling (matches the previous
+    // 365-day bound, expressed in minutes).
+    if (minutes < 1 || minutes > 365 * 1440) {
+      setError("Cadence must be between 1 minute and 1 year.");
+      return;
+    }
+    setFollowUpMinutes(minutes);
     setFollowUpPopoverOpen(false);
     setError(null);
     startFollowUpTransition(async () => {
       const res = await fetch(`/api/threads/${threadId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ follow_up_days: next }),
+        body: JSON.stringify({ follow_up_minutes: minutes }),
       });
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string };
@@ -384,7 +402,7 @@ export default function ThreadActions({
           initialAssignment={initialAssignment}
         />
       </div>
-      <div className="flex items-center gap-2" data-toolbar-group="thread-actions">
+      <div className="flex items-center gap-1" data-toolbar-group="thread-actions">
         {error && <span className="text-xs text-red-600">{error}</span>}
         {isDeletePending ? (
           <span className="text-xs text-neutral-500 italic">Deleting…</span>
@@ -398,10 +416,10 @@ export default function ThreadActions({
               aria-pressed={starred}
               aria-label={starred ? "Unstar" : "Star"}
               title={starred ? "Unstar" : "Star"}
-              className={`rounded-md border px-2 py-1.5 text-sm disabled:opacity-50 ${
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-md border text-sm disabled:opacity-50 ${
                 starred
-                  ? "border-yellow-400 bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300"
-                  : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  ? "border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 text-yellow-500"
+                  : "border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
               }`}
             >
               {starred ? "★" : "☆"}
@@ -411,10 +429,11 @@ export default function ThreadActions({
               data-action="archive"
               onClick={archive}
               disabled={anyPending}
+              aria-label={archived ? "Unarchive" : "Archive"}
               title={archived ? "Unarchive" : "Archive"}
-              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
             >
-              {archived ? "Unarchive" : "Archive"}
+              <ArchiveGlyph filled={archived} />
             </button>
             <div ref={moreMenuRef} className="relative">
               <button
@@ -426,7 +445,7 @@ export default function ThreadActions({
                 aria-expanded={moreMenuOpen}
                 aria-label="More thread actions"
                 title="More"
-                className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
                   <path d="M8 4a1.25 1.25 0 1 0 0-2.5A1.25 1.25 0 0 0 8 4Zm0 5.25A1.25 1.25 0 1 0 8 6.75a1.25 1.25 0 0 0 0 2.5Zm0 5.25A1.25 1.25 0 1 0 8 12a1.25 1.25 0 0 0 0 2.5Z" />
@@ -503,7 +522,7 @@ export default function ThreadActions({
       {!isDeletePending && (
         <div
           data-toolbar-group="follow-up"
-          className="flex items-center gap-1 mt-2 sm:mt-0 sm:ml-1"
+          className="flex items-center gap-1"
         >
           <div className="relative inline-flex" ref={followUpPopoverRef}>
             <button
@@ -512,38 +531,42 @@ export default function ThreadActions({
               onClick={toggleFollowUp}
               disabled={isFollowUpPending || anyPending}
               aria-pressed={followUpEnabled}
+              aria-label={followUpEnabled ? "Follow-up on" : "Follow-up off"}
               title={
                 followUpEnabled
-                  ? `Follow-up on — due in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
+                  ? `Follow-up on — due ${formatCadence(followUpMinutes ?? DEFAULT_FOLLOWUP_MINUTES)}`
                   : "Follow-up off — turn on to get reminded when waiting on a reply"
               }
-              className={`rounded-l-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+              className={`inline-flex h-8 ${
+                followUpEnabled ? "px-2" : "w-8"
+              } items-center justify-center gap-1 rounded-l-md border text-sm disabled:opacity-50 ${
                 followUpEnabled
-                  ? "border-indigo-400 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
-                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  ? "border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 text-[var(--color-brand)]"
+                  : "border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
               }`}
             >
-              {followUpEnabled
-                ? `⏰ Follow up in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
-                : "⏰ Follow up"}
+              <BellGlyph filled={followUpEnabled} />
+              {followUpEnabled && (
+                <span className="text-xs tabular-nums">
+                  {formatCadenceShort(followUpMinutes)}
+                </span>
+              )}
             </button>
             <button
               type="button"
-              data-action="follow-up-days"
+              data-action="follow-up-cadence"
               onClick={() => {
-                setFollowUpDaysDraft(
-                  String(followUpDays ?? DEFAULT_FOLLOWUP_DAYS),
-                );
+                seedFollowUpDraft(followUpMinutes);
                 setFollowUpPopoverOpen(o => !o);
               }}
               disabled={isFollowUpPending || anyPending}
-              aria-label="Edit follow-up days"
+              aria-label="Edit follow-up cadence"
               aria-expanded={followUpPopoverOpen}
               title="Change follow-up cadence"
-              className={`rounded-r-md border-y border-r px-2 py-1.5 text-sm disabled:opacity-50 ${
+              className={`inline-flex h-8 w-6 items-center justify-center rounded-r-md border-y border-r text-xs disabled:opacity-50 ${
                 followUpEnabled
-                  ? "border-indigo-400 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
-                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  ? "border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 text-[var(--color-brand)]"
+                  : "border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
               }`}
             >
               ▾
@@ -552,32 +575,43 @@ export default function ThreadActions({
               <div
                 role="dialog"
                 aria-label="Follow-up cadence"
-                className="absolute right-0 top-full mt-1 z-30 w-56 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg p-3"
+                className="absolute right-0 top-full mt-1 z-30 w-64 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg p-3"
               >
                 <label className="block text-xs text-neutral-600 dark:text-neutral-400 mb-1">
-                  Follow up after how many days?
+                  Follow up after
                 </label>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
                     min={1}
-                    max={365}
-                    value={followUpDaysDraft}
-                    onChange={e => setFollowUpDaysDraft(e.target.value)}
+                    value={followUpDraftValue}
+                    onChange={e => setFollowUpDraftValue(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") submitFollowUpCadence();
+                    }}
                     className="w-20 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm"
                   />
+                  <select
+                    value={followUpDraftUnit}
+                    onChange={e => setFollowUpDraftUnit(e.target.value as CadenceUnit)}
+                    className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm"
+                  >
+                    <option value="minutes">minutes</option>
+                    <option value="hours">hours</option>
+                    <option value="days">days</option>
+                  </select>
                   <button
                     type="button"
-                    onClick={submitFollowUpDays}
-                    className="rounded-md bg-[var(--color-brand)] px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                    onClick={submitFollowUpCadence}
+                    className="ml-auto rounded-md bg-[var(--color-brand)] px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
                   >
                     Save
                   </button>
                 </div>
                 <p className="mt-2 text-[11px] text-neutral-500">
-                  Default {DEFAULT_FOLLOWUP_DAYS}d. Threads surface in the
-                  Follow-ups view once they pass this threshold without a
-                  reply.
+                  Default {formatCadence(DEFAULT_FOLLOWUP_MINUTES)}. Threads
+                  surface in the Follow-ups view once they pass this
+                  threshold without a reply.
                 </p>
               </div>
             )}
@@ -605,5 +639,106 @@ export default function ThreadActions({
         />
       )}
     </>
+  );
+}
+
+// Cadence picker units. Internally everything is minutes; we just split
+// for display and recompose on save.
+type CadenceUnit = "minutes" | "hours" | "days";
+
+function toMinutes(value: number, unit: CadenceUnit): number {
+  if (unit === "minutes") return Math.round(value);
+  if (unit === "hours") return Math.round(value * 60);
+  return Math.round(value * 1440);
+}
+
+// Pick the largest whole unit that the cadence cleanly divides into
+// (24h → 1 day, 90m → 90 minutes since it doesn't round to whole hours).
+// Used to seed the popover with a sensible default unit when reopening.
+function splitCadence(minutes: number): { value: number; unit: CadenceUnit } {
+  if (minutes >= 1440 && minutes % 1440 === 0) {
+    return { value: minutes / 1440, unit: "days" };
+  }
+  if (minutes >= 60 && minutes % 60 === 0) {
+    return { value: minutes / 60, unit: "hours" };
+  }
+  return { value: minutes, unit: "minutes" };
+}
+
+// Long-form ("4 days", "6 hours", "30 minutes") for tooltips and the
+// popover help text.
+function formatCadence(minutes: number): string {
+  const split = splitCadence(minutes);
+  const noun =
+    split.unit === "days" ? "day" : split.unit === "hours" ? "hour" : "minute";
+  return `${split.value} ${noun}${split.value === 1 ? "" : "s"}`;
+}
+
+// Compact form for the bell-button label ("4d", "6h", "30m"). Stays
+// inside the toolbar's tight horizontal budget.
+function formatCadenceShort(minutes: number | null): string {
+  if (minutes == null) return formatCadenceShort(DEFAULT_FOLLOWUP_MINUTES);
+  const split = splitCadence(minutes);
+  const suffix =
+    split.unit === "days" ? "d" : split.unit === "hours" ? "h" : "m";
+  return `${split.value}${suffix}`;
+}
+
+// Bell glyph for the follow-up button. Filled when active so the on-state
+// reads at a glance even in monochrome.
+function BellGlyph({ filled }: { filled: boolean }) {
+  if (filled) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+        <path d="M8 1.5a4.5 4.5 0 0 0-4.5 4.5v2.379a1 1 0 0 1-.293.707l-1.207 1.207A.75.75 0 0 0 2.53 11.5h10.94a.75.75 0 0 0 .53-1.207l-1.207-1.207A1 1 0 0 1 12.5 8.379V6A4.5 4.5 0 0 0 8 1.5Zm-1.75 11a1.75 1.75 0 0 0 3.5 0h-3.5Z" />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3.75 11.5h8.5l-.94-.94a1 1 0 0 1-.31-.71V6a3.5 3.5 0 1 0-7 0v3.85a1 1 0 0 1-.31.71l-.94.94Z" />
+      <path d="M6.5 12.5a1.5 1.5 0 0 0 3 0" />
+    </svg>
+  );
+}
+
+// Archive glyph — file-with-down-arrow style, matches the same 14×14 box
+// the other toolbar icons use. Filled background reads as "already
+// archived" without needing a label swap.
+function ArchiveGlyph({ filled }: { filled: boolean }) {
+  if (filled) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+        <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5V5H2V3.5Z" />
+        <path d="M2.5 6h11l-.5 7a1.5 1.5 0 0 1-1.5 1.4H4.5A1.5 1.5 0 0 1 3 13l-.5-7Zm3 2.25a.75.75 0 0 1 1.06 0L7.25 8.94V11.5a.75.75 0 0 0 1.5 0V8.94l.69.69a.75.75 0 1 0 1.06-1.06L8.53 6.72a.75.75 0 0 0-1.06 0L5.5 8.69a.75.75 0 0 0 0 1.06Z" />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="2" y="2.5" width="12" height="3" rx="1" />
+      <path d="M3 5.5v7a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 13 12.5v-7" />
+      <path d="M6.5 8.5 8 7l1.5 1.5M8 7v4" />
+    </svg>
   );
 }

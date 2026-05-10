@@ -41,10 +41,11 @@ const SWIPE_UNDO_SECONDS = 5;
 const SCROLL_KEY_PREFIX = "orange-inbox:threadlist-scroll:";
 const SCROLL_SAVE_DEBOUNCE_MS = 120;
 
-// Default day-count for follow-up (issue #26). Kept in sync with
-// listDueFollowups' defaultDays argument so the inline "Waiting N days"
-// badge here doesn't disagree with the server's "this thread is due" check.
-const DEFAULT_FOLLOWUP_DAYS = 4;
+// Default cadence for follow-up (issue #26 + sub-day support via
+// migration 0051). Kept in sync with listDueFollowups' defaultMinutes
+// so the inline "Waiting N days" badge agrees with the server's
+// "this thread is due" check.
+const DEFAULT_FOLLOWUP_MINUTES = 4 * 1440;
 
 // Quadrant tabs only make sense for the unified All view — per-mailbox
 // scopes already have a single intent. Returning false hides the toggle bar.
@@ -564,21 +565,28 @@ function ThreadRow({
   // flair reads as a tint, not a stripe of paint.
   const flairHue = hashHue(t.last_from_addr || sender || "?");
 
-  // Follow-up (issue #26). When the user has opted this thread in
-  // AND `last_message_at` is older than `follow_up_days` (or the default),
-  // show a subtle "Waiting on reply" badge. We can't tell here whether the
+  // Follow-up (issue #26). When the user has opted this thread in AND
+  // `last_message_at` is older than the configured cadence, show a
+  // subtle "Waiting on reply" badge. We can't tell here whether the
   // most-recent message is outbound — that check lives server-side in
   // listDueFollowups — so the badge may show on threads where the other
   // side replied but a server hop hasn't refreshed yet. Cheap, harmless:
   // the badge is informational, not actionable.
-  const followUpThreshold =
-    t.follow_up_enabled === 1 ? t.follow_up_days ?? DEFAULT_FOLLOWUP_DAYS : null;
-  const waitingDays =
-    followUpThreshold !== null
-      ? Math.floor((Date.now() / 1000 - t.last_message_at) / 86400)
+  const followUpThresholdMinutes =
+    t.follow_up_enabled === 1
+      ? t.follow_up_minutes ??
+        (t.follow_up_days != null ? t.follow_up_days * 1440 : DEFAULT_FOLLOWUP_MINUTES)
+      : null;
+  const waitingMinutes =
+    followUpThresholdMinutes !== null
+      ? Math.floor((Date.now() / 1000 - t.last_message_at) / 60)
       : 0;
+  // Floor display in days for the badge label (UI doesn't need
+  // sub-day precision — a sub-day-cadence thread that crosses the
+  // bar reads as "Waiting 0 days", which still flags the row).
+  const waitingDays = Math.floor(waitingMinutes / 1440);
   const showWaitingBadge =
-    followUpThreshold !== null && waitingDays >= followUpThreshold;
+    followUpThresholdMinutes !== null && waitingMinutes >= followUpThresholdMinutes;
 
   // Swipe state lives per-row so simultaneous swipes don't fight. Translate
   // is applied as inline style during the gesture for fluidity, then snapped

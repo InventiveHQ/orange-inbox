@@ -104,11 +104,15 @@ export interface ThreadListItem {
   pinned: number;
   // Follow-up (issue #26). When `follow_up_enabled = 1` the thread is
   // a candidate for the Follow-ups view: it surfaces once `last_message_at`
-  // is older than `follow_up_days` AND the most-recent message is outbound
-  // (latter check happens at listDueFollowups time — not stored here). NULL
-  // `follow_up_days` means "use the global default" (4d).
+  // is older than the configured cadence AND the most-recent message is
+  // outbound (latter check happens at listDueFollowups time — not stored
+  // here). `follow_up_minutes` (migration 0051) supersedes `follow_up_days`
+  // when set; NULL on both means "use the global default" (4 days = 5760
+  // minutes). The legacy days column lingers so older callers keep working
+  // until they migrate to minutes.
   follow_up_enabled: number;
   follow_up_days: number | null;
+  follow_up_minutes: number | null;
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
@@ -240,6 +244,7 @@ export async function listThreads(
       ti.pinned,
       ti.follow_up_enabled,
       ti.follow_up_days,
+      ti.follow_up_minutes,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -306,11 +311,13 @@ export interface ThreadDetail {
     // Caller's role on the thread's mailbox — drives "can the Reply button
     // appear" and similar gates in the reader UI.
     user_role: "owner" | "member" | "reader";
-    // Follow-up state (issue #26). `follow_up_enabled` is the
-    // per-thread opt-in; `follow_up_days` is an optional per-thread override
-    // for the "due after N days" threshold (NULL falls back to the default).
+    // Follow-up state (issue #26 + sub-day cadences via migration 0051).
+    // `follow_up_enabled` is the per-thread opt-in; `follow_up_minutes`
+    // is the cadence override (preferred); `follow_up_days` is the
+    // legacy column kept for read-fallback.
     follow_up_enabled: number;
     follow_up_days: number | null;
+    follow_up_minutes: number | null;
   };
   messages: ThreadMessage[];
 }
@@ -425,7 +432,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
       `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
               ti.message_count, ti.unread_count, ti.starred, ti.archived,
               ti.muted, ti.pinned,
-              ti.follow_up_enabled, ti.follow_up_days,
+              ti.follow_up_enabled, ti.follow_up_days, ti.follow_up_minutes,
               d.name AS domain_name,
               mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role
@@ -917,6 +924,7 @@ export async function listVipThreads(
       ti.pinned,
       ti.follow_up_enabled,
       ti.follow_up_days,
+      ti.follow_up_minutes,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -1057,7 +1065,9 @@ export async function listSpamReportedThreads(
 // land later if this query gets hot; for v1 the fan-out is fine.
 export async function listDueFollowups(
   userId: string,
-  defaultDays = 4,
+  // Default cadence in minutes (was days before migration 0051's
+  // sub-day support). 4 days = 5760 minutes.
+  defaultMinutes = 4 * 1440,
 ): Promise<ThreadListItem[]> {
   // Cap at 100 so the fan-out below stays bounded even if the user has
   // turned on follow-ups for hundreds of threads. Most-recently-due first
@@ -1077,6 +1087,7 @@ export async function listDueFollowups(
       ti.pinned,
       ti.follow_up_enabled,
       ti.follow_up_days,
+      ti.follow_up_minutes,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -1105,13 +1116,16 @@ export async function listDueFollowups(
       AND ti.follow_up_enabled = 1
       AND ti.archived = 0
       AND ti.muted = 0
-      AND ti.last_message_at < (unixepoch() - (COALESCE(ti.follow_up_days, ?) * 86400))
+      AND ti.last_message_at < (
+        unixepoch() -
+        (COALESCE(ti.follow_up_minutes, ti.follow_up_days * 1440, ?) * 60)
+      )
     ORDER BY ti.last_message_at ASC
     LIMIT ?
   `;
   const { results } = await getDb()
     .prepare(sql)
-    .bind(userId, defaultDays, limit)
+    .bind(userId, defaultMinutes, limit)
     .all<ThreadListRow>();
   const candidates = (results ?? []).map(parseThreadListRow);
   if (candidates.length === 0) return [];

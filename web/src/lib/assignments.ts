@@ -349,6 +349,7 @@ interface ResolvedAssignmentRow {
   pinned: number;
   follow_up_enabled: number;
   follow_up_days: number | null;
+  follow_up_minutes: number | null;
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
@@ -391,6 +392,7 @@ export async function listAssignedToUserResolved(
       ti.pinned,
       ti.follow_up_enabled,
       ti.follow_up_days,
+      ti.follow_up_minutes,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -456,6 +458,7 @@ function parseResolvedRow(row: ResolvedAssignmentRow): ResolvedAssignmentItem {
     pinned: row.pinned,
     follow_up_enabled: row.follow_up_enabled,
     follow_up_days: row.follow_up_days,
+    follow_up_minutes: row.follow_up_minutes,
     domain_id: row.domain_id,
     domain_name: row.domain_name,
     mailbox_id: row.mailbox_id,

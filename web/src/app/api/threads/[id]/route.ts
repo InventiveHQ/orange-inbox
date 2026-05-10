@@ -32,11 +32,14 @@ interface PatchBody {
   read?: boolean;
   muted?: boolean;
   pinned?: boolean;
-  // Follow-up (issue #26). `follow_up_enabled` is the per-thread opt-in.
-  // `follow_up_days` is an optional override for the "due after N days"
-  // threshold — explicit null clears the override so the global default
-  // kicks back in.
+  // Follow-up (issue #26 + sub-day cadences via migration 0051).
+  // `follow_up_enabled` is the per-thread opt-in. `follow_up_minutes`
+  // is the cadence override in minutes — explicit null clears the
+  // override so the global default kicks back in. The legacy
+  // `follow_up_days` field is still accepted (treated as `days * 1440`
+  // minutes) so older clients keep working.
   follow_up_enabled?: boolean;
+  follow_up_minutes?: number | null;
   follow_up_days?: number | null;
 }
 
@@ -94,18 +97,40 @@ export async function PATCH(
       indexUpdates.push("follow_up_enabled = ?");
       indexBinds.push(b.follow_up_enabled ? 1 : 0);
     }
-    if (b.follow_up_days === null || typeof b.follow_up_days === "number") {
-      const days = b.follow_up_days;
-      if (typeof days === "number") {
-        if (!Number.isFinite(days) || days < 1 || days > 365) {
+    // Cadence write. `follow_up_minutes` (preferred) takes precedence
+    // when both are sent. We translate `follow_up_days` to minutes for
+    // older clients so a single column owns the value going forward;
+    // the legacy column gets cleared so reads aren't ambiguous.
+    let cadenceMinutes: number | null | undefined;
+    if (b.follow_up_minutes === null || typeof b.follow_up_minutes === "number") {
+      cadenceMinutes = b.follow_up_minutes;
+    } else if (b.follow_up_days === null || typeof b.follow_up_days === "number") {
+      cadenceMinutes =
+        typeof b.follow_up_days === "number" ? b.follow_up_days * 1440 : null;
+    }
+    if (cadenceMinutes !== undefined) {
+      if (typeof cadenceMinutes === "number") {
+        if (
+          !Number.isFinite(cadenceMinutes) ||
+          cadenceMinutes < 1 ||
+          cadenceMinutes > 365 * 1440
+        ) {
           return NextResponse.json(
-            { error: "follow_up_days must be between 1 and 365" },
+            { error: "follow_up_minutes must be between 1 and 525600" },
             { status: 400 },
           );
         }
       }
+      indexUpdates.push("follow_up_minutes = ?");
+      indexBinds.push(
+        typeof cadenceMinutes === "number" ? Math.floor(cadenceMinutes) : null,
+      );
+      // Keep follow_up_days in sync (NULL when minutes is set so
+      // readers don't have to disambiguate). Old code that still reads
+      // follow_up_days will fall back to the global default — fine
+      // because the new column carries the truth.
       indexUpdates.push("follow_up_days = ?");
-      indexBinds.push(typeof days === "number" ? Math.floor(days) : null);
+      indexBinds.push(null);
     }
 
     if (indexUpdates.length === 0) {

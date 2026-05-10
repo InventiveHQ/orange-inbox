@@ -11,8 +11,7 @@ import BackToListButton from "./BackToListButton";
 import CalendarEventCard from "./CalendarEventCard";
 import ExecutableAttachment from "./ExecutableAttachment";
 import MessageThread, { type MessageSummary } from "./MessageThread";
-import ReplyButton from "./ReplyButton";
-import ReplyAllButton from "./ReplyAllButton";
+import ReplySplitButton from "./ReplySplitButton";
 import RelativeTime from "./RelativeTime";
 import ThreadActions from "./ThreadActions";
 import ThreadNotes from "./ThreadNotes";
@@ -127,7 +126,10 @@ export default function ThreadView({
             initialMuted={thread.muted === 1}
             initialPinned={thread.pinned === 1}
             initialFollowUpEnabled={thread.follow_up_enabled === 1}
-            initialFollowUpDays={thread.follow_up_days}
+            initialFollowUpMinutes={
+              thread.follow_up_minutes ??
+              (thread.follow_up_days != null ? thread.follow_up_days * 1440 : null)
+            }
             mailboxId={thread.mailbox_id}
             currentUserId={currentUserId}
             initialAssignment={
@@ -150,15 +152,6 @@ export default function ThreadView({
             const originalCc = lastInbound.cc_json
               ? parseAddrs(lastInbound.cc_json).map(a => a.addr)
               : [];
-            // Reply-all surfaces only when there's actually somebody else on
-            // the thread (i.e. >1 distinct address across the original
-            // sender + To + Cc). For a 1:1 message we just show Reply.
-            const distinct = new Set<string>(
-              [lastInbound.from_addr, ...originalTo, ...originalCc]
-                .map(a => a.trim().toLowerCase())
-                .filter(Boolean),
-            );
-            const showReplyAll = distinct.size > 1;
             const quoted = {
               fromAddr: lastInbound.from_addr,
               fromName: lastInbound.from_name,
@@ -168,29 +161,21 @@ export default function ThreadView({
               // they're replying to.
               text: lastInbound.text_body || lastInbound.snippet || "",
             };
+            // ReplySplitButton suppresses the reply-all chevron internally
+            // when there's only one distinct recipient (the original sender),
+            // so we don't need to gate it here.
             return (
-              <>
-                <ReplyButton
-                  replyToMessageId={lastInbound.id}
-                  preferredMailboxId={mailboxId}
-                  threadId={thread.id}
-                  toAddrs={[lastInbound.from_addr]}
-                  subject={lastInbound.subject || ""}
-                  quoted={quoted}
-                />
-                {showReplyAll && (
-                  <ReplyAllButton
-                    replyToMessageId={lastInbound.id}
-                    preferredMailboxId={mailboxId}
-                    threadId={thread.id}
-                    fromAddr={lastInbound.from_addr}
-                    toAddrs={originalTo}
-                    ccAddrs={originalCc}
-                    subject={lastInbound.subject || ""}
-                    quoted={quoted}
-                  />
-                )}
-              </>
+              <ReplySplitButton
+                replyToMessageId={lastInbound.id}
+                preferredMailboxId={mailboxId}
+                threadId={thread.id}
+                replyToAddrs={[lastInbound.from_addr]}
+                fromAddr={lastInbound.from_addr}
+                originalToAddrs={originalTo}
+                originalCcAddrs={originalCc}
+                subject={lastInbound.subject || ""}
+                quoted={quoted}
+              />
             );
           })()}
         </div>

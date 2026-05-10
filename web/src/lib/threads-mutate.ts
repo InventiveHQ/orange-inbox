@@ -108,25 +108,22 @@ export async function pinThread(
   }
 }
 
-// Toggle follow-up on a thread (issue #26). When enabled, the thread
-// becomes a candidate for the Follow-ups view: it surfaces once
-// `last_message_at` is older than `days` (or the global default) AND the
-// most-recent message is outbound. Passing `days = null` clears the
-// per-thread override so the global default kicks back in. Disabling
-// follow-up (enabled = false) leaves `follow_up_days` alone so re-enabling
-// preserves the user's previously chosen day count.
+// Toggle follow-up on a thread (issue #26 + sub-day cadences via
+// migration 0051). When enabled, the thread becomes a candidate for
+// the Follow-ups view: it surfaces once `last_message_at` is older
+// than `minutes` (or the global default) AND the most-recent message
+// is outbound. Passing `minutes = null` clears the per-thread override
+// so the global default kicks back in. Disabling follow-up
+// (enabled = false) leaves `follow_up_minutes` alone so re-enabling
+// preserves the user's previously chosen cadence.
 export async function setFollowUp(
   userId: string,
   threadId: string,
   enabled: boolean,
-  days?: number | null,
+  minutes?: number | null,
 ): Promise<void> {
   if (!(await userCanAccessThread(userId, threadId))) return;
-  // Only touch `follow_up_days` when the caller passed it. `undefined`
-  // means "leave alone" — typical for the on/off toggle. `null` means
-  // "clear the override". A finite number sets a per-thread day count;
-  // anything else (NaN/Infinity) is rejected by the caller upstream.
-  if (days === undefined) {
+  if (minutes === undefined) {
     await getDb()
       .prepare(
         "UPDATE threads_index SET follow_up_enabled = ? WHERE thread_id = ?",
@@ -135,10 +132,12 @@ export async function setFollowUp(
       .run();
     return;
   }
+  // Setting minutes also clears the legacy days override so reads
+  // aren't ambiguous between the two columns.
   await getDb()
     .prepare(
-      "UPDATE threads_index SET follow_up_enabled = ?, follow_up_days = ? WHERE thread_id = ?",
+      "UPDATE threads_index SET follow_up_enabled = ?, follow_up_minutes = ?, follow_up_days = NULL WHERE thread_id = ?",
     )
-    .bind(enabled ? 1 : 0, days, threadId)
+    .bind(enabled ? 1 : 0, minutes, threadId)
     .run();
 }
