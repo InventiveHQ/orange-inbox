@@ -197,7 +197,36 @@ function ComposeModal({
     return prefillHtml ? `${prefillHtml}<p><br></p>${sepAndSig}` : `<p><br></p>${sepAndSig}`;
   }, [args.bodyPrefill, args.quotedHtml, initial]);
 
-  const [fromId, setFromId] = useState(initial?.mailbox_id ?? "");
+  // The composer dropdown keys off Identity.id ("<mailbox_id>" for mailboxes,
+  // "alias:<id>" for promoted aliases) so a single <select> covers both
+  // kinds without colliding. The send call resolves it back to a mailbox_id
+  // and (optional) sendAsAliasId before hitting the API.
+  //
+  // Initial value: localStorage cache wins for compose-to-known-recipient
+  // (so promoting one alias and using it once locks in the From for next
+  // time without a server round-trip), then the standard "preferred mailbox
+  // / first identity" fallback. The reply-time auto-detect runs after
+  // mount via a useEffect against /api/messages/<id>/recipients.
+  const composeIdentityCacheKey = "orange-compose-identity-by-recipient";
+  const [selectedIdentityId, setSelectedIdentityId] = useState(() => {
+    const fallback = initial?.id ?? "";
+    // Reply path uses the post-mount fetch; skip the cache lookup here so
+    // the auto-detect isn't shadowed by a stale per-recipient pick.
+    if (args.replyToMessageId) return fallback;
+    const first = (args.toAddrs ?? [])[0]?.toLowerCase();
+    if (!first) return fallback;
+    if (typeof window === "undefined") return fallback;
+    try {
+      const raw = window.localStorage.getItem(composeIdentityCacheKey);
+      if (!raw) return fallback;
+      const cache = JSON.parse(raw) as Record<string, string>;
+      const cached = cache[first];
+      if (cached && identities.some(i => i.id === cached)) return cached;
+    } catch {
+      // localStorage unavailable / parse error — fall through.
+    }
+    return fallback;
+  });
   const [to, setTo] = useState((args.toAddrs ?? []).join(", "));
   const [cc, setCc] = useState((args.ccAddrs ?? []).join(", "));
   const [showCc, setShowCc] = useState((args.ccAddrs ?? []).length > 0);
@@ -230,9 +259,55 @@ function ComposeModal({
   const [isSavingDraft, startSavingDraft] = useTransition();
 
   const fromIdentity = useMemo(
-    () => identities.find(i => i.mailbox_id === fromId),
-    [identities, fromId],
+    () => identities.find(i => i.id === selectedIdentityId),
+    [identities, selectedIdentityId],
   );
+  // Derived send-target. mailbox_id is what the API requires; alias_id is
+  // the optional send-as override. Both come from the chosen identity row.
+  const fromMailboxId = fromIdentity?.mailbox_id ?? "";
+  const sendAsAliasId = fromIdentity?.kind === "alias" ? fromIdentity.alias_id : null;
+
+  // Auto-default identity on reply: if the original was addressed To: or
+  // Cc: one of the user's identities (mailbox OR promoted alias), pick that
+  // one so the user replies *as* the address the sender wrote to. Falls
+  // back to the previously-picked identity if no match is found.
+  //
+  // The data isn't on ComposeOpenArgs (ThreadView/ReplyButton are off-limits
+  // in this issue), so we fetch the parent's recipients via /api/messages/<id>/recipients.
+  // We also remember the last-used identity per outgoing-recipient in
+  // localStorage so subsequent compose-to-the-same-address picks the same
+  // From by default — useful when one human owns multiple aliases.
+  useEffect(() => {
+    let cancelled = false;
+    async function pickFromReply() {
+      if (!args.replyToMessageId) return;
+      try {
+        const res = await fetch(
+          `/api/messages/${args.replyToMessageId}/recipients`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const j = (await res.json()) as { to?: string[]; cc?: string[] };
+        if (cancelled) return;
+        const candidates = [...(j.to ?? []), ...(j.cc ?? [])].map(a =>
+          a.toLowerCase(),
+        );
+        const match = identities.find(i =>
+          candidates.includes(`${i.local_part}@${i.domain_name}`.toLowerCase()),
+        );
+        if (match && !cancelled) setSelectedIdentityId(match.id);
+      } catch {
+        // Best-effort — leave the initial pick in place.
+      }
+    }
+    void pickFromReply();
+    return () => {
+      cancelled = true;
+    };
+    // Only run once per modal instance (the modal remounts via instanceKey
+    // when a new compose opens).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Always-current handlers for the document-level keyboard shortcuts.
   // Using refs lets the listener (which captures over a single mount)
@@ -408,13 +483,28 @@ function ComposeModal({
 
   function payload() {
     return {
-      mailbox_id: fromId,
+      mailbox_id: fromMailboxId,
       to: splitList(to),
       cc: splitList(cc),
       subject,
       body: bodyHtml,
       reply_to_message_id: args.replyToMessageId ?? null,
     };
+  }
+
+  // Best-effort: persist "this recipient → this identity" so the next
+  // compose to the same first To: address defaults to the same From.
+  function rememberIdentityForFirstRecipient() {
+    const first = splitList(to)[0]?.toLowerCase();
+    if (!first || !selectedIdentityId) return;
+    try {
+      const raw = window.localStorage.getItem(composeIdentityCacheKey);
+      const cache = (raw ? JSON.parse(raw) : {}) as Record<string, string>;
+      cache[first] = selectedIdentityId;
+      window.localStorage.setItem(composeIdentityCacheKey, JSON.stringify(cache));
+    } catch {
+      // localStorage unavailable — non-fatal.
+    }
   }
 
   function saveDraft() {
@@ -475,7 +565,8 @@ function ComposeModal({
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            from_mailbox_id: fromId,
+            from_mailbox_id: fromMailboxId,
+            send_as_alias_id: sendAsAliasId ?? undefined,
             to: toList,
             cc: ccList.length ? ccList : undefined,
             subject,
@@ -494,6 +585,7 @@ function ComposeModal({
         }
         const b = (await res.json()) as { id?: string };
         if (b.id) onQueuedUndoSend(b.id, undoSendSeconds);
+        rememberIdentityForFirstRecipient();
         if (shouldArchive) await archiveThreadAfterSend(archiveThreadId);
         onClose();
         router.refresh();
@@ -504,7 +596,8 @@ function ComposeModal({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          from_mailbox_id: fromId,
+          from_mailbox_id: fromMailboxId,
+          send_as_alias_id: sendAsAliasId ?? undefined,
           to: toList,
           cc: ccList.length ? ccList : undefined,
           subject,
@@ -519,6 +612,7 @@ function ComposeModal({
         setError(b.error ?? `Send failed (${res.status})`);
         return;
       }
+      rememberIdentityForFirstRecipient();
       if (shouldArchive) await archiveThreadAfterSend(archiveThreadId);
       onClose();
       router.refresh();
@@ -591,7 +685,8 @@ function ComposeModal({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          from_mailbox_id: fromId,
+          from_mailbox_id: fromMailboxId,
+          send_as_alias_id: sendAsAliasId ?? undefined,
           to: toList,
           cc: ccList.length ? ccList : undefined,
           subject,
@@ -607,6 +702,7 @@ function ComposeModal({
         setError(b.error ?? `Schedule failed (${res.status})`);
         return;
       }
+      rememberIdentityForFirstRecipient();
       setSendMenuOpen(false);
       onClose();
       router.refresh();
@@ -687,13 +783,16 @@ function ComposeModal({
       <div className="px-4 py-2 space-y-2 text-sm">
         <Field label="From">
           <select
-            value={fromId}
-            onChange={e => setFromId(e.target.value)}
+            value={selectedIdentityId}
+            onChange={e => setSelectedIdentityId(e.target.value)}
             className="w-full bg-transparent border-none focus:outline-none"
           >
             {identities.map(i => (
-              <option key={i.mailbox_id} value={i.mailbox_id}>
-                {i.display_name ? `${i.display_name} <${i.local_part}@${i.domain_name}>` : `${i.local_part}@${i.domain_name}`}
+              <option key={i.id} value={i.id}>
+                {i.display_name
+                  ? `${i.display_name} <${i.local_part}@${i.domain_name}>`
+                  : `${i.local_part}@${i.domain_name}`}
+                {i.kind === "alias" ? " (alias)" : ""}
               </option>
             ))}
           </select>
@@ -702,7 +801,7 @@ function ComposeModal({
           <RecipientInput
             value={to}
             onChange={setTo}
-            mailboxId={fromId}
+            mailboxId={fromMailboxId}
             placeholder="comma-separated addresses"
           />
           {!showCc && (
@@ -717,7 +816,7 @@ function ComposeModal({
         </Field>
         {showCc && (
           <Field label="Cc">
-            <RecipientInput value={cc} onChange={setCc} mailboxId={fromId} />
+            <RecipientInput value={cc} onChange={setCc} mailboxId={fromMailboxId} />
           </Field>
         )}
         <Field label="Subject">
@@ -1688,20 +1787,32 @@ function extractSenderFromQuoted(html: string): string | null {
 // Reply: pick the mailbox that received the original. Compose with a single
 // mailbox selected: pick that mailbox. Compose from a domain scope: that
 // domain's catch-all (or first mailbox). Otherwise: first identity.
+//
+// Aliases are skipped at this step — the per-recipient localStorage cache
+// and the reply-time auto-detect (in ComposeModal's useEffect) override
+// this initial pick when there's a better match. Falling through to the
+// mailbox identity here keeps single-mailbox-no-aliases setups behaving
+// exactly as before.
 function pickInitialIdentity(identities: Identity[], args: ComposeOpenArgs): Identity | undefined {
   if (args.preferredMailboxId) {
-    const m = identities.find(i => i.mailbox_id === args.preferredMailboxId);
+    const m = identities.find(
+      i => i.kind === "mailbox" && i.mailbox_id === args.preferredMailboxId,
+    );
     if (m) return m;
   }
   if (args.preferredScope && args.preferredScope !== "all") {
     // /inbox/<scope> uses the mailbox id as scope when a single mailbox is
     // selected; only special scopes like "all"/"drafts" aren't mailbox ids.
-    const byMailbox = identities.find(i => i.mailbox_id === args.preferredScope);
+    const byMailbox = identities.find(
+      i => i.kind === "mailbox" && i.mailbox_id === args.preferredScope,
+    );
     if (byMailbox) return byMailbox;
-    const inDomain = identities.filter(i => i.domain_name === args.preferredScope);
+    const inDomain = identities.filter(
+      i => i.kind === "mailbox" && i.domain_name === args.preferredScope,
+    );
     if (inDomain.length > 0) {
       return inDomain.find(i => i.is_catch_all === 1) ?? inDomain[0];
     }
   }
-  return identities[0];
+  return identities.find(i => i.kind === "mailbox") ?? identities[0];
 }

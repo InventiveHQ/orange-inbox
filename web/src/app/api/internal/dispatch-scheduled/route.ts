@@ -10,6 +10,10 @@ interface Body {
 
 interface PayloadJson {
   from_mailbox_id?: string;
+  // Optional promoted-alias id; the parent scheduler captures this when the
+  // composer picks an alias as the From identity. Forwarded to sendMessage
+  // unchanged — re-validation happens there.
+  send_as_alias_id?: string;
   to?: string[];
   cc?: string[];
   bcc?: string[];
@@ -65,6 +69,7 @@ export async function POST(req: NextRequest) {
     try {
       const result = await sendMessage(row.user_id, {
         fromMailboxId: payload.from_mailbox_id,
+        sendAsAliasId: payload.send_as_alias_id,
         to: payload.to,
         cc: payload.cc,
         bcc: payload.bcc,

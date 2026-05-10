@@ -4,6 +4,11 @@ import { SendError, sendMessage } from "@/lib/send";
 
 interface Body {
   from_mailbox_id?: string;
+  // Optional promoted-alias id. When set, the From line uses the alias's
+  // local_part / display_name / signature instead of the mailbox's. The
+  // alias must belong to the same mailbox the user has access to; the send
+  // path re-verifies before handing bytes to env.EMAIL.send().
+  send_as_alias_id?: string;
   to?: string[];
   cc?: string[];
   bcc?: string[];
@@ -28,6 +33,7 @@ export async function POST(req: NextRequest) {
 
     const { messageId, threadId } = await sendMessage(user.id, {
       fromMailboxId: b.from_mailbox_id,
+      sendAsAliasId: b.send_as_alias_id,
       to: cleanList(b.to),
       cc: cleanList(b.cc),
       bcc: cleanList(b.bcc),

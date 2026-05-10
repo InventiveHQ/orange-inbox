@@ -1,7 +1,12 @@
 import { headers } from "next/headers";
 import { getDb, getEnv } from "./db";
 import { htmlToText, looksLikeHtml } from "./html-text";
-import { findIdentity, fullAddress, type Identity } from "./identities";
+import {
+  findAliasIdentity,
+  findIdentity,
+  fullAddress,
+  type Identity,
+} from "./identities";
 import { recordSendRecipients } from "./contacts";
 import {
   getActiveMailDbs,
@@ -40,6 +45,10 @@ export interface SendInput {
   // Outbound attachments staged via /api/uploads. We re-verify ownership and
   // pull bytes from R2 before handing them to env.EMAIL.send().
   attachmentIds?: string[];
+  // Optional send-as alias. When set, the alias's local_part/display_name
+  // /signature override the parent mailbox's for the From line. The alias
+  // must belong to the same mailbox as fromMailboxId; we re-verify here.
+  sendAsAliasId?: string;
 }
 
 export interface SendResult {
@@ -48,11 +57,34 @@ export interface SendResult {
 }
 
 export async function sendMessage(userId: string, input: SendInput): Promise<SendResult> {
-  const identity = await findIdentity(userId, input.fromMailboxId);
-  if (!identity) throw new SendError("not_authorised", "You can't send from that mailbox.");
-  if (identity.role === "reader") {
+  const mailboxIdentity = await findIdentity(userId, input.fromMailboxId);
+  if (!mailboxIdentity) {
+    throw new SendError("not_authorised", "You can't send from that mailbox.");
+  }
+  if (mailboxIdentity.role === "reader") {
     throw new SendError("forbidden", "Your role on this domain is read-only.");
   }
+
+  // Resolve the active From identity. If sendAsAliasId is supplied, the alias
+  // must belong to the same mailbox the user already proved access on; we
+  // load it via findAliasIdentity so the join + role check happens in one
+  // place. The mailbox identity remains the authoritative source for thread
+  // routing (parent_mailbox_id stays the underlying mailbox).
+  let identity: Identity = mailboxIdentity;
+  if (input.sendAsAliasId) {
+    const alias = await findAliasIdentity(userId, input.sendAsAliasId);
+    if (!alias) {
+      throw new SendError("alias_not_authorised", "That alias isn't yours to send from.");
+    }
+    if (alias.mailbox_id !== mailboxIdentity.mailbox_id) {
+      throw new SendError(
+        "alias_mailbox_mismatch",
+        "Alias doesn't belong to the chosen mailbox.",
+      );
+    }
+    identity = alias;
+  }
+
   if (input.to.length === 0) throw new SendError("invalid", "At least one recipient is required.");
 
   const env = getEnv();
