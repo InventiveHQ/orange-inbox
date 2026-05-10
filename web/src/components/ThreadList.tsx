@@ -47,18 +47,16 @@ function showsTriageBar(scope: string): boolean {
 }
 
 // Category tabs (Primary / Promotions / Updates / Social / Forums) appear
-// above the unified inbox and per-mailbox inboxes. Drafts / VIPs / domain
+// on per-mailbox inboxes. The unified "all" view uses the triage strip
+// (Inbox / Marketing / Done / Show all) instead — both rows together is
+// visual noise and the two models overlap. Drafts / VIPs / domain
 // roll-ups have their own filter semantics so we keep them off the strip.
 const SCOPES_WITHOUT_CATEGORIES: ReadonlySet<string> = new Set([
+  "all",
   "drafts",
   "vips",
 ]);
 function showsCategoryTabs(scope: string): boolean {
-  // Hide for special scopes that don't represent an inbox view. Domain
-  // roll-ups (`domain:<id>`) keep them off too — those views aggregate
-  // mailboxes the user can read on a domain, and category filtering on
-  // that surface needs more thought (probably keyed off mail DBs the
-  // domain spans).
   if (SCOPES_WITHOUT_CATEGORIES.has(scope)) return false;
   if (scope.startsWith("domain:")) return false;
   return true;
