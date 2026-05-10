@@ -166,3 +166,90 @@ export class TemplateError extends Error {
     super(message);
   }
 }
+
+// ─── Variable substitution ──────────────────────────────────────────────────
+//
+// Snippets v2: a small fixed vocabulary of `{{var}}` placeholders, evaluated
+// client-side at insert time. We keep the set tight on purpose — anything
+// more elaborate (loops/conditionals) is a footgun for non-technical users
+// editing canned responses, and the rest of the app has no ergonomic story
+// for "preview the rendered template" yet.
+//
+// Variables (case-insensitive, with both new and legacy names accepted):
+//   {{first_name}}            — recipient's first name (display_name first
+//                               word; falls back to local-part of the email).
+//   {{last_thread_subject}}   — the subject of the thread we're replying to,
+//                               with any leading "Re:" / "Fwd:" stripped.
+//   {{thread_sender_name}}    — display name of the message we're replying
+//                               to (falls back to first_name when unknown).
+//   {{my_name}}               — sender's display name on the From identity.
+//   {{today}}                 — today's date in the user's locale, long form.
+//
+// Legacy v1 names ({{recipient_name}}, {{recipient_email}}, {{my_email}},
+// {{date}}, {{subject}}) are still substituted so existing user templates
+// keep rendering unchanged.
+
+export interface TemplateContext {
+  // Primary recipient (first entry in To). May be empty for new compose.
+  recipientEmail: string;
+  // Display name we know for the recipient — typically pulled from contacts
+  // or from a signature on a prior message. Optional.
+  recipientName?: string | null;
+  // Identity sending the mail.
+  myName: string | null;
+  myEmail: string;
+  // Compose subject as currently typed.
+  subject: string;
+  // Reply context, when available. last_thread_subject is the *original*
+  // subject (without "Re: " etc); thread_sender_name is the display name on
+  // the message being replied to.
+  lastThreadSubject?: string | null;
+  threadSenderName?: string | null;
+}
+
+export function substituteVariables(text: string, c: TemplateContext): string {
+  const recipientName = (c.recipientName ?? "").trim();
+  const fallbackFirst = c.recipientEmail
+    ? c.recipientEmail.split("@")[0].replace(/[._-]+/g, " ")
+    : "";
+  const firstName = (recipientName ? recipientName.split(/\s+/)[0] : fallbackFirst) || "";
+  const today = new Date().toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const cleanedThreadSubject = (c.lastThreadSubject ?? c.subject ?? "")
+    .replace(/^\s*(re|fwd?)\s*:\s*/i, "")
+    .replace(/^\s*(re|fwd?)\s*:\s*/i, "")
+    .trim();
+
+  const map: Record<string, string> = {
+    // v2
+    first_name: firstName,
+    last_thread_subject: cleanedThreadSubject,
+    thread_sender_name: (c.threadSenderName ?? "").trim() || firstName,
+    my_name: c.myName ?? "",
+    today,
+    // v1 legacy aliases — preserved so existing templates keep working.
+    recipient_name: recipientName || fallbackFirst,
+    recipient_email: c.recipientEmail,
+    my_email: c.myEmail,
+    date: today,
+    subject: c.subject,
+  };
+  return text.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, key) => {
+    const k = String(key).toLowerCase();
+    return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : m;
+  });
+}
+
+// The full list of variables surfaced to the UI (manage-templates help text,
+// slash-menu hint, etc). Order matters — it's the order shown in any cheat
+// sheet.
+export const TEMPLATE_VARIABLES: { name: string; description: string }[] = [
+  { name: "first_name", description: "Recipient's first name" },
+  { name: "last_thread_subject", description: "Subject of the thread (no Re:)" },
+  { name: "thread_sender_name", description: "Name of the person you're replying to" },
+  { name: "my_name", description: "Your display name on the From identity" },
+  { name: "today", description: "Today's date" },
+];

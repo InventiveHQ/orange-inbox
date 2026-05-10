@@ -17,14 +17,48 @@ import { $generateHtmlFromNodes, $generateNodesFromDOM } from "@lexical/html";
 import {
   $getRoot,
   $getSelection,
+  $getNodeByKey,
   $isRangeSelection,
+  $isTextNode,
   $insertNodes,
   FORMAT_TEXT_COMMAND,
   REDO_COMMAND,
   UNDO_COMMAND,
+  KEY_ARROW_DOWN_COMMAND,
+  KEY_ARROW_UP_COMMAND,
+  KEY_ENTER_COMMAND,
+  KEY_ESCAPE_COMMAND,
+  KEY_TAB_COMMAND,
+  COMMAND_PRIORITY_HIGH,
+  COMMAND_PRIORITY_LOW,
   type EditorState,
   type LexicalEditor,
 } from "lexical";
+
+// Active slash-command state surfaced to the parent component. Carries the
+// current query and a closure that, when called, consumes the trigger token
+// (`/<query>`) and inserts the supplied HTML in its place.
+export interface SlashCommandState {
+  query: string;
+  // Bounding rect of the cursor position when the slash menu opened, in
+  // viewport coords. Lets the parent position a popup near the caret without
+  // re-querying selection state.
+  anchorRect: DOMRect | null;
+  // Replace the trigger token with parsed HTML and dismiss the menu.
+  replaceWithHtml: (html: string) => void;
+  // Dismiss without changing content.
+  dismiss: () => void;
+}
+
+// Parent-supplied keyboard navigation hooks. Routed through Lexical's
+// command system at HIGH priority while the menu is open so the popup can
+// drive selection without losing the contenteditable's focus.
+export interface SlashNavigationHandlers {
+  onArrowDown?: () => void;
+  onArrowUp?: () => void;
+  onEnter?: () => void;
+  onTab?: () => void;
+}
 
 interface Props {
   // HTML to seed the editor with on mount. Subsequent changes to this prop are
@@ -37,6 +71,15 @@ interface Props {
   placeholder?: string;
   minHeight?: number;
   onChange?: (html: string, text: string) => void;
+  // Optional: receive open/close events for the slash-command menu. The
+  // editor handles trigger detection (typing "/" at the start of a line or
+  // after whitespace) and exposes the query plus a replace closure. The
+  // parent owns the popup UI.
+  onSlashStateChange?: (state: SlashCommandState | null) => void;
+  // Live keyboard handlers consulted while the slash menu is open. The
+  // editor intercepts Arrow/Enter/Tab at HIGH priority and forwards them
+  // here, so the popup can navigate without focus-stealing the editor.
+  slashNavigationHandlers?: SlashNavigationHandlers;
 }
 
 // Single source of truth for plain-text derivation: read the live editor's
@@ -73,6 +116,8 @@ export default function RichTextEditor({
   placeholder = "Write your message…",
   minHeight = 200,
   onChange,
+  onSlashStateChange,
+  slashNavigationHandlers,
 }: Props) {
   return (
     <LexicalComposer
@@ -107,6 +152,12 @@ export default function RichTextEditor({
             ErrorBoundary={LexicalErrorBoundary}
           />
           <QuoteCollapsePlugin />
+          {onSlashStateChange && (
+            <SlashCommandPlugin
+              onStateChange={onSlashStateChange}
+              navigationHandlers={slashNavigationHandlers}
+            />
+          )}
         </div>
         <HistoryPlugin />
         <ListPlugin />
@@ -221,6 +272,247 @@ function QuoteCollapsePlugin() {
       …
     </button>
   );
+}
+
+// ─── Slash-command trigger detection ────────────────────────────────────────
+//
+// Watches the editor for a "/" typed at the start of a line or after
+// whitespace, and tracks the alphanumeric query that follows. Emits an
+// open-state object containing the live query, the caret rect for popup
+// positioning, and a `replaceWithHtml(...)` closure that consumes the
+// trigger and inserts the supplied HTML in its place.
+//
+// We bridge keyboard navigation (ArrowUp/Down/Enter/Tab) up to the parent
+// via callbacks so the popup can handle selection without focus-stealing
+// the contenteditable.
+//
+// Trigger heuristics:
+//   - Must be a collapsed range selection inside a text node.
+//   - The character immediately before "/" must be empty (start of a node)
+//     or whitespace, so plain URLs/paths inside a sentence don't open the
+//     menu mid-word.
+//   - The query is the run of [A-Za-z0-9_ -] following the slash, capped
+//     at 32 chars; whitespace closes the menu so users can keep typing.
+function SlashCommandPlugin({
+  onStateChange,
+  navigationHandlers,
+}: {
+  onStateChange: (s: SlashCommandState | null) => void;
+  navigationHandlers?: SlashNavigationHandlers;
+}) {
+  const [editor] = useLexicalComposerContext();
+  const openRef = useRef(false);
+  const lastQueryRef = useRef<string | null>(null);
+  // Mirror the latest navigation handlers into a ref so the command
+  // listeners (registered once) always call the live closures.
+  const navRef = useRef<SlashNavigationHandlers | undefined>(navigationHandlers);
+  useEffect(() => {
+    navRef.current = navigationHandlers;
+  }, [navigationHandlers]);
+
+  // Suppress duplicate emits and gate state into open/closed transitions.
+  // Defined as a useCallback so both the update listener and the keyboard
+  // command handlers can read the same closure.
+  const emit = useCallback(
+    (next: SlashCommandState | null) => {
+      if (!next) {
+        if (!openRef.current) return;
+        openRef.current = false;
+        lastQueryRef.current = null;
+        onStateChange(null);
+        return;
+      }
+      if (openRef.current && lastQueryRef.current === next.query) {
+        // Still surface the fresh `replaceWithHtml` closure (its captured
+        // token bounds shift as the user types more characters).
+        onStateChange(next);
+        return;
+      }
+      openRef.current = true;
+      lastQueryRef.current = next.query;
+      onStateChange(next);
+    },
+    [onStateChange],
+  );
+
+  // Recompute trigger state on every editor update. Cheap: one selection +
+  // one text-content read per keystroke.
+  useEffect(() => {
+    return editor.registerUpdateListener(() => {
+      editor.getEditorState().read(() => {
+        const sel = $getSelection();
+        if (!$isRangeSelection(sel) || !sel.isCollapsed()) {
+          emit(null);
+          return;
+        }
+        const anchor = sel.anchor;
+        const node = anchor.getNode();
+        if (!$isTextNode(node)) {
+          emit(null);
+          return;
+        }
+        const text = node.getTextContent();
+        const offset = anchor.offset;
+        // Walk backwards from the cursor looking for the most recent "/".
+        // Bail on whitespace or non-word characters — that means we're past
+        // a closed token / outside any active slash command.
+        let slashIdx = -1;
+        for (let i = offset - 1; i >= 0; i--) {
+          const ch = text.charAt(i);
+          if (ch === "/") {
+            slashIdx = i;
+            break;
+          }
+          if (/\s/.test(ch)) break;
+          if (!/[A-Za-z0-9_-]/.test(ch)) {
+            emit(null);
+            return;
+          }
+        }
+        if (slashIdx === -1) {
+          emit(null);
+          return;
+        }
+        // The "/" must be at node start or follow whitespace, so plain URLs
+        // / file paths inside a sentence don't accidentally fire the menu.
+        if (slashIdx > 0) {
+          const prev = text.charAt(slashIdx - 1);
+          if (!/\s/.test(prev)) {
+            emit(null);
+            return;
+          }
+        }
+        const query = text.slice(slashIdx + 1, offset);
+        if (query.length > 32) {
+          emit(null);
+          return;
+        }
+        const nodeKey = node.getKey();
+        const tokenStart = slashIdx;
+        const tokenEnd = offset;
+        emit({
+          query,
+          anchorRect: caretRect(),
+          replaceWithHtml: (html) =>
+            replaceTokenWithHtml(editor, nodeKey, tokenStart, tokenEnd, html),
+          dismiss: () => {
+            // Caller dismissed without inserting — leave the typed text in
+            // place. Closing the menu means we stop reporting state.
+            emit(null);
+          },
+        });
+      });
+    });
+  }, [editor, emit]);
+
+  // Intercept Arrow/Enter/Tab/Escape while the menu is open. Registered
+  // once; the listeners read openRef + navRef so they react to the latest
+  // state without re-binding on every keystroke.
+  useEffect(() => {
+    const offEsc = editor.registerCommand(
+      KEY_ESCAPE_COMMAND,
+      () => {
+        if (!openRef.current) return false;
+        emit(null);
+        return true;
+      },
+      COMMAND_PRIORITY_LOW,
+    );
+    const navHandler = (key: keyof SlashNavigationHandlers) => (e: KeyboardEvent | null) => {
+      if (!openRef.current) return false;
+      const fn = navRef.current?.[key];
+      if (!fn) return false;
+      e?.preventDefault();
+      fn();
+      return true;
+    };
+    const offDown = editor.registerCommand(
+      KEY_ARROW_DOWN_COMMAND,
+      navHandler("onArrowDown"),
+      COMMAND_PRIORITY_HIGH,
+    );
+    const offUp = editor.registerCommand(
+      KEY_ARROW_UP_COMMAND,
+      navHandler("onArrowUp"),
+      COMMAND_PRIORITY_HIGH,
+    );
+    const offEnter = editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      navHandler("onEnter"),
+      COMMAND_PRIORITY_HIGH,
+    );
+    const offTab = editor.registerCommand(
+      KEY_TAB_COMMAND,
+      navHandler("onTab"),
+      COMMAND_PRIORITY_HIGH,
+    );
+    return () => {
+      offEsc();
+      offDown();
+      offUp();
+      offEnter();
+      offTab();
+    };
+  }, [editor, emit]);
+
+  return null;
+}
+
+// Native-DOM caret bounding rect — used to position the slash popup near
+// the cursor. Uses the live window selection rather than Lexical's range so
+// we get viewport coordinates without going through the editor's internal
+// DOM mapping.
+function caretRect(): DOMRect | null {
+  if (typeof window === "undefined") return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0).cloneRange();
+  const rects = range.getClientRects();
+  if (rects.length > 0) return rects[0];
+  // Collapsed selections sometimes have no rects — fall back to the start
+  // node's bounding box.
+  const node = range.startContainer as Node;
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    return (node as Element).getBoundingClientRect();
+  }
+  return null;
+}
+
+// Replace `text[tokenStart..tokenEnd]` inside the text node identified by
+// `nodeKey` with parsed HTML. We split the node so the prefix (everything
+// before "/") survives, then insert the HTML nodes at the cursor.
+function replaceTokenWithHtml(
+  editor: LexicalEditor,
+  nodeKey: string,
+  tokenStart: number,
+  tokenEnd: number,
+  html: string,
+) {
+  editor.update(() => {
+    const node = $getNodeByKey(nodeKey);
+    if (!node || !$isTextNode(node)) return;
+    const cur = node.getTextContent();
+    // Defensive: token positions may have shifted if the user typed during
+    // the network roundtrip. Best-effort — just bail when out of range.
+    if (tokenStart < 0 || tokenEnd > cur.length || tokenStart >= tokenEnd) return;
+    const before = cur.slice(0, tokenStart);
+    const after = cur.slice(tokenEnd);
+    node.setTextContent(before);
+    // Move selection to end of the trimmed text node so $insertNodes lands
+    // at the right place.
+    node.select(before.length, before.length);
+    const parser = new DOMParser();
+    const dom = parser.parseFromString(html, "text/html");
+    const nodes = $generateNodesFromDOM(editor, dom);
+    if (nodes.length > 0) $insertNodes(nodes);
+    if (after) {
+      // Re-append the trailing text after the inserted block.
+      const sel = $getSelection();
+      if ($isRangeSelection(sel)) {
+        sel.insertText(after);
+      }
+    }
+  });
 }
 
 // Loads HTML into the editor on mount, and again whenever `resetKey` changes.
