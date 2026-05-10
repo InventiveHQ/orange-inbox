@@ -54,3 +54,19 @@ export async function muteThread(
     .bind(muted ? 1 : 0, threadId)
     .run();
 }
+
+// Toggle the pinned flag on a thread. Pinned threads sort to the top of
+// the inbox regardless of last_message_at — listThreads orders by
+// `pinned DESC, last_message_at DESC`. Pin is purely a UI affordance:
+// archive/snooze/mute still apply normally.
+export async function pinThread(
+  userId: string,
+  threadId: string,
+  pinned: boolean,
+): Promise<void> {
+  if (!(await userCanAccessThread(userId, threadId))) return;
+  await getDb()
+    .prepare("UPDATE threads_index SET pinned = ? WHERE thread_id = ?")
+    .bind(pinned ? 1 : 0, threadId)
+    .run();
+}
