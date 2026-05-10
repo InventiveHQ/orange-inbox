@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ThreadListItem } from "@/lib/queries";
-import { formatThreadDate, senderLabel } from "@/lib/format";
+import { dateBucket, formatThreadDate, senderLabel } from "@/lib/format";
 import {
   DEFAULT_QUADRANT,
   QUADRANT_LABELS,
@@ -32,6 +32,13 @@ const SWIPE_THRESHOLD_PX = 80;
 const SWIPE_MAX_VERTICAL_PX = 30;
 const SWIPE_UNDO_SECONDS = 5;
 
+// sessionStorage key prefix for thread-list scroll memory. We key on
+// scope+pathname+search so each filtered view (e.g. ?view=marketing) has its
+// own remembered scroll position. The detail page lives under the same scope
+// path, so coming back to the list naturally restores its position.
+const SCROLL_KEY_PREFIX = "orange-inbox:threadlist-scroll:";
+const SCROLL_SAVE_DEBOUNCE_MS = 120;
+
 // Quadrant tabs only make sense for the unified All view — per-mailbox
 // scopes already have a single intent. Returning false hides the toggle bar.
 function showsTriageBar(scope: string): boolean {
@@ -41,8 +48,62 @@ function showsTriageBar(scope: string): boolean {
 export default function ThreadList({ threads, scope, activeThreadId, showDomain }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const quadrant = parseQuadrant(searchParams.get("view"));
   const triageEnabled = showsTriageBar(scope);
+
+  // Scroll memory — the <ul> is the scroller. We persist its scrollTop to
+  // sessionStorage keyed by the current pathname+search so navigating into a
+  // thread and back restores position without bleeding across mailboxes or
+  // triage tabs.
+  const listRef = useRef<HTMLUListElement>(null);
+  const scrollKey = useMemo(
+    () => `${SCROLL_KEY_PREFIX}${pathname}?${searchParams.toString()}`,
+    [pathname, searchParams],
+  );
+
+  // Restore on mount / whenever the scroll key changes (e.g. user toggles
+  // triage tab, which swaps the scope filter and remounts threads). Done in
+  // a layout-friendly effect so the user doesn't see a flash at top.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    try {
+      const raw = sessionStorage.getItem(scrollKey);
+      const top = raw ? Number(raw) : 0;
+      if (Number.isFinite(top) && top > 0) {
+        el.scrollTop = top;
+      } else {
+        el.scrollTop = 0;
+      }
+    } catch {
+      // sessionStorage may throw in private mode / quota — best effort only.
+    }
+  }, [scrollKey]);
+
+  // Debounced save on scroll. We attach the listener via the effect (rather
+  // than React's onScroll prop) so we can rebind cleanly when the key changes
+  // and avoid React re-renders on every scroll tick.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    function onScroll() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        try {
+          if (el) sessionStorage.setItem(scrollKey, String(el.scrollTop));
+        } catch {
+          // Ignore — see note above.
+        }
+      }, SCROLL_SAVE_DEBOUNCE_MS);
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, [scrollKey]);
 
   const [rawSelected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -209,6 +270,27 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
   const allSelected = threads.length > 0 && selected.size === threads.length;
   const someSelected = selected.size > 0 && !allSelected;
 
+  // Group threads into contiguous date buckets. We iterate in arrival order
+  // (the server already sorts by last_message_at desc) and emit a new group
+  // each time the bucket label changes — this preserves overall ordering
+  // even if a row's bucket doesn't strictly follow the server sort. A
+  // stable `now` is captured on each render so all rows in this paint share
+  // the same "today".
+  const groups = useMemo(() => {
+    const now = Date.now();
+    const out: { label: string; items: ThreadListItem[] }[] = [];
+    for (const t of threads) {
+      const label = dateBucket(t.last_message_at, now);
+      const last = out[out.length - 1];
+      if (last && last.label === label) {
+        last.items.push(t);
+      } else {
+        out.push({ label, items: [t] });
+      }
+    }
+    return out;
+  }, [threads]);
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {triageEnabled && (
@@ -314,7 +396,10 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
           No mail in this view yet. New messages appear here as they arrive.
         </div>
       ) : (
-        <ul className="flex-1 overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800">
+        <ul
+          ref={listRef}
+          className="flex-1 overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800"
+        >
           {threads.length > 0 && (
             <li className="px-4 py-2 flex items-center gap-3 text-xs text-neutral-500 bg-neutral-50/60 dark:bg-neutral-900/30">
               <input
@@ -330,17 +415,34 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
               <span>{allSelected ? "All selected" : "Select all"}</span>
             </li>
           )}
-          {threads.map(t => (
-            <ThreadRow
-              key={t.id}
-              thread={t}
-              scope={scope}
-              showDomain={showDomain}
-              isActive={activeThreadId === t.id}
-              isSelected={selected.has(t.id)}
-              onToggleSelect={on => toggleOne(t.id, on)}
-              onSwipeArchive={() => archiveOneFromSwipe(t.id)}
-            />
+          {groups.map(group => (
+            // Fragment-grouped so the sticky header <li> and row <li>s remain
+            // direct children of the outer <ul> (valid HTML, divide-y still
+            // applies between rows). Keyed by bucket label which is unique
+            // within the contiguous group sequence.
+            <Fragment key={group.label}>
+              <li
+                role="separator"
+                aria-label={group.label}
+                // top-0 inside the scrolling <ul>; z-10 so headers sit above
+                // row content but below the bulk-action bar (z-20).
+                className="sticky top-0 z-10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 bg-neutral-50/95 dark:bg-neutral-900/80 backdrop-blur border-y border-neutral-200 dark:border-neutral-800"
+              >
+                {group.label}
+              </li>
+              {group.items.map(t => (
+                <ThreadRow
+                  key={t.id}
+                  thread={t}
+                  scope={scope}
+                  showDomain={showDomain}
+                  isActive={activeThreadId === t.id}
+                  isSelected={selected.has(t.id)}
+                  onToggleSelect={on => toggleOne(t.id, on)}
+                  onSwipeArchive={() => archiveOneFromSwipe(t.id)}
+                />
+              ))}
+            </Fragment>
           ))}
         </ul>
       )}
