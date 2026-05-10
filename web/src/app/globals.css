@@ -15,3 +15,13 @@
     font-size: 16px;
   }
 }
+
+/* Default keyboard focus ring for any interactive element that doesn't bring
+   its own. Mouse clicks don't trigger :focus-visible so this is invisible to
+   pointer users. The 2px brand ring with a 1px offset reads on both the
+   white and near-black surfaces in the app. */
+:where(a, button, [role="button"], [role="menuitem"], [role="menuitemcheckbox"], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
