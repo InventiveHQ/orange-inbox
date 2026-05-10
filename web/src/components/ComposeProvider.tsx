@@ -14,8 +14,9 @@ import { useRouter } from "next/navigation";
 import type { Identity } from "@/lib/identities";
 import type { ContactRow } from "@/lib/contacts";
 import type { TemplateRow } from "@/lib/templates";
+import { substituteVariables, type TemplateContext } from "@/lib/templates";
 import { looksLikeHtml } from "@/lib/html-text";
-import RichTextEditor from "./RichTextEditor";
+import RichTextEditor, { type SlashCommandState, type SlashNavigationHandlers } from "./RichTextEditor";
 import UndoSendToast from "./UndoSendToast";
 
 export interface ComposeOpenArgs {
@@ -283,6 +284,103 @@ function ComposeModal({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [sendMenuOpen]);
 
+  // ─── Slash-menu state ────────────────────────────────────────────────────
+  // Surfaced from RichTextEditor when the user types "/" at the start of a
+  // line / after whitespace. We filter the user's templates against the
+  // live query and let the editor drive keyboard nav at HIGH priority. All
+  // hooks for this feature live above the identities==0 early return so the
+  // hook count stays stable across renders.
+  const [slashState, setSlashState] = useState<SlashCommandState | null>(null);
+  const [slashTemplates, setSlashTemplates] = useState<TemplateRow[] | null>(null);
+  const [slashHighlight, setSlashHighlight] = useState(0);
+
+  const slashFiltered = useMemo(() => {
+    if (!slashState || !slashTemplates) return [];
+    const q = slashState.query.toLowerCase();
+    if (!q) return slashTemplates.slice(0, 8);
+    return slashTemplates
+      .filter(t => t.name.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [slashState, slashTemplates]);
+
+  // Reset highlight whenever the filtered set changes — otherwise a stale
+  // index can point past the array and Enter does nothing.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSlashHighlight(0);
+  }, [slashFiltered.length, slashState?.query]);
+
+  // Lazy-load templates the first time the slash menu opens.
+  useEffect(() => {
+    if (!slashState || slashTemplates !== null) return;
+    void (async () => {
+      try {
+        const res = await fetch("/api/templates");
+        if (!res.ok) {
+          setSlashTemplates([]);
+          return;
+        }
+        const j = (await res.json()) as { templates?: TemplateRow[] };
+        setSlashTemplates(j.templates ?? []);
+      } catch {
+        setSlashTemplates([]);
+      }
+    })();
+  }, [slashState, slashTemplates]);
+
+  // Insert a template via the slash menu — substitutes variables and
+  // replaces the trigger token (`/<query>`) with the rendered HTML in one
+  // editor update. Sets the subject if the template defines one and the
+  // user hasn't typed a subject yet (mid-body insertion shouldn't blow away
+  // an in-progress subject line).
+  const insertTemplateFromSlash = useCallback(
+    (t: TemplateRow) => {
+      if (!slashState) return;
+      const ctx: TemplateContext = {
+        recipientEmail: splitList(to)[0] ?? "",
+        recipientName: null,
+        myName: fromIdentity?.display_name ?? null,
+        myEmail: fromIdentity
+          ? `${fromIdentity.local_part}@${fromIdentity.domain_name}`
+          : "",
+        subject,
+        lastThreadSubject: args.replyToMessageId ? args.subject ?? null : null,
+        threadSenderName: extractSenderFromQuoted(args.quotedHtml ?? ""),
+      };
+      if (t.subject_template && !subject.trim()) {
+        setSubject(substituteVariables(t.subject_template, ctx));
+      }
+      const html = toHtml(substituteVariables(t.body_template, ctx));
+      slashState.replaceWithHtml(html);
+    },
+    [slashState, to, fromIdentity, subject, args.replyToMessageId, args.subject, args.quotedHtml],
+  );
+
+  // Keyboard navigation handlers consulted by the editor at HIGH priority
+  // while the menu is open.
+  const slashNav: SlashNavigationHandlers = useMemo(
+    () => ({
+      onArrowDown: () => {
+        if (slashFiltered.length === 0) return;
+        setSlashHighlight(h => (h + 1) % slashFiltered.length);
+      },
+      onArrowUp: () => {
+        if (slashFiltered.length === 0) return;
+        setSlashHighlight(h => (h - 1 + slashFiltered.length) % slashFiltered.length);
+      },
+      onEnter: () => {
+        const t = slashFiltered[slashHighlight];
+        if (t) insertTemplateFromSlash(t);
+        else slashState?.dismiss();
+      },
+      onTab: () => {
+        const t = slashFiltered[slashHighlight];
+        if (t) insertTemplateFromSlash(t);
+      },
+    }),
+    [slashFiltered, slashHighlight, slashState, insertTemplateFromSlash],
+  );
+
   if (identities.length === 0) {
     return (
       <ModalShell onBackdrop={onClose}>
@@ -516,17 +614,30 @@ function ComposeModal({
     });
   }
 
-  function applyTemplate(t: TemplateRow) {
-    const ctx: TemplateContext = {
-      recipientEmail: splitList(to)[0] ?? "",
+  // Build the substitution context from current compose state. Derives
+  // last_thread_subject from `args.subject` (strips Re:/Fwd: prefixes when
+  // we're replying), and thread_sender_name from the quoted-original block
+  // when one's available (best-effort regex match against the
+  // "On <date>, <name> <email> wrote:" intro that ReplyButton synthesises).
+  function buildTemplateCtx(): TemplateContext {
+    const recipientEmail = splitList(to)[0] ?? "";
+    return {
+      recipientEmail,
+      recipientName: null,
       myName: fromIdentity?.display_name ?? null,
       myEmail: fromIdentity
         ? `${fromIdentity.local_part}@${fromIdentity.domain_name}`
         : "",
       subject,
+      lastThreadSubject: args.replyToMessageId ? args.subject ?? null : null,
+      threadSenderName: extractSenderFromQuoted(args.quotedHtml ?? ""),
     };
-    if (t.subject_template) setSubject(fillTemplate(t.subject_template, ctx));
-    const filledHtml = toHtml(fillTemplate(t.body_template, ctx));
+  }
+
+  function applyTemplate(t: TemplateRow) {
+    const ctx = buildTemplateCtx();
+    if (t.subject_template) setSubject(substituteVariables(t.subject_template, ctx));
+    const filledHtml = toHtml(substituteVariables(t.body_template, ctx));
     const next = bodyHtml.trim() ? `${bodyHtml}<p><br></p>${filledHtml}` : filledHtml;
     setSeedHtml(next);
     setBodyHtml(next);
@@ -619,17 +730,29 @@ function ComposeModal({
         </Field>
       </div>
 
-      <div className="border-t border-neutral-200 dark:border-neutral-800">
+      <div className="border-t border-neutral-200 dark:border-neutral-800 relative">
         <RichTextEditor
           initialHtml={seedHtml}
           resetKey={seedKey}
           minHeight={220}
-          placeholder="Write your message…"
+          placeholder="Write your message… (type / to insert a template)"
           onChange={(html, text) => {
             setBodyHtml(html);
             setBodyText(text);
           }}
+          onSlashStateChange={setSlashState}
+          slashNavigationHandlers={slashNav}
         />
+        {slashState && (
+          <SlashMenu
+            anchorRect={slashState.anchorRect}
+            templates={slashFiltered}
+            highlight={slashHighlight}
+            onPick={insertTemplateFromSlash}
+            onHover={setSlashHighlight}
+            loading={slashTemplates === null}
+          />
+        )}
       </div>
 
       {(attachments.length > 0 || uploadError) && (
@@ -803,6 +926,15 @@ function ComposeModal({
                 </button>
                 <div className="border-t border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
                   <div className="text-xs uppercase tracking-wider text-neutral-500">Schedule send</div>
+                  <SchedulePresets
+                    recipientEmail={splitList(to)[0] ?? ""}
+                    onPick={unix => {
+                      setSendMenuOpen(false);
+                      schedule(unix);
+                    }}
+                    disabled={isSending}
+                  />
+                  <div className="text-xs uppercase tracking-wider text-neutral-500 pt-2">Or pick a time</div>
                   <input
                     type="datetime-local"
                     value={scheduleAt}
@@ -1079,6 +1211,280 @@ function TemplatePicker({ onPick }: { onPick: (t: TemplateRow) => void }) {
   );
 }
 
+// ─── Smart schedule-send presets ────────────────────────────────────────────
+//
+// Five quick options that cover the bulk of "send this later" use cases:
+//   - Tomorrow morning (8am local)
+//   - Tomorrow afternoon (1pm local)
+//   - Monday 9am (the next Monday — "this Monday" if it's still in the future)
+//   - Next week (Monday 9am — always at least 7 days out)
+//   - 9am in recipient's TZ (best-effort; falls back to local 9am)
+//
+// All times are computed against the user's wall clock except the last,
+// which calls the recipient-tz endpoint for an inferred offset.
+
+interface PresetSpec {
+  label: string;
+  unix: number | null;     // null => not yet resolved (loading/inference)
+  hint: string;            // displayed beneath the label, e.g. "Tomorrow, 8:00 AM"
+  loading?: boolean;
+}
+
+function SchedulePresets({
+  recipientEmail,
+  onPick,
+  disabled,
+}: {
+  recipientEmail: string;
+  onPick: (unix: number) => void;
+  disabled: boolean;
+}) {
+  // Inferred recipient TZ offset, in minutes east of UTC. null = loading,
+  // false = inference attempted and impossible (no signal in past mail).
+  // Seeded from `recipientEmail` so we don't need a synchronous setState
+  // inside the effect for the empty-input case.
+  const [recipientOffset, setRecipientOffset] = useState<number | null | false>(
+    recipientEmail ? null : false,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!recipientEmail) {
+      // No address to look up — render the fallback immediately. The lint
+      // rule against synchronous setState-in-effect is fine to bypass here:
+      // this is a one-shot transition tied to prop change, not a render
+      // loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRecipientOffset(false);
+      return;
+    }
+    setRecipientOffset(null);
+    void (async () => {
+      try {
+        const url = new URL("/api/scheduled/recipient-tz", window.location.origin);
+        url.searchParams.set("email", recipientEmail);
+        const res = await fetch(url.toString());
+        if (!res.ok) {
+          if (!cancelled) setRecipientOffset(false);
+          return;
+        }
+        const j = (await res.json()) as { inferred: { offset_minutes: number } | null };
+        if (cancelled) return;
+        setRecipientOffset(j.inferred ? j.inferred.offset_minutes : false);
+      } catch {
+        if (!cancelled) setRecipientOffset(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recipientEmail]);
+
+  const presets = useMemo<PresetSpec[]>(() => {
+    const now = new Date();
+    return [
+      buildLocalPreset("Tomorrow morning", addDays(atLocalHour(now, 8), 1)),
+      buildLocalPreset("Tomorrow afternoon", addDays(atLocalHour(now, 13), 1)),
+      buildLocalPreset("Monday 9am", nextMondayAtHour(now, 9, false)),
+      buildLocalPreset("Next week", nextMondayAtHour(now, 9, true)),
+      buildRecipientPreset(now, recipientOffset),
+    ];
+  }, [recipientOffset]);
+
+  return (
+    <ul className="space-y-0.5">
+      {presets.map(p => (
+        <li key={p.label}>
+          <button
+            type="button"
+            disabled={disabled || p.unix === null || p.loading}
+            onClick={() => p.unix !== null && onPick(p.unix)}
+            className="w-full text-left rounded-md px-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm">{p.label}</span>
+              <span className="text-[10px] text-neutral-500 shrink-0">{p.hint}</span>
+            </div>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Returns a Date set to the given local hour on `base`'s calendar day.
+function atLocalHour(base: Date, hour: number): Date {
+  const d = new Date(base);
+  d.setHours(hour, 0, 0, 0);
+  return d;
+}
+
+function addDays(d: Date, days: number): Date {
+  const out = new Date(d);
+  out.setDate(out.getDate() + days);
+  return out;
+}
+
+// Next Monday at `hour` local time. When `forceNextWeek` is true, always
+// return at least 7 days out — used by the "Next week" preset so picking
+// it on a Sunday doesn't land tomorrow morning.
+function nextMondayAtHour(base: Date, hour: number, forceNextWeek: boolean): Date {
+  const d = atLocalHour(base, hour);
+  const dow = d.getDay(); // 0=Sun, 1=Mon, …
+  let delta = (1 - dow + 7) % 7;
+  if (delta === 0) {
+    // Today is Monday — bump to next week unless the target hour is still
+    // in the future *and* we're not forcing next week.
+    if (forceNextWeek || d.getTime() <= base.getTime()) delta = 7;
+  } else if (forceNextWeek && delta < 7) {
+    delta += 7;
+  }
+  return addDays(d, delta);
+}
+
+function buildLocalPreset(label: string, when: Date): PresetSpec {
+  const unix = Math.floor(when.getTime() / 1000);
+  // Skip the preset if it's somehow in the past (e.g. tomorrow morning when
+  // it's already 11pm and the date math overshot — defensive only).
+  const hint = when.toLocaleString(undefined, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return { label, unix, hint };
+}
+
+// "9am in recipient's TZ" preset. Computes the next 9am local-to-recipient
+// (next future occurrence) and translates back to UTC using the inferred
+// offset. When inference is loading we render a disabled row; when it
+// failed we fall back to local-time 9am with a callout in the hint.
+function buildRecipientPreset(now: Date, offset: number | null | false): PresetSpec {
+  if (offset === null) {
+    return { label: "9am in recipient's TZ", unix: null, hint: "Inferring…", loading: true };
+  }
+  if (offset === false) {
+    // Fall back to local 9am tomorrow — at least the user gets a working
+    // option rather than a dead button.
+    const fallback = addDays(atLocalHour(now, 9), now.getHours() < 9 ? 0 : 1);
+    return {
+      label: "9am in recipient's TZ",
+      unix: Math.floor(fallback.getTime() / 1000),
+      hint: "TZ unknown — using local 9am",
+    };
+  }
+  // Compute "next 9am" in the recipient's local time. We work with the
+  // current moment in UTC, shift it into recipient-local, advance to the
+  // next 9am there, then shift back.
+  const offsetMs = offset * 60 * 1000;
+  const recipientNow = new Date(now.getTime() + offsetMs);
+  // Build the recipient's local 9am of *their* current day. Because
+  // `recipientNow`'s UTC fields now read as recipient-local clock,
+  // setUTCHours gives us "their" 9am.
+  const target = new Date(recipientNow);
+  target.setUTCHours(9, 0, 0, 0);
+  if (target.getTime() <= recipientNow.getTime()) {
+    // Already past 9am over there — schedule for tomorrow.
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  // Shift back to absolute UTC.
+  const unix = Math.floor((target.getTime() - offsetMs) / 1000);
+  const sign = offset >= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  const oh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const om = String(abs % 60).padStart(2, "0");
+  return {
+    label: "9am in recipient's TZ",
+    unix,
+    hint: `UTC${sign}${oh}:${om}`,
+  };
+}
+
+// ─── Slash menu (typing "/" in the editor) ─────────────────────────────────
+//
+// Floating popup positioned near the caret. Templates are filtered against
+// the live query reported by the editor's SlashCommandPlugin. Keyboard
+// navigation (Arrow/Enter/Tab/Esc) is handled by the editor at HIGH command
+// priority — see SlashNavigationHandlers — so the contenteditable retains
+// focus while the menu is open.
+function SlashMenu({
+  anchorRect,
+  templates,
+  highlight,
+  onPick,
+  onHover,
+  loading,
+}: {
+  anchorRect: DOMRect | null;
+  templates: TemplateRow[];
+  highlight: number;
+  onPick: (t: TemplateRow) => void;
+  onHover: (idx: number) => void;
+  loading: boolean;
+}) {
+  // Position the menu beneath the caret. We use viewport-relative coords
+  // (fixed positioning) so the popup tracks the caret regardless of how
+  // the modal is scrolled.
+  const left = anchorRect ? Math.round(anchorRect.left) : 16;
+  const top = anchorRect ? Math.round(anchorRect.bottom + 6) : 80;
+
+  return (
+    <div
+      role="listbox"
+      aria-label="Insert template"
+      style={{ position: "fixed", left, top, maxWidth: 320 }}
+      className="z-50 w-72 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg overflow-hidden"
+    >
+      {loading && (
+        <div className="px-3 py-2 text-sm text-neutral-500">Loading…</div>
+      )}
+      {!loading && templates.length === 0 && (
+        <div className="px-3 py-2 text-sm text-neutral-500">
+          No matching templates. Manage them under Templates.
+        </div>
+      )}
+      {!loading && templates.length > 0 && (
+        <ul className="text-sm max-h-64 overflow-y-auto">
+          {templates.map((t, idx) => (
+            <li key={t.id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={idx === highlight}
+                onMouseEnter={() => onHover(idx)}
+                onMouseDown={e => {
+                  // mousedown so the editor doesn't lose its selection
+                  // before we run the replace.
+                  e.preventDefault();
+                  onPick(t);
+                }}
+                className={`w-full text-left px-3 py-2 ${
+                  idx === highlight
+                    ? "bg-neutral-100 dark:bg-neutral-900"
+                    : "hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
+                }`}
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-medium truncate">{t.name}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
+                    {t.scope === "personal"
+                      ? "personal"
+                      : `${t.local_part}@${t.domain_name}`}
+                  </span>
+                </div>
+                {t.subject_template && (
+                  <div className="text-xs text-neutral-500 truncate">
+                    Subject: {t.subject_template}
+                  </div>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ModalShell({
   onBackdrop,
   children,
@@ -1264,38 +1670,19 @@ function formatRelative(ts: number): string {
   return `${hrs}h ago`;
 }
 
-interface TemplateContext {
-  recipientEmail: string;
-  myName: string | null;
-  myEmail: string;
-  subject: string;
-}
-
-// Substitute a tiny set of placeholders. {{recipient_name}} falls back to
-// the local-part of the address when no display name is known. We keep the
-// list short and obvious — anything more elaborate (loops, conditionals)
-// is a footgun for non-technical users editing canned responses.
-function fillTemplate(text: string, c: TemplateContext): string {
-  const recipientName = c.recipientEmail
-    ? c.recipientEmail.split("@")[0]
-    : "";
-  const today = new Date().toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const map: Record<string, string> = {
-    recipient_name: recipientName,
-    recipient_email: c.recipientEmail,
-    my_name: c.myName ?? "",
-    my_email: c.myEmail,
-    date: today,
-    subject: c.subject,
-  };
-  return text.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (m, key) => {
-    const k = String(key).toLowerCase();
-    return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : m;
-  });
+// Best-effort: pull the original sender's display name from the synthesised
+// quoted-original HTML so {{thread_sender_name}} resolves on replies. The
+// string we look for is the "On <date>, <name> <email> wrote:" intro
+// emitted by ReplyButton/ReplyAllButton.
+function extractSenderFromQuoted(html: string): string | null {
+  if (!html) return null;
+  // Strip HTML tags down to plain text for the regex.
+  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  // "On ..., NAME <email@host> wrote:" — name is everything between the
+  // last comma before " <" and " <". Fall back to null on any mismatch.
+  const m = text.match(/,\s*([^,<]+?)\s*<[^>]+>\s*wrote:/i);
+  if (!m) return null;
+  return m[1].trim() || null;
 }
 
 // Reply: pick the mailbox that received the original. Compose with a single
