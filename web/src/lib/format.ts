@@ -64,3 +64,18 @@ export function dateBucket(unixSeconds: number, now = Date.now()): string {
 
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
+
+// Human-readable byte size — "1.23 MB" / "456 KB" / "12 B". Uses binary
+// (1024) units, since these numbers describe SQLite storage.
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  // Bytes have no decimals; everything else gets two for readability.
+  return i === 0 ? `${Math.round(v)} ${units[i]}` : `${v.toFixed(2)} ${units[i]}`;
+}
