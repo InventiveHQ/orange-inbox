@@ -21,6 +21,164 @@ export interface SearchResult {
   match_snippet: string;
 }
 
+// ─── Operator parser ────────────────────────────────────────────────────────
+// Splits a raw search box query like `from:alice has:attachment quarterly`
+// into structured filters plus the freeText that goes through FTS5.
+
+export interface ParsedSearch {
+  freeText: string;
+  filters: SearchFilters;
+}
+
+export interface SearchFilters {
+  from?: string[];
+  to?: string[];
+  subject?: string[];
+  hasAttachment?: boolean;
+  isUnread?: boolean;
+  isStarred?: boolean;
+  isSnoozed?: boolean;
+  // Unix-seconds bounds. `before` is exclusive upper, `after` is inclusive lower.
+  beforeTs?: number;
+  afterTs?: number;
+  // Raw mailbox tokens (local_part or local_part@domain). Resolved to
+  // mailbox_ids in searchThreads against the caller's accessible mailboxes.
+  mailbox?: string[];
+}
+
+// Recognised operator keys. Anything else stays in freeText so a stray colon
+// (e.g. "URL: https://...") doesn't accidentally become a filter.
+const OPERATOR_KEYS = new Set([
+  "from",
+  "to",
+  "subject",
+  "has",
+  "is",
+  "before",
+  "after",
+  "mailbox",
+]);
+
+// Tokeniser that respects double-quoted phrases so `from:"Long Name"` keeps
+// its space. Returns the raw token strings (no dequoting).
+function tokeniseQuery(raw: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+    let token = "";
+    let inQuote = false;
+    while (i < raw.length) {
+      const c = raw[i];
+      if (c === '"') {
+        inQuote = !inQuote;
+        token += c;
+        i++;
+        continue;
+      }
+      if (!inQuote && /\s/.test(c)) break;
+      token += c;
+      i++;
+    }
+    if (token) out.push(token);
+  }
+  return out;
+}
+
+// Strip surrounding quotes and unescape doubled `""`. Used after we've split
+// `key:value` apart so a value like `"Long Name"` becomes `Long Name`.
+function dequote(s: string): string {
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    return s.slice(1, -1).replace(/""/g, '"');
+  }
+  return s;
+}
+
+// Treat a YYYY-MM-DD value as midnight UTC. We deliberately avoid the local
+// timezone so two users searching `before:2024-01-01` see the same cutoff.
+function parseYmdToUnix(value: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const ts = Date.UTC(Number(y), Number(mo) - 1, Number(d));
+  if (Number.isNaN(ts)) return null;
+  return Math.floor(ts / 1000);
+}
+
+export function parseSearchQuery(raw: string): ParsedSearch {
+  const filters: SearchFilters = {};
+  const freeParts: string[] = [];
+  const tokens = tokeniseQuery(raw);
+
+  for (const tok of tokens) {
+    // Only split on the FIRST colon — values can contain colons (URLs etc).
+    const colon = tok.indexOf(":");
+    if (colon <= 0) {
+      freeParts.push(tok);
+      continue;
+    }
+    const key = tok.slice(0, colon).toLowerCase();
+    const rawValue = tok.slice(colon + 1);
+    if (!OPERATOR_KEYS.has(key) || rawValue === "") {
+      freeParts.push(tok);
+      continue;
+    }
+    const value = dequote(rawValue).trim();
+    if (!value) {
+      freeParts.push(tok);
+      continue;
+    }
+
+    switch (key) {
+      case "from":
+        (filters.from ??= []).push(value);
+        break;
+      case "to":
+        (filters.to ??= []).push(value);
+        break;
+      case "subject":
+        (filters.subject ??= []).push(value);
+        break;
+      case "has":
+        if (value.toLowerCase() === "attachment" || value.toLowerCase() === "attachments") {
+          filters.hasAttachment = true;
+        } else {
+          freeParts.push(tok);
+        }
+        break;
+      case "is": {
+        const v = value.toLowerCase();
+        if (v === "unread") filters.isUnread = true;
+        else if (v === "starred") filters.isStarred = true;
+        else if (v === "snoozed") filters.isSnoozed = true;
+        else freeParts.push(tok);
+        break;
+      }
+      case "before": {
+        const ts = parseYmdToUnix(value);
+        if (ts !== null) filters.beforeTs = ts;
+        else freeParts.push(tok);
+        break;
+      }
+      case "after": {
+        const ts = parseYmdToUnix(value);
+        if (ts !== null) filters.afterTs = ts;
+        else freeParts.push(tok);
+        break;
+      }
+      case "mailbox":
+        (filters.mailbox ??= []).push(value);
+        break;
+    }
+  }
+
+  return { freeText: freeParts.join(" "), filters };
+}
+
 /**
  * Sanitise a user-supplied query string for FTS5 MATCH.
  *
@@ -41,8 +199,8 @@ export interface SearchResult {
  *
  * This deliberately drops FTS5's power-user features (boolean operators,
  * column filters, prefix `*`, NEAR) — the search bar is for end users, not
- * SQL admins. If we want operator support later, we'll add it as a separate
- * "advanced" mode rather than trying to detect intent.
+ * SQL admins. Structured operators (from:, is:, etc.) are handled separately
+ * by parseSearchQuery; this function only sees the residual freeText.
  */
 function sanitiseQuery(raw: string): string | null {
   const trimmed = raw.trim();
@@ -84,22 +242,51 @@ interface MailDbHit {
 //
 // For single-DB deploys this is one parallel call to one DB plus two small
 // control-DB lookups — same cost as the old single-query path, give or take.
+//
+// Operator filters split by the same DB boundary:
+//   - mail-DB-side: from/to/subject/has:attachment/before/after — applied
+//     inside searchOneDb so they shrink the per-DB result set.
+//   - control-DB-side: is:unread/starred/snoozed and mailbox: — applied here
+//     after the fan-out, since threads_index lives in the control DB.
 export async function searchThreads(
   userId: string,
   query: string,
   opts: { limit?: number; mailboxId?: string } = {},
 ): Promise<SearchResult[]> {
-  const match = sanitiseQuery(query);
-  if (!match) return [];
+  const { freeText, filters } = parseSearchQuery(query);
+  // Empty MATCH is invalid in FTS5, so operator-only queries take a
+  // different path that skips messages_fts entirely.
+  const match = sanitiseQuery(freeText);
+  if (!match && !hasAnyFilter(filters)) return [];
 
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const mailDbs = await getActiveMailDbs();
 
-  // Per-DB FTS query. Pull `limit * 4` from each so per-thread dedup +
+  // Resolve `mailbox:` tokens to concrete mailbox_ids the user can read.
+  // Done up-front so the per-DB fan-out can filter on m.mailbox_id directly,
+  // and so an unknown mailbox: token short-circuits to zero results rather
+  // than silently widening the search.
+  const accessible = await loadAccessibleMailboxes(userId);
+  let mailboxIdFilter: string[] | undefined;
+  if (filters.mailbox?.length) {
+    const resolved = resolveMailboxTokens(filters.mailbox, accessible);
+    if (resolved.length === 0) return [];
+    mailboxIdFilter = resolved;
+  }
+  // The legacy `scope` dropdown still wins — it's an explicit user choice and
+  // narrows further than a free-text mailbox: token.
+  if (opts.mailboxId) {
+    if (mailboxIdFilter && !mailboxIdFilter.includes(opts.mailboxId)) return [];
+    mailboxIdFilter = [opts.mailboxId];
+  }
+
+  // Per-DB query. Pull `limit * 4` from each so per-thread dedup +
   // visibility filtering still leaves enough rows.
   const perDbLimit = limit * 4;
   const hitsPerDb = await Promise.all(
-    mailDbs.map(({ db }) => searchOneDb(db, match, perDbLimit, opts.mailboxId)),
+    mailDbs.map(({ db }) =>
+      searchOneDb(db, match, perDbLimit, mailboxIdFilter, filters),
+    ),
   );
 
   // Merge + sort by message_date desc.
@@ -125,18 +312,28 @@ export async function searchThreads(
     .all<{ id: string; local_part: string; domain_name: string }>();
   const mailboxMap = new Map((mbRows ?? []).map(m => [m.id, m]));
 
-  // Thread metadata from threads_index (control DB).
+  // Thread metadata from threads_index (control DB). For is:* filters we
+  // pull the columns we need to filter on alongside the display fields.
   const threadIds = Array.from(new Set(allHits.map(h => h.thread_id)));
   const tiPlaceholders = threadIds.map(() => "?").join(",");
   const { results: tiRows } = await getDb()
     .prepare(
-      `SELECT thread_id, subject_normalized, last_message_at
+      `SELECT thread_id, subject_normalized, last_message_at,
+              unread_count, starred, snoozed_until
          FROM threads_index
         WHERE thread_id IN (${tiPlaceholders})`,
     )
     .bind(...threadIds)
-    .all<{ thread_id: string; subject_normalized: string; last_message_at: number }>();
+    .all<{
+      thread_id: string;
+      subject_normalized: string;
+      last_message_at: number;
+      unread_count: number;
+      starred: number;
+      snoozed_until: number | null;
+    }>();
   const tiMap = new Map((tiRows ?? []).map(t => [t.thread_id, t]));
+  const nowSec = Math.floor(Date.now() / 1000);
 
   const seen = new Set<string>();
   const out: SearchResult[] = [];
@@ -146,6 +343,13 @@ export async function searchThreads(
     if (!mb) continue; // mailbox not accessible to this user — drop the hit
     const ti = tiMap.get(h.thread_id);
     if (!ti) continue; // orphan hit (thread_index missing) — skip
+
+    // Control-DB-only filters. Cheaper to apply here than to denormalise
+    // these onto every message row.
+    if (filters.isUnread && ti.unread_count <= 0) continue;
+    if (filters.isStarred && !ti.starred) continue;
+    if (filters.isSnoozed && !(ti.snoozed_until && ti.snoozed_until > nowSec)) continue;
+
     seen.add(h.thread_id);
     out.push({
       thread_id: h.thread_id,
@@ -165,18 +369,143 @@ export async function searchThreads(
   return out;
 }
 
+function hasAnyFilter(f: SearchFilters): boolean {
+  return Boolean(
+    f.from?.length ||
+      f.to?.length ||
+      f.subject?.length ||
+      f.hasAttachment ||
+      f.isUnread ||
+      f.isStarred ||
+      f.isSnoozed ||
+      f.beforeTs ||
+      f.afterTs ||
+      f.mailbox?.length,
+  );
+}
+
+interface MailboxLookup {
+  id: string;
+  local_part: string;
+  domain_name: string;
+}
+
+async function loadAccessibleMailboxes(userId: string): Promise<MailboxLookup[]> {
+  const { results } = await getDb()
+    .prepare(
+      `SELECT mb.id, mb.local_part, d.name AS domain_name
+         FROM mailboxes mb
+         INNER JOIN domains d ON d.id = mb.domain_id
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = mb.id
+        WHERE uma.user_id = ?`,
+    )
+    .bind(userId)
+    .all<MailboxLookup>();
+  return results ?? [];
+}
+
+// `mailbox:hello` matches every accessible mailbox with local_part="hello"
+// across every domain. `mailbox:hello@example.com` matches only that exact
+// address. Comparison is case-insensitive — addresses are case-insensitive
+// in practice and our schema stores them lowercased.
+function resolveMailboxTokens(tokens: string[], accessible: MailboxLookup[]): string[] {
+  const ids = new Set<string>();
+  for (const tok of tokens) {
+    const lc = tok.toLowerCase();
+    if (lc.includes("@")) {
+      const [lp, dom] = lc.split("@", 2);
+      for (const mb of accessible) {
+        if (mb.local_part.toLowerCase() === lp && mb.domain_name.toLowerCase() === dom) {
+          ids.add(mb.id);
+        }
+      }
+    } else {
+      for (const mb of accessible) {
+        if (mb.local_part.toLowerCase() === lc) ids.add(mb.id);
+      }
+    }
+  }
+  return Array.from(ids);
+}
+
 async function searchOneDb(
   db: D1Database,
-  match: string,
+  match: string | null,
   limit: number,
-  mailboxId: string | undefined,
+  mailboxIds: string[] | undefined,
+  filters: SearchFilters,
+): Promise<MailDbHit[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  // Mailbox scoping. IN (?,?,...) keeps us inside the parameteriser even
+  // when the list has 50+ entries.
+  if (mailboxIds && mailboxIds.length > 0) {
+    const placeholders = mailboxIds.map(() => "?").join(",");
+    where.push(`m.mailbox_id IN (${placeholders})`);
+    params.push(...mailboxIds);
+  }
+
+  // String operators. LIKE with %-wraps does substring matching, which is
+  // what users expect from `from:alice` (matches alice@*, *Alice* in name).
+  // We escape `%`/`_`/`\` so a value like `from:50%off` doesn't turn into a
+  // wildcard match.
+  for (const v of filters.from ?? []) {
+    where.push(
+      `(LOWER(m.from_addr) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(m.from_name,'')) LIKE ? ESCAPE '\\')`,
+    );
+    const pat = `%${escapeLike(v.toLowerCase())}%`;
+    params.push(pat, pat);
+  }
+  for (const v of filters.to ?? []) {
+    // to_json/cc_json are JSON arrays of {addr,name}. A LIKE on the raw text
+    // is good enough for the search box and avoids JSON1 functions which
+    // aren't guaranteed in every D1 build.
+    where.push(
+      `(LOWER(m.to_json) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(m.cc_json,'')) LIKE ? ESCAPE '\\')`,
+    );
+    const pat = `%${escapeLike(v.toLowerCase())}%`;
+    params.push(pat, pat);
+  }
+  for (const v of filters.subject ?? []) {
+    where.push(`LOWER(IFNULL(m.subject,'')) LIKE ? ESCAPE '\\'`);
+    params.push(`%${escapeLike(v.toLowerCase())}%`);
+  }
+  if (filters.hasAttachment) {
+    where.push(`EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id)`);
+  }
+  if (filters.beforeTs !== undefined) {
+    where.push(`m.date < ?`);
+    params.push(filters.beforeTs);
+  }
+  if (filters.afterTs !== undefined) {
+    where.push(`m.date >= ?`);
+    params.push(filters.afterTs);
+  }
+
+  if (match) {
+    return runFtsQuery(db, match, where, params, limit);
+  }
+  return runFilterOnlyQuery(db, where, params, limit);
+}
+
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, c => `\\${c}`);
+}
+
+async function runFtsQuery(
+  db: D1Database,
+  match: string,
+  extraWhere: string[],
+  extraParams: unknown[],
+  limit: number,
 ): Promise<MailDbHit[]> {
   // FTS5 auxiliary functions like snippet() require messages_fts to be the
   // outermost source in the SELECT they live in. We keep the FTS query in a
   // standalone subquery (only source = messages_fts) and join messages
   // outside — this is the only structure that doesn't trip
   // "D1_ERROR: unable to use function snippet in the requested context".
-  const mailboxFilter = mailboxId ? "AND m.mailbox_id = ?3" : "";
+  const whereSql = extraWhere.length > 0 ? `AND ${extraWhere.join(" AND ")}` : "";
   const sql = `
     SELECT
       m.id          AS message_id,
@@ -191,16 +520,14 @@ async function searchOneDb(
       SELECT rowid,
              snippet(messages_fts, -1, '<mark>', '</mark>', '…', 12) AS match_snippet
         FROM messages_fts
-       WHERE messages_fts MATCH ?1
+       WHERE messages_fts MATCH ?
     ) AS hit
     INNER JOIN messages m ON m.rowid = hit.rowid
-    WHERE 1=1 ${mailboxFilter}
+    WHERE 1=1 ${whereSql}
     ORDER BY m.date DESC
-    LIMIT ?2
+    LIMIT ?
   `;
-  const stmt = mailboxId
-    ? db.prepare(sql).bind(match, limit, mailboxId)
-    : db.prepare(sql).bind(match, limit);
+  const stmt = db.prepare(sql).bind(match, ...extraParams, limit);
   try {
     const { results } = await stmt.all<MailDbHit>();
     return results ?? [];
@@ -208,6 +535,41 @@ async function searchOneDb(
     // One DB hiccup shouldn't kill the whole search. Log and skip — the
     // user gets results from the other active DBs.
     console.error("search fan-out: per-DB query failed", e);
+    return [];
+  }
+}
+
+async function runFilterOnlyQuery(
+  db: D1Database,
+  extraWhere: string[],
+  extraParams: unknown[],
+  limit: number,
+): Promise<MailDbHit[]> {
+  // Operator-only path: no MATCH, no snippet — synthesise an empty snippet
+  // so the result row still renders. Pulling latest message per thread is
+  // good enough for "what's new in this filter" without a window function.
+  const whereSql = extraWhere.length > 0 ? `WHERE ${extraWhere.join(" AND ")}` : "";
+  const sql = `
+    SELECT
+      m.id          AS message_id,
+      m.thread_id   AS thread_id,
+      m.mailbox_id  AS mailbox_id,
+      m.from_addr   AS from_addr,
+      m.from_name   AS from_name,
+      m.subject     AS message_subject,
+      m.date        AS message_date,
+      ''            AS match_snippet
+    FROM messages m
+    ${whereSql}
+    ORDER BY m.date DESC
+    LIMIT ?
+  `;
+  const stmt = db.prepare(sql).bind(...extraParams, limit);
+  try {
+    const { results } = await stmt.all<MailDbHit>();
+    return results ?? [];
+  } catch (e) {
+    console.error("search fan-out: per-DB filter query failed", e);
     return [];
   }
 }
