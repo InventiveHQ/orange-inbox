@@ -134,6 +134,7 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
     <div ref={containerRef} className="relative">
       <button
         type="button"
+        data-action="label"
         onClick={() => setOpen(o => !o)}
         title="Apply label"
         aria-label="Apply label"

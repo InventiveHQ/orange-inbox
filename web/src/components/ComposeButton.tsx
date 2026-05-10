@@ -14,6 +14,7 @@ export default function ComposeButton({
     return (
       <button
         type="button"
+        data-action="compose"
         onClick={() => compose.open({ preferredScope: scope })}
         title="Compose"
         aria-label="Compose"
@@ -28,6 +29,7 @@ export default function ComposeButton({
   return (
     <button
       type="button"
+      data-action="compose"
       onClick={() => compose.open({ preferredScope: scope })}
       className="w-full rounded-md bg-[var(--color-brand)] px-3 py-2 text-sm font-medium text-white hover:brightness-95"
     >

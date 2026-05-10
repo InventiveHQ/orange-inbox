@@ -150,6 +150,7 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
           <>
             <button
               type="button"
+              data-action="star"
               onClick={toggleStar}
               disabled={isStarPending || pending !== null}
               aria-pressed={starred}
@@ -164,6 +165,7 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
             </button>
             <button
               type="button"
+              data-action="archive"
               onClick={archive}
               disabled={pending !== null}
               title={archived ? "Unarchive" : "Archive"}
@@ -173,6 +175,7 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
             </button>
             <button
               type="button"
+              data-action="delete"
               onClick={deleteThread}
               disabled={pending !== null}
               title="Delete"

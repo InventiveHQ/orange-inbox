@@ -104,6 +104,7 @@ export default function SnoozeButton({ threadId, initialSnoozedUntil }: Props) {
     <div ref={containerRef} className="relative">
       <button
         type="button"
+        data-action="snooze"
         onClick={() => setOpen(o => !o)}
         title={isSnoozed ? "Snoozed (click to manage)" : "Snooze"}
         aria-label="Snooze"

@@ -161,6 +161,7 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           icon={<HelpIcon />}
           collapsed={collapsed}
         />
+        <ShortcutsButton collapsed={collapsed} />
       </div>
     </aside>
   );
@@ -392,6 +393,49 @@ function HelpIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.05 11.25a.95.95 0 1 1 0-1.9.95.95 0 0 1 0 1.9Zm1.6-4.41c-.59.36-.85.61-.85 1.06v.35a.75.75 0 0 1-1.5 0v-.35c0-1.18.78-1.79 1.42-2.18.55-.34.83-.6.83-1.07 0-.66-.55-1.15-1.32-1.15-.86 0-1.27.49-1.5 1.06a.75.75 0 1 1-1.39-.56C5.62 4.18 6.55 3 8.23 3c1.6 0 2.82 1.06 2.82 2.65 0 1.18-.78 1.79-1.4 2.19Z" />
+    </svg>
+  );
+}
+
+// Footer button that opens the keyboard cheat-sheet via a custom event the
+// inbox-layout-mounted KeyboardShortcuts component listens for. Avoids
+// hoisting the modal state up to the layout.
+function ShortcutsButton({ collapsed }: { collapsed: boolean }) {
+  function show() {
+    document.dispatchEvent(new CustomEvent("orange:show-shortcuts"));
+  }
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={show}
+        title="Keyboard shortcuts (?)"
+        aria-label="Keyboard shortcuts"
+        className="flex items-center justify-center w-10 h-10 mx-auto rounded-md text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+      >
+        <KeyboardIcon />
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={show}
+      className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+    >
+      <KeyboardIcon />
+      <span className="truncate">Keyboard shortcuts</span>
+      <kbd className="ml-auto rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-1.5 py-0.5 text-[10px] font-mono">
+        ?
+      </kbd>
+    </button>
+  );
+}
+
+function KeyboardIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7Zm2 1.25a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H4Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5ZM4 8.5a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H4Zm2 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H6Zm5.5 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Z" />
     </svg>
   );
 }

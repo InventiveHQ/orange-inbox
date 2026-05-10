@@ -31,7 +31,7 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
         // display label (what the user actually sees in the row).
         const avatarSeed = t.last_from_addr || sender;
         return (
-          <li key={t.id}>
+          <li key={t.id} data-thread-id={t.id}>
             <Link
               href={`/inbox/${encodeURIComponent(scope)}/${t.id}`}
               className={`block px-4 py-3 transition-colors ${

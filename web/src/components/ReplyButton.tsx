@@ -32,6 +32,7 @@ export default function ReplyButton({
   return (
     <button
       type="button"
+      data-action="reply"
       onClick={() =>
         compose.open({
           replyToMessageId,

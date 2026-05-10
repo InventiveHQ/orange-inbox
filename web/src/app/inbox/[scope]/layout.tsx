@@ -11,6 +11,7 @@ import ComposeFromUrl from "@/components/ComposeFromUrl";
 import SearchBar from "@/components/SearchBar";
 import MobileShell from "@/components/MobileShell";
 import AppBadgeSync from "@/components/AppBadgeSync";
+import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 
 export default async function InboxLayout({
   children,
@@ -112,6 +113,7 @@ export default async function InboxLayout({
     <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
       <ComposeFromUrl />
       <AppBadgeSync />
+      <KeyboardShortcuts />
       <MobileShell
         sidebar={
           <Sidebar
