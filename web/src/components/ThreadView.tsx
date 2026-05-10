@@ -139,23 +139,33 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
   const senderText = senderLabel(m.from_addr, m.from_name);
   const avatarSeed = m.from_addr || senderText;
 
+  // Trust signals — inbound only. Outbound messages we wrote ourselves
+  // never get a chip or banner; auth_results/first_contact/reply_to_addr
+  // are populated by the email worker on inbound ingest only.
+  const isInbound = m.direction === "inbound";
+  const auth = isInbound ? parseAuthResults(m.auth_results) : null;
+  const showFirstContact = isInbound && m.first_contact === 1;
+  const showReplyToWarn =
+    isInbound && !!m.reply_to_addr && m.reply_to_addr !== m.from_addr;
+
   return (
     <section className="px-4 py-4 sm:px-6 sm:py-5">
       <div className="flex items-baseline justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <Avatar seed={avatarSeed} label={senderText} size="lg" title={m.from_addr} />
           <div className="min-w-0">
-            <div className="text-sm font-medium break-words">
+            <div className="text-sm font-medium break-words flex flex-wrap items-center gap-x-2 gap-y-1">
               {m.from_name && m.from_name.trim() ? (
-                <>
+                <span>
                   {m.from_name.trim()}{" "}
                   <span className="font-normal text-neutral-500 break-all">
                     &lt;{m.from_addr}&gt;
                   </span>
-                </>
+                </span>
               ) : (
-                m.from_addr || "Unknown"
+                <span>{m.from_addr || "Unknown"}</span>
               )}
+              {auth && <AuthChip auth={auth} fromAddr={m.from_addr} />}
             </div>
             {to.length > 0 && (
               <div className="text-xs text-neutral-500 break-all">
@@ -178,6 +188,13 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
         </div>
       </div>
 
+      {(showFirstContact || showReplyToWarn) && (
+        <TrustBanner
+          firstContact={showFirstContact}
+          replyToAddr={showReplyToWarn ? m.reply_to_addr : null}
+        />
+      )}
+
       {m.html_r2_key ? (
         <MessageHtmlFrame
           messageId={m.id}
@@ -192,6 +209,127 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
 
       {fileAtts.length > 0 && <AttachmentsList attachments={fileAtts} />}
     </section>
+  );
+}
+
+// ─── Trust signals (#5 + #22) ───────────────────────────────────────────────
+//
+// AuthChip renders a tiny pill matching LabelChip's `xs` size next to the
+// From line. Three states map to colors (green/red/gray) with no third-
+// party styling — same Tailwind utilities the rest of the reader uses.
+
+interface ParsedAuth {
+  spf: string;
+  dkim: string;
+  dmarc: string;
+  from_domain: string | null;
+}
+
+function parseAuthResults(json: string | null): ParsedAuth | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as Partial<ParsedAuth>;
+    if (
+      typeof parsed.spf === "string" &&
+      typeof parsed.dkim === "string" &&
+      typeof parsed.dmarc === "string"
+    ) {
+      return {
+        spf: parsed.spf,
+        dkim: parsed.dkim,
+        dmarc: parsed.dmarc,
+        from_domain:
+          typeof parsed.from_domain === "string" ? parsed.from_domain : null,
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+function AuthChip({ auth, fromAddr }: { auth: ParsedAuth; fromAddr: string }) {
+  const allPass =
+    auth.spf === "pass" && auth.dkim === "pass" && auth.dmarc === "pass";
+  const dmarcBad = auth.dmarc === "fail" || auth.dmarc === "softfail";
+
+  const tooltip = `SPF: ${auth.spf} · DKIM: ${auth.dkim} · DMARC: ${auth.dmarc}`;
+  const sizing = "px-1.5 py-px text-[10px]";
+
+  if (allPass) {
+    // Use the verdict's from_domain when present (DMARC alignment), else
+    // fall back to the visible From's domain part — same thing in 99% of
+    // cases, but the alignment-checked one is the one we want to show.
+    const domain = auth.from_domain || domainOf(fromAddr) || "";
+    return (
+      <span
+        className={`inline-flex items-center rounded-full font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 ${sizing}`}
+        title={tooltip}
+      >
+        <span aria-hidden className="mr-0.5">{"✓"}</span>
+        Verified{domain ? ` · ${domain}` : ""}
+      </span>
+    );
+  }
+
+  if (dmarcBad) {
+    return (
+      <span
+        className={`inline-flex items-center rounded-full font-medium bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300 ${sizing}`}
+        title={tooltip}
+      >
+        <span aria-hidden className="mr-0.5">{"⚠"}</span>
+        DMARC failed
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full font-medium bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 ${sizing}`}
+      title={tooltip}
+    >
+      Unverified
+    </span>
+  );
+}
+
+function domainOf(addr: string): string | null {
+  const at = addr.lastIndexOf("@");
+  if (at === -1) return null;
+  return addr.slice(at + 1).toLowerCase() || null;
+}
+
+function TrustBanner({
+  firstContact,
+  replyToAddr,
+}: {
+  firstContact: boolean;
+  replyToAddr: string | null;
+}) {
+  // Single yellow box — both signals collapse into one banner so the
+  // reader doesn't get two stacked warnings about the same message.
+  return (
+    <div
+      className="mt-3 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+      role="note"
+    >
+      <ul className="space-y-1">
+        {firstContact && (
+          <li>
+            <span aria-hidden className="mr-1">{"⚠"}</span>
+            First time you&apos;ve heard from this sender.
+          </li>
+        )}
+        {replyToAddr && (
+          <li>
+            <span aria-hidden className="mr-1">{"⚠"}</span>
+            Reply-To differs from From:{" "}
+            <span className="font-mono break-all">{replyToAddr}</span>
+          </li>
+        )}
+      </ul>
+    </div>
   );
 }
 

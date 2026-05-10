@@ -56,7 +56,18 @@ CREATE TABLE messages (
   read               INTEGER NOT NULL DEFAULT 0,
   starred            INTEGER NOT NULL DEFAULT 0,
   sent_by_user_id    TEXT,
-  spam_reported_by_user_id TEXT
+  spam_reported_by_user_id TEXT,
+  -- 0018_message_trust: per-message trust signals.
+  --   auth_results   — JSON {spf,dkim,dmarc,from_domain} parsed from the
+  --                    inbound Authentication-Results header; NULL if the
+  --                    header was absent or unparseable.
+  --   first_contact  — 1 when this is the first message in this mailbox
+  --                    from from_addr (set at ingest, never updated after).
+  --   reply_to_addr  — Reply-To header, but only when it differs from
+  --                    from_addr; NULL otherwise.
+  auth_results       TEXT,
+  first_contact      INTEGER NOT NULL DEFAULT 0,
+  reply_to_addr      TEXT
 );
 CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
 CREATE INDEX        messages_thread_date   ON messages(thread_id, date);

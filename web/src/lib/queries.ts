@@ -264,6 +264,14 @@ export interface ThreadMessage {
   // Internal attribution for shared mailboxes — populated for outbound only.
   sent_by_email: string | null;
   sent_by_display_name: string | null;
+  // 0018: trust signals. Populated for inbound only; outbound rows leave
+  // these as null/0 since we don't compute auth on our own sends.
+  //   auth_results   — JSON {spf,dkim,dmarc,from_domain} or null
+  //   first_contact  — 1 the first time this from_addr was seen in the mailbox
+  //   reply_to_addr  — bare Reply-To, only when it differs from from_addr
+  auth_results: string | null;
+  first_contact: number;
+  reply_to_addr: string | null;
   attachments: AttachmentRow[];
 }
 
@@ -307,7 +315,8 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .prepare(
       `SELECT m.id, m.message_id_header, m.direction, m.from_addr, m.from_name,
               m.to_json, m.cc_json, m.subject, m.date, m.snippet, m.text_body,
-              m.html_r2_key, m.read, m.starred, m.sent_by_user_id
+              m.html_r2_key, m.read, m.starred, m.sent_by_user_id,
+              m.auth_results, m.first_contact, m.reply_to_addr
          FROM messages m
         WHERE m.thread_id = ?
         ORDER BY m.date ASC`,

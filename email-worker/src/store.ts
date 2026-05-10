@@ -6,6 +6,7 @@ import {
   registerThreadLocation,
   upsertThreadIndex,
 } from "./mail-db";
+import { isFirstContact } from "./parse";
 import { evaluateRules } from "./rules";
 import type { Env, ParsedMessage } from "./types";
 import type { Recipient } from "./route";
@@ -123,14 +124,35 @@ export async function storeMessage(
     );
   }
 
+  // First-contact lookup: is this the first time we've seen mail from
+  // this address in this mailbox? Lookup runs against the same mail DB
+  // we're about to insert into; if the existing prior message is in a
+  // different (overflow) mail DB, we'll mis-flag this as first contact.
+  // Acceptable trade-off — overflow is rare, and the alternative is
+  // fanning out across every mail DB on every inbound. Old rows pre-0018
+  // are never first_contact (DEFAULT 0), so the very first inbound after
+  // migration may render the banner — that's expected.
+  const firstContact = await isFirstContact(
+    mailDb,
+    recipient.mailboxId,
+    fromAddrLower,
+  );
+
+  // Serialize auth_results once; null roundtrips to SQL NULL.
+  const authResultsJson = parsed.authResults
+    ? JSON.stringify(parsed.authResults)
+    : null;
+
   stmts.push(
     mailDb
       .prepare(
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
-          subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred)
-         VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+          subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred,
+          auth_results, first_contact, reply_to_addr)
+         VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0,
+                 ?, ?, ?)`,
       )
       .bind(
         messageId,
@@ -150,6 +172,9 @@ export async function storeMessage(
         rawKey,
         htmlR2Key,
         parsed.text ?? null,
+        authResultsJson,
+        firstContact ? 1 : 0,
+        parsed.replyToAddr,
       ),
   );
 
