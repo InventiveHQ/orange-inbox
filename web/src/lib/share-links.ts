@@ -1,19 +1,31 @@
-import { getDb } from "./db";
+import { AwsClient } from "aws4fetch";
+import { getDb, getEnv } from "./db";
 
-// Public download tokens for Mail Drop (large outbound attachments offloaded
-// to R2). Two operations:
+// Mail Drop share links — presigned R2 URLs.
 //
-//   - createShareLink(): mint a token + insert the row at send time. The
-//     caller has already PUT the bytes to R2 (typically reusing the existing
-//     temp_uploads r2_key, since send.ts already pulled bytes from there for
-//     small attachments).
+// History: the original implementation routed recipients through a Worker
+// route at /d/<token> which checked our own r2_share_links table, then
+// streamed from R2. That route sits behind Cloudflare Access for our host
+// Worker, so external recipients (who have no Access account) couldn't reach
+// it. The fix is to link recipients directly to R2 via S3-style presigned
+// URLs — no Worker in the loop, no Access wall, and the URL itself carries
+// the auth signature.
 //
-//   - consumeShareLink(): atomic check-and-increment used by the public
-//     /d/<token> route. Returns the row when the link is still live, or a
-//     reason code (`expired` / `exhausted` / `not_found`) when the route
-//     should respond 404/410.
+// We keep the r2_share_links table for audit/cleanup tracking: a future cron
+// can sweep R2 objects whose `expires_at` has passed.
 //
-// All rows live in the control DB. No mail-DB writes.
+// Operator setup (one-time): set the three secrets via wrangler:
+//   wrangler secret put R2_ACCOUNT_ID
+//   wrangler secret put R2_ACCESS_KEY_ID
+//   wrangler secret put R2_SECRET_ACCESS_KEY
+// R2 access keys are minted in the Cloudflare dashboard under R2 → Manage R2
+// API Tokens (scope to the ATTACHMENTS bucket, read-only). Without these
+// secrets, the createShareLink call below will throw at send time.
+//
+// Expiry note: presigned URLs in S3/R2 cap at 7 days. The previous Worker-
+// proxy implementation supported 30 days; this is a regression in exchange
+// for not requiring an Access bypass policy. The table still records
+// `expires_at` so we can re-issue the signed URL out-of-band if/when needed.
 
 export interface ShareLinkRow {
   id: string;
@@ -30,36 +42,129 @@ export interface ShareLinkRow {
 }
 
 export interface CreateShareLinkInput {
-  r2Bucket?: string;        // defaults to 'ATTACHMENTS'
+  r2Bucket?: string;        // defaults to 'orange-inbox-attachments' (the bucket name, not the binding key)
   r2Key: string;
   filename: string | null;
   contentType: string | null;
   size: number;
-  ttlSeconds?: number;       // defaults to 30 days
+  ttlSeconds?: number;       // capped at MAX_TTL_SECONDS (7 days)
   maxDownloads?: number | null;
 }
 
 export interface CreateShareLinkResult {
   token: string;
+  url: string;                // presigned R2 URL — what we put in the body
   expiresAt: number;
 }
 
-export const DEFAULT_SHARE_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+// S3-compatible presigned URLs cap at 7 days (RFC: SigV4 §X-Amz-Expires).
+// R2 inherits that ceiling. We default to the cap; callers can shorten.
+export const MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const DEFAULT_SHARE_TTL_SECONDS = MAX_TTL_SECONDS;
 
-// Mint a new share-link row. The token IS the primary key — the public URL
-// is /d/<token>, so anyone holding the token can fetch the file until it
-// expires or hits its max_downloads cap.
+// The R2 bucket NAME (as you see it in `wrangler r2 bucket list`), not the
+// binding identifier. orange-inbox creates this in setup.sh; if you renamed
+// the bucket, update SHARE_BUCKET_NAME here. (We can't read it from the
+// binding directly — the runtime hides the underlying bucket name behind
+// env.ATTACHMENTS.)
+const SHARE_BUCKET_NAME = "orange-inbox-attachments";
+
+interface R2Credentials {
+  accountId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
+function loadR2Credentials(): R2Credentials {
+  const env = getEnv() as unknown as {
+    R2_ACCOUNT_ID?: string;
+    R2_ACCESS_KEY_ID?: string;
+    R2_SECRET_ACCESS_KEY?: string;
+  };
+  const accountId = env.R2_ACCOUNT_ID;
+  const accessKeyId = env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = env.R2_SECRET_ACCESS_KEY;
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error(
+      "Mail Drop is not configured: set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and " +
+        "R2_SECRET_ACCESS_KEY as wrangler secrets. See README → Mail Drop.",
+    );
+  }
+  return { accountId, accessKeyId, secretAccessKey };
+}
+
+// Sign a GET URL for an R2 object. The aws4fetch client speaks S3-compatible
+// SigV4 against R2's `<account>.r2.cloudflarestorage.com` endpoint.
+async function presignR2GetUrl(
+  creds: R2Credentials,
+  bucketName: string,
+  key: string,
+  expiresInSeconds: number,
+  contentDispositionFilename: string | null,
+): Promise<string> {
+  const aws = new AwsClient({
+    accessKeyId: creds.accessKeyId,
+    secretAccessKey: creds.secretAccessKey,
+    service: "s3",
+    region: "auto",
+  });
+  // S3 wants the key url-encoded except slashes, which stay as path separators.
+  const encodedKey = key.split("/").map(encodeURIComponent).join("/");
+  const url = new URL(
+    `https://${creds.accountId}.r2.cloudflarestorage.com/${bucketName}/${encodedKey}`,
+  );
+  url.searchParams.set("X-Amz-Expires", String(expiresInSeconds));
+  // Have R2 stamp a Content-Disposition response header so browsers default
+  // to download with the original filename rather than rendering inline.
+  if (contentDispositionFilename) {
+    url.searchParams.set(
+      "response-content-disposition",
+      `attachment; ${rfc5987DispositionFilename(contentDispositionFilename)}`,
+    );
+  }
+  const signed = await aws.sign(url.toString(), {
+    method: "GET",
+    aws: { signQuery: true },
+  });
+  return signed.url;
+}
+
+// RFC 5987 / 8187 filename* parameter for Content-Disposition. Non-ASCII
+// names survive intact; ASCII fallback strips quotes for the legacy token.
+function rfc5987DispositionFilename(name: string): string {
+  const ascii = name
+    .replace(/[\\"]/g, "_")
+    .replace(/[^\x20-\x7e]/g, "_");
+  const encoded = encodeURIComponent(name).replace(/['()]/g, c =>
+    `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
+// Mint a share-link row + return the presigned URL the caller should embed
+// in the outbound body. The row exists for audit/cleanup tracking; the
+// public URL goes directly to R2 and never re-enters our Worker.
 export async function createShareLink(
   userId: string,
   input: CreateShareLinkInput,
 ): Promise<CreateShareLinkResult> {
   const token = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-  const ttl = input.ttlSeconds ?? DEFAULT_SHARE_TTL_SECONDS;
+  const requestedTtl = input.ttlSeconds ?? DEFAULT_SHARE_TTL_SECONDS;
+  const ttl = Math.min(requestedTtl, MAX_TTL_SECONDS);
   const expiresAt = now + ttl;
-  const bucket = input.r2Bucket ?? "ATTACHMENTS";
+  const bucketName = input.r2Bucket ?? SHARE_BUCKET_NAME;
   const maxDownloads =
     input.maxDownloads === undefined ? null : input.maxDownloads;
+
+  const creds = loadR2Credentials();
+  const url = await presignR2GetUrl(
+    creds,
+    bucketName,
+    input.r2Key,
+    ttl,
+    input.filename,
+  );
 
   await getDb()
     .prepare(
@@ -70,7 +175,7 @@ export async function createShareLink(
     )
     .bind(
       token,
-      bucket,
+      bucketName,
       input.r2Key,
       input.filename,
       input.contentType,
@@ -82,76 +187,5 @@ export async function createShareLink(
     )
     .run();
 
-  return { token, expiresAt };
-}
-
-export type ConsumeFailure = "not_found" | "expired" | "exhausted";
-
-export interface ConsumeShareLinkOk {
-  ok: true;
-  row: ShareLinkRow;
-}
-
-export interface ConsumeShareLinkFail {
-  ok: false;
-  reason: ConsumeFailure;
-}
-
-// Atomic increment + cap check. We do a conditional UPDATE that only matches
-// when the link is still within its TTL and hasn't hit its download cap;
-// SQLite reports the number of changed rows so we can tell whether the slot
-// was actually consumed. If the UPDATE matched, we read the row back to
-// stream from R2; if it didn't, we look up why (not found vs expired vs
-// exhausted) so the caller can return a useful status code.
-export async function consumeShareLink(
-  token: string,
-): Promise<ConsumeShareLinkOk | ConsumeShareLinkFail> {
-  const db = getDb();
-  const now = Math.floor(Date.now() / 1000);
-
-  const update = await db
-    .prepare(
-      `UPDATE r2_share_links
-          SET downloaded = downloaded + 1
-        WHERE id = ?
-          AND expires_at > ?
-          AND (max_downloads IS NULL OR downloaded < max_downloads)`,
-    )
-    .bind(token, now)
-    .run();
-
-  // D1's `meta.changes` carries the rows-affected count. If it's >= 1 the
-  // increment landed and the link was live at this exact instant — race
-  // window for a tiny over-count exists, but is acceptable for v1.
-  const changes = (update.meta?.changes ?? update.meta?.changed_db ?? 0) as number;
-  if (changes && changes > 0) {
-    const row = await db
-      .prepare(
-        `SELECT id, r2_bucket, r2_key, filename, content_type, size,
-                expires_at, max_downloads, downloaded, created_by, created_at
-           FROM r2_share_links WHERE id = ?`,
-      )
-      .bind(token)
-      .first<ShareLinkRow>();
-    if (row) return { ok: true, row };
-    // Vanishingly rare: row deleted between UPDATE and SELECT. Treat as gone.
-    return { ok: false, reason: "not_found" };
-  }
-
-  // The UPDATE didn't match — figure out why so the caller can pick 404 vs 410.
-  const peek = await db
-    .prepare(
-      `SELECT expires_at, max_downloads, downloaded
-         FROM r2_share_links WHERE id = ?`,
-    )
-    .bind(token)
-    .first<{ expires_at: number; max_downloads: number | null; downloaded: number }>();
-  if (!peek) return { ok: false, reason: "not_found" };
-  if (peek.expires_at <= now) return { ok: false, reason: "expired" };
-  if (peek.max_downloads !== null && peek.downloaded >= peek.max_downloads) {
-    return { ok: false, reason: "exhausted" };
-  }
-  // Edge case: somebody else won the race and pushed us past the cap between
-  // our UPDATE and our peek. Treat as exhausted.
-  return { ok: false, reason: "exhausted" };
+  return { token, url, expiresAt };
 }

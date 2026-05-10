@@ -161,7 +161,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
           maxDownloads: null,
         });
         droppedLinks.push({
-          token: link.token,
+          url: link.url,
           expiresAt: link.expiresAt,
           filename: upload.filename || "attachment",
           size: upload.size,
@@ -517,7 +517,9 @@ export class SendError extends Error {
 }
 
 interface DroppedAttachmentLink {
-  token: string;
+  // Presigned R2 URL — recipients hit R2 directly, no Worker / Access in the
+  // loop. Capped at 7 days by R2's S3-compatible signing.
+  url: string;
   expiresAt: number;
   filename: string;
   size: number;

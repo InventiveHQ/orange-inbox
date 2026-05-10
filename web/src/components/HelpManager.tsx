@@ -256,7 +256,7 @@ function ComposeSection() {
         <li>
           <span className="font-medium">Schedule send</span> — pick a future
           time before sending. Pending sends live at
-          <Link className="mx-1 text-[var(--color-brand)] underline" href="/scheduled">Scheduled</Link> and you can cancel
+          <Link className="mx-1 text-[var(--color-brand)] underline" href="/inbox/scheduled">Scheduled</Link> and you can cancel
           them up until they go out.
         </li>
         <li>

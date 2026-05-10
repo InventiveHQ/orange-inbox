@@ -706,7 +706,7 @@ function ComposeModal({
       setSendMenuOpen(false);
       onClose();
       router.refresh();
-      router.push("/scheduled");
+      router.push("/inbox/scheduled");
     });
   }
 

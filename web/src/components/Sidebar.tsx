@@ -165,9 +165,9 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
-          href="/scheduled"
+          href="/inbox/scheduled"
           label="Scheduled"
-          active={false}
+          active={scope === "scheduled"}
           icon={<ScheduledIcon />}
           collapsed={collapsed}
         />

@@ -77,6 +77,7 @@ export default async function InboxLayout({
     "storage",
     "aliases",
     "calendar",
+    "scheduled",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
   // a given domain — picked up below in the listThreads filter. `layout:<id>`
@@ -113,6 +114,7 @@ export default async function InboxLayout({
     effectiveScope === "storage" ||
     effectiveScope === "aliases" ||
     effectiveScope === "calendar" ||
+    effectiveScope === "scheduled" ||
     isLayoutScope;
   const mailboxId =
     effectiveScope === "all" ||
@@ -164,7 +166,8 @@ export default async function InboxLayout({
     effectiveScope !== "storage" &&
     effectiveScope !== "subscriptions" &&
     effectiveScope !== "aliases" &&
-    effectiveScope !== "calendar"
+    effectiveScope !== "calendar" &&
+    effectiveScope !== "scheduled"
   ) {
     return (
       <ToastProvider>
