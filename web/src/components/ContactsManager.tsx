@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   CONTACT_STAGES,
   type ContactStage,
@@ -25,9 +25,14 @@ interface Props {
 // reloading by calling /api/contacts and then router.refresh().
 export default function ContactsManager({ contacts, identities, filter }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [creating, setCreating] = useState(false);
   const [stageFilter, setStageFilter] = useState<"all" | ContactStage | "none">("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
+
+  // Search query — when the global SearchBar is on "contacts" mode it routes
+  // `?q=` to this page. We filter in-memory by name / email / company / notes.
+  const searchQuery = (searchParams.get("q") ?? "").trim().toLowerCase();
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
@@ -41,9 +46,21 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
       if (stageFilter === "none" && c.stage !== null) return false;
       if (stageFilter !== "all" && stageFilter !== "none" && c.stage !== stageFilter) return false;
       if (tagFilter !== "all" && !c.tags.includes(tagFilter)) return false;
+      if (searchQuery) {
+        const hay = [
+          c.email,
+          c.name ?? "",
+          c.company ?? "",
+          c.notes ?? "",
+          ...c.tags,
+        ]
+          .join("\n")
+          .toLowerCase();
+        if (!hay.includes(searchQuery)) return false;
+      }
       return true;
     });
-  }, [contacts, filter, stageFilter, tagFilter]);
+  }, [contacts, filter, stageFilter, tagFilter, searchQuery]);
 
   function setFilter(next: string) {
     const url = new URL(window.location.href);

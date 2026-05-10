@@ -21,6 +21,16 @@ import CalendarWeekGrid from "./CalendarWeekGrid";
 
 export type CalendarView = "day" | "week" | "month";
 
+// Quick-create handoff: a grid click ships a slot's start/end seconds (+
+// all-day flag for month / all-day-strip clicks) and the manager opens the
+// modal prefilled from those.
+export interface NewEventDraft {
+  kind: "new";
+  startsAt?: number;
+  endsAt?: number;
+  allDay?: boolean;
+}
+
 export interface CalendarEvent {
   id: string;
   user_id: string;
@@ -55,8 +65,9 @@ export default function CalendarManager() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Modal state: null = closed, "new" = create, otherwise an existing event.
-  const [editing, setEditing] = useState<CalendarEvent | "new" | null>(null);
+  // Modal state: null = closed, NewEventDraft = create (optionally prefilled
+  // from a grid click), otherwise an existing event in edit mode.
+  const [editing, setEditing] = useState<CalendarEvent | NewEventDraft | null>(null);
 
   // Compute the fetch window for the current view. Week starts on Sunday —
   // mirrors the default for US users; international users will see a
@@ -189,7 +200,7 @@ export default function CalendarManager() {
           </div>
           <button
             type="button"
-            onClick={() => setEditing("new")}
+            onClick={() => setEditing({ kind: "new" })}
             className="inline-flex items-center gap-1 rounded-md bg-[var(--color-brand)] text-white px-3 h-8 text-xs font-medium hover:opacity-90"
           >
             <span aria-hidden>+</span> New event
@@ -216,12 +227,14 @@ export default function CalendarManager() {
             cursor={cursor}
             events={filteredEvents}
             onEditEvent={ev => setEditing(ev)}
+            onCreateAt={draft => setEditing(draft)}
           />
         ) : view === "week" ? (
           <CalendarWeekGrid
             cursor={cursor}
             events={filteredEvents}
             onEditEvent={ev => setEditing(ev)}
+            onCreateAt={draft => setEditing(draft)}
           />
         ) : (
           <CalendarMonthGrid
@@ -232,13 +245,23 @@ export default function CalendarManager() {
               setCursor(d);
               setView("day");
             }}
+            onCreateAt={draft => setEditing(draft)}
           />
         )}
       </div>
 
       {editing !== null && (
         <CalendarEventForm
-          event={editing === "new" ? null : editing}
+          event={isNewDraft(editing) ? null : editing}
+          defaults={
+            isNewDraft(editing)
+              ? {
+                  startsAt: editing.startsAt,
+                  endsAt: editing.endsAt,
+                  allDay: editing.allDay,
+                }
+              : undefined
+          }
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -252,6 +275,10 @@ export default function CalendarManager() {
       )}
     </div>
   );
+}
+
+function isNewDraft(x: CalendarEvent | NewEventDraft): x is NewEventDraft {
+  return (x as NewEventDraft).kind === "new";
 }
 
 function ViewTab({
