@@ -1,3 +1,4 @@
+import { maybeAutoReply } from "./autoresponder";
 import {
   getMailDbForNewThread,
   getMailDbForThread,
@@ -276,6 +277,13 @@ export async function storeMessage(
   if (!suppressPush) {
     ctx.waitUntil(notifyWebOfNewMessage(env, recipient.mailboxId, thread.threadId, messageId, parsed));
   }
+
+  // Vacation auto-responder. Independent of suppress/push gating — even
+  // muted/blocked-sender mail can fire a canned reply in principle, but in
+  // practice the anti-loop checks inside maybeAutoReply (RFC 3834 +
+  // cooldown) keep it sane. waitUntil so we never block ingestion on the
+  // round-trip back to the web worker.
+  ctx.waitUntil(maybeAutoReply(env, recipient.mailboxId, parsed));
 
   return { messageId, threadId: thread.threadId, duplicate: false };
 }

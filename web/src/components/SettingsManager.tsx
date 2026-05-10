@@ -52,6 +52,7 @@ export default function SettingsManager({
       { id: "mail-domains", label: "Mail domains" },
       ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
       ...(hasOwnedMailboxes ? [{ id: "signatures", label: "Signatures" }] : []),
+      ...(hasOwnedMailboxes ? [{ id: "vacation", label: "Vacation responder" }] : []),
       { id: "labels", label: "Labels" },
       { id: "rules", label: "Rules" },
       { id: "blocked-senders", label: "Blocked senders" },
@@ -97,6 +98,9 @@ export default function SettingsManager({
             )}
             {hasOwnedMailboxes && (
               <SignaturesSection id="signatures" identities={ownedIdentities} />
+            )}
+            {hasOwnedMailboxes && (
+              <VacationResponderSection id="vacation" identities={ownedIdentities} />
             )}
             <LabelsSection id="labels" initialLabels={initialLabels} />
             <RulesSection
@@ -327,6 +331,238 @@ function SignatureEditor({ identity }: { identity: Identity }) {
       />
     </div>
   );
+}
+
+function VacationResponderSection({
+  id,
+  identities,
+}: {
+  id: string;
+  identities: Identity[];
+}) {
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Vacation responder"
+        description="Auto-reply to inbound mail during a date window. Respects RFC 3834 — bounces, mailing-list traffic, and senders we've already replied to within the cooldown are skipped."
+      />
+      {identities.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-8 text-sm text-neutral-500 text-center">
+          No mailboxes yet.
+        </div>
+      ) : (
+        <ul className="space-y-4">
+          {identities.map(i => (
+            <li key={i.mailbox_id}>
+              <VacationResponderEditor identity={i} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+interface AutoresponderSettings {
+  enabled: boolean;
+  starts_at: number | null;
+  ends_at: number | null;
+  subject: string;
+  body_text: string;
+  body_html: string | null;
+  cooldown_hours: number;
+}
+
+const DEFAULT_AUTORESPONDER: AutoresponderSettings = {
+  enabled: false,
+  starts_at: null,
+  ends_at: null,
+  subject: "Out of office",
+  body_text:
+    "Thanks for your message — I'm out of the office and will get back to you when I'm back at my desk.",
+  body_html: null,
+  cooldown_hours: 24,
+};
+
+function VacationResponderEditor({ identity }: { identity: Identity }) {
+  const [loaded, setLoaded] = useState(false);
+  const [settings, setSettings] = useState<AutoresponderSettings>(DEFAULT_AUTORESPONDER);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  // Initial fetch — owner-only endpoint, so a 403 here would mean the owned
+  // identity list disagrees with the server. Treated as a load error.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/mailboxes/${identity.mailbox_id}/autoresponder`);
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(`Failed to load (${res.status})`);
+          setLoaded(true);
+          return;
+        }
+        const j = (await res.json()) as { autoresponder: AutoresponderSettings | null };
+        if (!cancelled) {
+          if (j.autoresponder) {
+            setSettings(j.autoresponder);
+          }
+          setLoaded(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setError("Failed to load");
+          setLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [identity.mailbox_id]);
+
+  function save() {
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/mailboxes/${identity.mailbox_id}/autoresponder`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      setSavedAt(Date.now());
+    });
+  }
+
+  return (
+    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="text-sm font-medium font-mono truncate">
+          {identity.local_part}@{identity.domain_name}
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          {savedAt && <span className="text-xs text-neutral-500">Saved</span>}
+          {error && <span className="text-xs text-red-600">{error}</span>}
+          <label className="flex items-center gap-1.5 text-xs select-none">
+            <input
+              type="checkbox"
+              checked={settings.enabled}
+              onChange={e => setSettings(s => ({ ...s, enabled: e.target.checked }))}
+              disabled={!loaded || isPending}
+              className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+            />
+            <span>Enabled</span>
+          </label>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!loaded || isPending}
+            className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {isPending ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+      <div className="px-4 py-4 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Starts</span>
+            <input
+              type="datetime-local"
+              value={tsToInput(settings.starts_at)}
+              onChange={e =>
+                setSettings(s => ({ ...s, starts_at: inputToTs(e.target.value) }))
+              }
+              disabled={!loaded || isPending}
+              className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Ends</span>
+            <input
+              type="datetime-local"
+              value={tsToInput(settings.ends_at)}
+              onChange={e =>
+                setSettings(s => ({ ...s, ends_at: inputToTs(e.target.value) }))
+              }
+              disabled={!loaded || isPending}
+              className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+            />
+          </label>
+        </div>
+        <p className="text-[11px] text-neutral-500">
+          Leave a date blank for no bound. Times are in your local timezone.
+        </p>
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wider text-neutral-500">Subject</span>
+          <input
+            type="text"
+            value={settings.subject}
+            onChange={e => setSettings(s => ({ ...s, subject: e.target.value }))}
+            disabled={!loaded || isPending}
+            className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wider text-neutral-500">Message</span>
+          <textarea
+            value={settings.body_text}
+            onChange={e => setSettings(s => ({ ...s, body_text: e.target.value }))}
+            disabled={!loaded || isPending}
+            rows={6}
+            className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1.5 text-sm font-sans focus:outline-none focus:border-[var(--color-brand)]"
+          />
+        </label>
+        <label className="block max-w-[14rem]">
+          <span className="text-[11px] uppercase tracking-wider text-neutral-500">
+            Cooldown (hours)
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={720}
+            value={settings.cooldown_hours}
+            onChange={e =>
+              setSettings(s => ({
+                ...s,
+                cooldown_hours: Math.max(1, Math.floor(Number(e.target.value) || 0)),
+              }))
+            }
+            disabled={!loaded || isPending}
+            className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+          />
+          <span className="text-[11px] text-neutral-500">
+            How long to wait before auto-replying to the same correspondent again.
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+// <input type="datetime-local"> wants "YYYY-MM-DDTHH:MM" in local time.
+// We round-trip via the *local* wall-clock — the browser parses it back into
+// UTC unix seconds when the user re-saves. Rough but matches what the user
+// types into the picker.
+function tsToInput(ts: number | null): string {
+  if (ts == null) return "";
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function inputToTs(value: string): number | null {
+  if (!value) return null;
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return null;
+  return Math.floor(t / 1000);
 }
 
 interface Member {

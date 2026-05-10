@@ -31,6 +31,12 @@ export interface ParsedMessage {
   html?: string;
   snippet: string;
   attachments: ParsedAttachment[];
+  // Anti-loop signals lifted from raw headers (RFC 3834). The auto-responder
+  // consults these to decide whether the inbound looks automated; if so it
+  // stays quiet rather than amplifying a mail loop.
+  autoSubmitted: string | null; // raw value of "Auto-Submitted" header, lowercased
+  precedence: string | null;    // raw value of "Precedence" header, lowercased
+  hasListHeaders: boolean;      // true if any List-* header is present
 }
 
 export interface ParsedAttachment {
