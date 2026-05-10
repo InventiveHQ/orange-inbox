@@ -159,6 +159,10 @@ END;
 -- 0026_calendar_events: inline calendar invites (#70). Populated at ingest by
 -- the email-worker when the message has a text/calendar attachment; the web
 -- reader LEFT JOINs this table to render an inline RSVP card above the body.
+--
+-- #89 added rrule + tz so recurrence and the originating IANA zone propagate
+-- through the promotion path into calendar_events.rrule / .tz. Existing
+-- overflow DBs need the manual ALTER from db/scripts/0003_mail_db_rrule_tz.sql.
 CREATE TABLE message_calendar_events (
   message_id TEXT PRIMARY KEY,
   starts_at  INTEGER NOT NULL,
@@ -168,6 +172,11 @@ CREATE TABLE message_calendar_events (
   organizer  TEXT,
   uid        TEXT,
   method     TEXT,
-  raw_ics    TEXT NOT NULL
+  raw_ics    TEXT NOT NULL,
+  -- #89: RFC 5545 RRULE value (sans "RRULE:" prefix) + IANA TZID lifted from
+  -- DTSTART;TZID=. Both NULL on single-shot, floating, or UTC-only invites.
+  -- Threaded through promoteInvitesForThread → calendar_events.rrule / .tz.
+  rrule      TEXT,
+  tz         TEXT
 );
 CREATE INDEX message_calendar_events_starts ON message_calendar_events(starts_at DESC);

@@ -362,6 +362,12 @@ export interface CalendarEvent {
   organizer: string | null;
   uid: string | null;
   method: string | null;
+  // #89: parsed RRULE + originating TZID lifted at ingest. Threaded through
+  // promoteInvitesForThread so calendar_events gets the same values and
+  // recurring inbound invites render every occurrence in-window.
+  // NULL on single-shot / floating / UTC-only invites.
+  rrule: string | null;
+  tz: string | null;
   // Per-user state (NULL until the user opens the thread once, then
   // promoted lazily). When NULL the reader falls back to the v1 stateless
   // behaviour — Accept/Tentative/Decline buttons.
@@ -474,6 +480,8 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     cal_organizer: string | null;
     cal_uid: string | null;
     cal_method: string | null;
+    cal_rrule: string | null;
+    cal_tz: string | null;
   };
 
   const { results } = await mailDb
@@ -490,7 +498,9 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
               ce.location  AS cal_location,
               ce.organizer AS cal_organizer,
               ce.uid       AS cal_uid,
-              ce.method    AS cal_method
+              ce.method    AS cal_method,
+              ce.rrule     AS cal_rrule,
+              ce.tz        AS cal_tz
          FROM messages m
          LEFT JOIN message_calendar_events ce ON ce.message_id = m.id
         WHERE m.thread_id = ?
@@ -618,7 +628,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     const {
       sent_by_user_id: _drop,
       cal_starts_at, cal_ends_at, cal_summary, cal_location,
-      cal_organizer, cal_uid, cal_method,
+      cal_organizer, cal_uid, cal_method, cal_rrule, cal_tz,
       ...rest
     } = m;
     void _drop;
@@ -637,6 +647,8 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
             organizer: cal_organizer,
             uid: cal_uid,
             method: cal_method,
+            rrule: cal_rrule,
+            tz: cal_tz,
             rsvp_status: state?.rsvp_status ?? null,
             cancelled: state?.cancelled ?? 0,
             event_id: state?.event_id ?? null,

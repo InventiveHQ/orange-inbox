@@ -723,6 +723,11 @@ export async function updateRsvpStatus(args: {
 // Shape we promote from. Caller passes the subset of ThreadMessage fields the
 // promotion needs — keeps this lib decoupled from web/src/lib/queries' larger
 // surface.
+//
+// #89: rrule + tz round-trip from message_calendar_events (mail-DB) into
+// calendar_events (control-DB) so recurring inbound invites surface every
+// occurrence in-window via the existing expander, and so the originating
+// IANA zone is available for outbound REQUEST/CANCEL emission (#94).
 export interface InviteMessage {
   id: string;
   calendar_event: {
@@ -733,6 +738,8 @@ export interface InviteMessage {
     organizer: string | null;
     uid: string | null;
     method: string | null;
+    rrule: string | null;
+    tz: string | null;
   } | null;
 }
 
@@ -810,6 +817,12 @@ export async function promoteInvitesForThread(
         organizerEmail: m.calendar_event.organizer,
         rawIcs: null,
         cancelled: false,
+        // #89: thread RRULE + IANA tz from the mail-DB row through to
+        // calendar_events. The COALESCE-on-conflict branch in
+        // upsertCalendarEvent backfills these onto a row that was promoted
+        // before this lift landed (NULL won't clobber existing values).
+        rrule: m.calendar_event.rrule,
+        tz: m.calendar_event.tz,
       });
       // Add to the in-process set so a duplicate UID later in the same
       // thread (rare but legal — repeated forwards) doesn't re-INSERT.
