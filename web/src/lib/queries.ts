@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { getMailDbForThread } from "./mail-db";
+import { getActiveMailDbs, getMailDbForThread } from "./mail-db";
 
 export interface DomainRow {
   id: string;
@@ -116,6 +116,16 @@ interface ThreadListRow extends Omit<ThreadListItem, "labels"> {
   labels_json: string | null;
 }
 
+// Auto-categorization buckets (#68). NULL category on a message means "this
+// row predates the categorizer" and is treated as Primary by the listing
+// query — see the category filter below.
+export type MessageCategory =
+  | "primary"
+  | "promotions"
+  | "updates"
+  | "social"
+  | "forums";
+
 // Threads in mailboxes the user has read access to. `mailboxId` filters to
 // a single mailbox; absence means "everything I can see" (the All inboxes
 // view). Joining user_mailbox_access enforces visibility, so an unauthorised
@@ -126,9 +136,20 @@ interface ThreadListRow extends Omit<ThreadListItem, "labels"> {
 // in whichever mail DB the thread was created in (resolved per-thread via
 // `thread_locations`); listing never has to fan out across mail DBs because
 // every field needed for a row in the inbox view is denormalised here.
+//
+// Exception: when `category` is set, we fan out across active mail DBs to
+// collect thread IDs that have ANY message in the requested category, then
+// filter the control-DB listing to that set. NULL-category messages are
+// treated as Primary so the migration didn't need a backfill.
 export async function listThreads(
   userId: string,
-  opts: { mailboxId?: string; domainId?: string; limit?: number; includeMuted?: boolean } = {},
+  opts: {
+    mailboxId?: string;
+    domainId?: string;
+    limit?: number;
+    includeMuted?: boolean;
+    category?: MessageCategory;
+  } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   // Hide threads that are still in a future-snooze. The cron clears
@@ -155,6 +176,23 @@ export async function listThreads(
   if (opts.domainId) {
     where.push("mb.domain_id = ?");
     binds.push(opts.domainId);
+  }
+
+  // Category filter (#68). Cross-DB: fan out to every active mail DB,
+  // collect thread IDs whose messages match the requested category, and use
+  // the union as a `ti.thread_id IN (...)` predicate. Primary treats NULL
+  // category as "primary" so old rows surface in the default tab.
+  if (opts.category) {
+    const threadIds = await collectThreadIdsForCategory(opts.category);
+    if (threadIds.length === 0) return [];
+    // SQLite parameter limit is generous (default 100), but we cap the
+    // listing at 200 anyway so a per-mailbox view cannot blow past it. The
+    // up-front cap keeps the IN-list bounded; if more are requested we
+    // truncate to the first N (most-recent — see the per-DB ORDER BY).
+    const capped = threadIds.slice(0, 1000);
+    const placeholders = capped.map(() => "?").join(",");
+    where.push(`ti.thread_id IN (${placeholders})`);
+    binds.push(...capped);
   }
 
   // Labels per thread come from `thread_labels` (the cache maintained by the
@@ -678,4 +716,54 @@ export async function listVipThreads(
     .bind(userId, limit)
     .all<ThreadListRow>();
   return (results ?? []).map(parseThreadListRow);
+}
+
+// ─── Category tabs (issue #68) ───────────────────────────────────────────
+//
+// Collect thread IDs that have at least one message in the requested
+// category. Fan-out across active mail DBs; merge into a deduped array.
+// Primary tab is special-cased because NULL category means "this row was
+// ingested before the categorizer landed" and we treat that as Primary.
+async function collectThreadIdsForCategory(
+  category: MessageCategory,
+): Promise<string[]> {
+  const dbs = await getActiveMailDbs();
+  const seen = new Set<string>();
+  // Per-DB cap so a multi-DB deploy doesn't pull a huge list when only the
+  // most-recent N matter. The control-DB filter respects ORDER BY anyway,
+  // so we just need enough recent IDs to cover the visible page.
+  const PER_DB_CAP = 1000;
+
+  for (const { db } of dbs) {
+    // GROUP BY + MAX(date) gives us one row per thread with a deterministic
+    // sort key for the LIMIT. The control-DB query that consumes these IDs
+    // will re-sort by threads_index.last_message_at, so we just need to be
+    // sure we keep the most-recent N when we cap.
+    let sql: string;
+    if (category === "primary") {
+      // Treat NULL category as Primary so old rows surface here without a
+      // backfill. The OR keeps the index-only path available for the
+      // explicit-primary subset; SQLite will OR-merge the two.
+      sql = `SELECT thread_id, MAX(date) AS last_date FROM messages
+              WHERE direction = 'inbound'
+                AND (category IS NULL OR category = 'primary')
+              GROUP BY thread_id
+              ORDER BY last_date DESC
+              LIMIT ${PER_DB_CAP}`;
+    } else {
+      sql = `SELECT thread_id, MAX(date) AS last_date FROM messages
+              WHERE direction = 'inbound'
+                AND category = ?
+              GROUP BY thread_id
+              ORDER BY last_date DESC
+              LIMIT ${PER_DB_CAP}`;
+    }
+    const stmt =
+      category === "primary"
+        ? db.prepare(sql)
+        : db.prepare(sql).bind(category);
+    const { results } = await stmt.all<{ thread_id: string; last_date: number }>();
+    for (const r of results ?? []) seen.add(r.thread_id);
+  }
+  return Array.from(seen);
 }

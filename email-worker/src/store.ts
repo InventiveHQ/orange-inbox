@@ -1,4 +1,5 @@
 import { maybeAutoReply } from "./autoresponder";
+import { categorize } from "./categorize";
 import { parseIcs } from "./ics-parse";
 import {
   getMailDbForNewThread,
@@ -144,6 +145,12 @@ export async function storeMessage(
     ? JSON.stringify(parsed.authResults)
     : null;
 
+  // Heuristic auto-categorization (#68). Pure function over ParsedMessage —
+  // no I/O, so we run it inline rather than burning a prepare/bind for it.
+  // Pre-categorizer rows have NULL category and are treated as Primary by
+  // the listing query, so we never need a backfill.
+  const category = categorize(parsed);
+
   stmts.push(
     mailDb
       .prepare(
@@ -152,10 +159,10 @@ export async function storeMessage(
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
           subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred,
           auth_results, first_contact, reply_to_addr,
-          list_unsub_url, list_unsub_mailto, list_unsub_one_click)
+          list_unsub_url, list_unsub_mailto, list_unsub_one_click, category)
          VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0,
                  ?, ?, ?,
-                 ?, ?, ?)`,
+                 ?, ?, ?, ?)`,
       )
       .bind(
         messageId,
@@ -181,6 +188,7 @@ export async function storeMessage(
         parsed.listUnsubUrl,
         parsed.listUnsubMailto,
         parsed.listUnsubOneClick ? 1 : 0,
+        category,
       ),
   );
 

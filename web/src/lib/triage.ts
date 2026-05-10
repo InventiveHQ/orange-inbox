@@ -1,4 +1,4 @@
-import { listThreads, type ThreadListItem } from "./queries";
+import { listThreads, type MessageCategory, type ThreadListItem } from "./queries";
 
 // Two-axis triage model: marketing × action_item. The default inbox view is
 // (not_marketing, has_action_item) — i.e. mail you actually need to act on.
@@ -45,6 +45,9 @@ export async function listThreadsForTriage(
     mailboxId?: string;
     limit?: number;
     includeMuted?: boolean;
+    // #68 category tabs are orthogonal to the (eventual) triage classifier;
+    // forwarded straight through to listThreads.
+    category?: MessageCategory;
   },
 ): Promise<ThreadListItem[]> {
   void opts.quadrant;
@@ -52,5 +55,6 @@ export async function listThreadsForTriage(
     mailboxId: opts.mailboxId,
     limit: opts.limit,
     includeMuted: opts.includeMuted,
+    category: opts.category,
   });
 }
