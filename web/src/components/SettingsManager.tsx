@@ -22,6 +22,7 @@ import type {
 import { formatBytes } from "@/lib/format";
 import { APP_VERSION } from "@/lib/version";
 import AddMailboxDialog from "./AddMailboxDialog";
+import AuditLogView from "./AuditLogView";
 import InboxLayoutEditor from "./InboxLayoutEditor";
 import LabelChip from "./LabelChip";
 import PushNotificationToggle from "./PushNotificationToggle";
@@ -38,6 +39,10 @@ interface Props {
   // Mailboxes the current user *owns* — used for the Signatures section,
   // which is personal-config available to any owner regardless of admin status.
   ownedIdentities: Identity[];
+  // Every mailbox the current user has any access role on — drives the
+  // per-mailbox Audit log picker (#28). Audit log viewing is open to any
+  // member of a shared mailbox, not just admins/owners.
+  memberIdentities: Identity[];
   isAdmin: boolean;
   initialUndoSendSeconds: number;
   initialInboxLayouts: InboxLayoutRow[];
@@ -61,6 +66,7 @@ export default function SettingsManager({
   initialLabels,
   manageableIdentities,
   ownedIdentities,
+  memberIdentities,
   isAdmin,
   initialUndoSendSeconds,
   initialInboxLayouts,
@@ -68,6 +74,14 @@ export default function SettingsManager({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasOwnedMailboxes = ownedIdentities.length > 0;
+  // Audit-log access (#28): visible to anyone with a mailbox membership.
+  // Filter to mailbox-kind identities (alias identities share the parent
+  // mailbox's audit trail, so we don't duplicate them in the picker).
+  const auditMailboxes = useMemo(
+    () => memberIdentities.filter(i => i.kind === "mailbox"),
+    [memberIdentities],
+  );
+  const hasAuditAccess = auditMailboxes.length > 0;
   const sections = useMemo(
     () => [
       { id: "mail-domains", label: "Mail domains" },
@@ -81,12 +95,13 @@ export default function SettingsManager({
       { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
+      ...(hasAuditAccess ? [{ id: "audit-log", label: "Audit log" }] : []),
       { id: "export", label: "Import / Export" },
       ...(isAdmin ? [{ id: "storage", label: "Storage" }] : []),
       { id: "appearance", label: "Appearance" },
       { id: "about", label: "About" },
     ],
-    [isAdmin, hasOwnedMailboxes],
+    [isAdmin, hasOwnedMailboxes, hasAuditAccess],
   );
   const active = useActiveSection(
     scrollRef,
@@ -146,6 +161,9 @@ export default function SettingsManager({
             <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
+            {hasAuditAccess && (
+              <AuditLogSection id="audit-log" mailboxes={auditMailboxes} />
+            )}
             <ExportSection id="export" ownedIdentities={ownedIdentities} />
             {isAdmin && <StorageSection id="storage" />}
             <AppearanceSection id="appearance" />
@@ -2121,6 +2139,34 @@ function StorageTable({
         </div>
       )}
     </div>
+  );
+}
+
+// Per-mailbox audit log (#28). Any user who's a member of at least one
+// mailbox sees this section; the picker inside AuditLogView limits the view
+// to mailboxes the user can actually read.
+function AuditLogSection({
+  id,
+  mailboxes,
+}: {
+  id: string;
+  mailboxes: Identity[];
+}) {
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Audit log"
+        description="Who did what on a shared mailbox — assignments, archives, replies, labels, internal notes. Read access matches mailbox membership: every member of a mailbox sees that mailbox's trail."
+      />
+      <AuditLogView
+        mailboxes={mailboxes.map(i => ({
+          id: i.mailbox_id,
+          local_part: i.local_part,
+          domain_name: i.domain_name,
+          display_name: i.display_name,
+        }))}
+      />
+    </section>
   );
 }
 

@@ -1,5 +1,7 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
 import type { ContactsLookup } from "@/lib/contacts";
+import type { ThreadAssignment } from "@/lib/assignments";
+import type { ThreadNote } from "@/lib/thread-notes";
 import { formatFullDate, senderLabel } from "@/lib/format";
 import { checkLookalike, type LookalikeFinding } from "@/lib/lookalike";
 import ApplyLabelButton from "./ApplyLabelButton";
@@ -12,6 +14,7 @@ import ReplyButton from "./ReplyButton";
 import ReplyAllButton from "./ReplyAllButton";
 import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
+import ThreadNotes from "./ThreadNotes";
 import MessageHtmlFrame from "./MessageHtmlFrame";
 import MessageMenu from "./MessageMenu";
 import UnsubscribeButton from "./UnsubscribeButton";
@@ -28,9 +31,23 @@ interface Props {
   // contact-domain comparison inside checkLookalike (warns when a sender's
   // domain is a typo of a domain you actually correspond with).
   contacts: ContactsLookup;
+  // Team workflow (#27). currentUserId for "Claim" vs "Reassign" rendering;
+  // assignment is the SSR'd snapshot (null when unassigned); notes is the
+  // SSR'd internal-notes list (empty array when no notes).
+  currentUserId: string;
+  assignment: ThreadAssignment | null;
+  notes: ThreadNote[];
 }
 
-export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Props) {
+export default function ThreadView({
+  detail,
+  mailboxId,
+  vipAddrs,
+  contacts,
+  currentUserId,
+  assignment,
+  notes,
+}: Props) {
   const { thread, messages } = detail;
   const subject = messages[0]?.subject || thread.subject_normalized;
   const lastInbound = [...messages].reverse().find(m => m.direction === "inbound");
@@ -66,6 +83,29 @@ export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Pr
                   🔔 Reminder set for {formatRemindAt(thread.remind_at)}
                 </span>
               )}
+              {assignment && (() => {
+                const isMine = assignment.assignee_id === currentUserId;
+                const label =
+                  assignment.assignee_display_name?.trim() ||
+                  assignment.assignee_email ||
+                  "user";
+                return (
+                  <span
+                    className={`ml-2 align-middle inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${
+                      isMine
+                        ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300"
+                        : "bg-sky-100 dark:bg-sky-900/30 text-sky-800 dark:text-sky-300"
+                    }`}
+                    title={
+                      isMine
+                        ? "Assigned to you"
+                        : `Assigned to ${label}`
+                    }
+                  >
+                    {isMine ? "Assigned to you" : `Assigned to ${label}`}
+                  </span>
+                );
+              })()}
             </h1>
             <div className="mt-1 text-xs text-neutral-500 break-all">
               {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
@@ -81,6 +121,17 @@ export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Pr
             initialMuted={thread.muted === 1}
             initialPinned={thread.pinned === 1}
             initialRemindAt={thread.remind_at}
+            mailboxId={thread.mailbox_id}
+            currentUserId={currentUserId}
+            initialAssignment={
+              assignment
+                ? {
+                    assignee_id: assignment.assignee_id,
+                    assignee_email: assignment.assignee_email,
+                    assignee_display_name: assignment.assignee_display_name,
+                  }
+                : null
+            }
           />
           <ApplyLabelButton threadId={thread.id} />
           <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />
@@ -144,6 +195,26 @@ export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Pr
           Muted — new replies stay archived and won&apos;t show in your inbox.
         </div>
       )}
+
+      {/*
+        Internal notes (#27) render above the message list with a yellow tint
+        so they read as "team scratchpad" rather than part of the email thread.
+        Always mounted — even when notes is empty — so the "Add note" button
+        is always one click away for mailbox members.
+      */}
+      <ThreadNotes
+        threadId={thread.id}
+        currentUserId={currentUserId}
+        initialNotes={notes.map(n => ({
+          id: n.id,
+          thread_id: n.thread_id,
+          user_id: n.user_id,
+          body: n.body,
+          created_at: n.created_at,
+          user_email: n.user_email,
+          user_display_name: n.user_display_name,
+        }))}
+      />
 
       <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
         {messages.map(m => (

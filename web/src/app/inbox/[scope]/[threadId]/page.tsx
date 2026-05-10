@@ -1,7 +1,9 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { getAssignment } from "@/lib/assignments";
 import { promoteInvitesForThread } from "@/lib/calendar";
 import { getThreadDetail, listVipAddresses } from "@/lib/queries";
+import { listNotes } from "@/lib/thread-notes";
 import { markThreadRead } from "@/lib/threads-mutate";
 import {
   getContactForUser,
@@ -39,10 +41,14 @@ export default async function ScopedDetailPage({
     );
   }
 
-  const [detail, vipAddrs, contacts] = await Promise.all([
+  const [detail, vipAddrs, contacts, assignment, notes] = await Promise.all([
     getThreadDetail(user.id, threadId),
     listVipAddresses(user.id),
     getContactsLookup(user.id),
+    // Team workflow (#27): assignment + notes SSR'd alongside detail so the
+    // reader hydrates with the right state on first paint (no client flash).
+    getAssignment(threadId),
+    listNotes(threadId),
   ]);
   if (!detail) notFound();
   // Capture the pre-mutation unread state — used below to trigger a
@@ -69,6 +75,9 @@ export default async function ScopedDetailPage({
         mailboxId={detail.thread.mailbox_id}
         vipAddrs={new Set(vipAddrs)}
         contacts={contacts}
+        currentUserId={user.id}
+        assignment={assignment}
+        notes={notes}
       />
     </>
   );

@@ -1,5 +1,6 @@
 import { getDb } from "./db";
 import { getMailDbForThread } from "./mail-db";
+import { logAudit, mailboxIdForThread } from "./audit";
 
 // Whether the user has any role on the mailbox that owns this thread.
 // Used to gate every thread-level mutation we expose. Reads from
@@ -38,6 +39,16 @@ export async function markThreadRead(userId: string, threadId: string): Promise<
       .bind(threadId)
       .run(),
   ]);
+
+  // Audit: never throw. mailboxIdForThread already swallows errors.
+  try {
+    const mailboxId = await mailboxIdForThread(threadId);
+    if (mailboxId) {
+      await logAudit({ userId, mailboxId, threadId, action: "read" });
+    }
+  } catch (err) {
+    console.error("audit markThreadRead failed", err);
+  }
 }
 
 // Toggle the muted flag on a thread. Muted threads are hidden from the
@@ -53,6 +64,19 @@ export async function muteThread(
     .prepare("UPDATE threads_index SET muted = ? WHERE thread_id = ?")
     .bind(muted ? 1 : 0, threadId)
     .run();
+  try {
+    const mailboxId = await mailboxIdForThread(threadId);
+    if (mailboxId) {
+      await logAudit({
+        userId,
+        mailboxId,
+        threadId,
+        action: muted ? "mute" : "unmute",
+      });
+    }
+  } catch (err) {
+    console.error("audit muteThread failed", err);
+  }
 }
 
 // Toggle the pinned flag on a thread. Pinned threads sort to the top of
@@ -69,6 +93,19 @@ export async function pinThread(
     .prepare("UPDATE threads_index SET pinned = ? WHERE thread_id = ?")
     .bind(pinned ? 1 : 0, threadId)
     .run();
+  try {
+    const mailboxId = await mailboxIdForThread(threadId);
+    if (mailboxId) {
+      await logAudit({
+        userId,
+        mailboxId,
+        threadId,
+        action: pinned ? "pin" : "unpin",
+      });
+    }
+  } catch (err) {
+    console.error("audit pinThread failed", err);
+  }
 }
 
 // Set or clear the reminder timestamp on a thread (issue #75). Pass a
