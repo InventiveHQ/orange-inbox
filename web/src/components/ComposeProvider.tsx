@@ -1438,16 +1438,22 @@ function RecipientInput({
   );
 }
 
-// ─── Recipient tz pills (#88) ───────────────────────────────────────────────
+// ─── Recipient tz pills (#88, batched #98) ──────────────────────────────────
 //
 // Resolves each finalised address in the To: / Cc: list to its address-book
-// contact and renders a tiny "their local time" pill underneath the input.
+// tz and renders a tiny "their local time" pill underneath the input.
 // "Finalised" means terminated by a comma — we don't pill the address the
-// user is currently typing. Lookups go through the same /api/contacts/search
-// endpoint as the dropdown, batched to one fetch per unique address.
+// user is currently typing.
+//
+// Originally this fired one /api/contacts/search per unique recipient
+// (typeahead endpoint, exact-match query). For multi-attendee compose /
+// large CC that's wasteful; #98 swapped it to a single POST against
+// /api/contacts/batch-tz returning the tz map for every address at once.
 //
 // Empty / no-tz addresses are skipped silently — the row collapses to
 // nothing, no layout jitter.
+
+type TzInfo = { tz: string | null; source: ContactRow["tz_source"] };
 
 function RecipientTzPills({
   value,
@@ -1457,66 +1463,70 @@ function RecipientTzPills({
   mailboxId: string;
 }) {
   const finalised = useMemo(() => parseFinalisedRecipients(value), [value]);
-  const [contactsByAddr, setContactsByAddr] = useState<
-    Map<string, { tz: string | null; tz_source: ContactRow["tz_source"]; name: string | null }>
-  >(new Map());
+  const [tzByAddr, setTzByAddr] = useState<Map<string, TzInfo>>(new Map());
 
   useEffect(() => {
     if (!mailboxId || finalised.length === 0) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setContactsByAddr(new Map());
+      setTzByAddr(new Map());
       return;
     }
     let cancelled = false;
-    // Debounce-ish: only fetch addresses we haven't already resolved.
-    const missing = finalised.filter(a => !contactsByAddr.has(a));
+    // Only fetch addresses we haven't already resolved this session.
+    const missing = finalised.filter(a => !tzByAddr.has(a));
     if (missing.length === 0) return;
     void (async () => {
-      const next = new Map(contactsByAddr);
-      // One search per address. The typeahead endpoint already does
-      // prefix-match scoped to the chosen mailbox; an exact-match query
-      // collapses to a single row when the contact exists.
-      await Promise.all(
-        missing.map(async addr => {
-          try {
-            const url = new URL("/api/contacts/search", window.location.origin);
-            url.searchParams.set("mailbox_id", mailboxId);
-            url.searchParams.set("q", addr);
-            const res = await fetch(url.toString());
-            if (!res.ok) return;
-            const j = (await res.json()) as { contacts?: ContactRow[] };
-            const hit = (j.contacts ?? []).find(
-              c => c.email.toLowerCase() === addr,
-            );
-            if (hit) {
-              next.set(addr, { tz: hit.tz, tz_source: hit.tz_source, name: hit.name });
-            } else {
-              next.set(addr, { tz: null, tz_source: null, name: null });
-            }
-          } catch {
-            // Best-effort — leave the address unresolved; pill will simply
-            // not render.
+      try {
+        const res = await fetch("/api/contacts/batch-tz", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // Cap at 50 to match the server-side limit; in practice compose
+          // recipient lists are well under that.
+          body: JSON.stringify({ emails: missing.slice(0, 50) }),
+        });
+        if (!res.ok) return;
+        const j = (await res.json()) as {
+          tzByEmail?: Record<string, { tz: string | null; source: string | null }>;
+        };
+        if (cancelled) return;
+        const next = new Map(tzByAddr);
+        const map = j.tzByEmail ?? {};
+        for (const addr of missing) {
+          const hit = map[addr];
+          if (hit) {
+            // Coerce the source string back to the ContactRow tz_source
+            // shape; anything unexpected becomes null so the RelativeTime
+            // tooltip renders without the source-specific copy.
+            const source: ContactRow["tz_source"] =
+              hit.source === "manual" || hit.source === "signature" || hit.source === "domain"
+                ? hit.source
+                : null;
+            next.set(addr, { tz: hit.tz, source });
+          } else {
+            next.set(addr, { tz: null, source: null });
           }
-        }),
-      );
-      if (!cancelled) setContactsByAddr(next);
+        }
+        setTzByAddr(next);
+      } catch {
+        // Best-effort — leave addresses unresolved on network failure; the
+        // pills simply won't render and the rest of compose keeps working.
+      }
     })();
     return () => {
       cancelled = true;
     };
-    // contactsByAddr intentionally omitted — adding it would re-fire the
-    // effect on every state update (since the Map identity changes), which
-    // is exactly the loop we want to avoid.
+    // tzByAddr intentionally omitted — adding it would re-fire the effect
+    // on every state update (the Map identity changes), which is exactly
+    // the loop we want to avoid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finalised.join("|"), mailboxId]);
-// removed dead garbage""), mailboxId]);
 
   // Build the visible pills. We only render addresses that resolved to a
   // contact with a known tz — otherwise the row would be a long list of
   // "no info" placeholders.
   const pills = finalised
-    .map(addr => ({ addr, info: contactsByAddr.get(addr) }))
-    .filter((p): p is { addr: string; info: { tz: string; tz_source: ContactRow["tz_source"]; name: string | null } } =>
+    .map(addr => ({ addr, info: tzByAddr.get(addr) }))
+    .filter((p): p is { addr: string; info: { tz: string; source: ContactRow["tz_source"] } } =>
       !!p.info && !!p.info.tz,
     );
   if (pills.length === 0) return null;
@@ -1524,10 +1534,8 @@ function RecipientTzPills({
     <div className="flex flex-wrap gap-x-3 gap-y-1 pl-[5.5rem] -mt-1 mb-1 text-xs text-neutral-500">
       {pills.map(p => (
         <span key={p.addr} className="inline-flex items-center gap-1">
-          <span className="truncate max-w-[12rem]">
-            {p.info.name ?? p.addr}
-          </span>
-          <RelativeTime tz={p.info.tz} source={p.info.tz_source} />
+          <span className="truncate max-w-[12rem]">{p.addr}</span>
+          <RelativeTime tz={p.info.tz} source={p.info.source} />
         </span>
       ))}
     </div>
