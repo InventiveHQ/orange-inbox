@@ -9,6 +9,16 @@ and want a real inbox UI instead of forwarding everything to a third party.
 > notifications, PWA install — is working end-to-end. Versions are still
 > 0.1.x; expect rough edges.
 
+## Try it
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/spconroy/orange-inbox)
+
+The button forks this repo into your GitHub, creates the D1 / R2 / KV
+resources, and deploys both Workers. Two manual steps remain after that:
+setting up Cloudflare Access (login) and turning on Email Routing for any
+mail-plane domain — both covered in [Post-deploy setup](#post-deploy-setup)
+below.
+
 ## What it is
 
 - A **Next.js** app deployed to Cloudflare Workers via
@@ -78,7 +88,12 @@ orange-inbox/
 
 ## Setup
 
-One command does everything: install, resource creation, schema, deploy.
+For first-time deploys, the [Deploy to Cloudflare button](#try-it) at the top
+of this README is the recommended path — it forks the repo, provisions D1 /
+R2 / KV, and deploys both Workers in one click.
+
+For power users, re-deploys, or if you want a local clone you can hack on,
+one command does everything: install, resource creation, schema, deploy.
 
 ```sh
 ./scripts/setup.sh
@@ -310,7 +325,7 @@ manual `byte_estimate` refresh — live in
 - [x] PWA install + web push notifications.
 - [x] Two-tier roles (Admin/User) + per-mailbox member management.
 - [x] Mobile shell + in-app help.
-- [ ] One-click deploy button.
+- [x] One-click deploy button.
 
 ## License
 
