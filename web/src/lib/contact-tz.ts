@@ -215,15 +215,21 @@ const TLD_FALLBACK: Record<string, string> = {
   is: "Atlantic/Reykjavik",
 };
 
-// Run the signature heuristic against any free-form text from the contact
-// (a recent message body, in practice). Returns the IANA zone of the first
-// rule that hits, or null if nothing did.
-export function inferTzFromSignature(text: string | null | undefined): string | null {
-  if (!text) return null;
-  // Cap the scan: signatures are at the bottom, but we don't want to walk
-  // a 100kB email body. The last 4kB covers any reasonable signature plus
-  // some quoted-reply slop.
-  const tail = text.length > 4096 ? text.slice(text.length - 4096) : text;
+// Run the signature heuristic against an already-extracted signature trailer
+// block. Returns the IANA zone of the first rule that hits, or null if
+// nothing did. Callers are responsible for running `extractSignature` on
+// the raw body first — feeding a whole message body in here works (the
+// heuristics are tolerant) but produces noisier results than the trimmed
+// signature does, and bypasses the 1KB-cap that the extractor enforces.
+export function inferTzFromSignature(signatureText: string | null | undefined): string | null {
+  if (!signatureText) return null;
+  // Defensive cap. The extractor already trims to ~1KB, but we may also be
+  // called from older code paths or tests with raw text — keep a generous
+  // tail so a passed-in body still produces a sensible answer.
+  const tail =
+    signatureText.length > 4096
+      ? signatureText.slice(signatureText.length - 4096)
+      : signatureText;
   for (const [re, zone] of SIGNATURE_HINTS) {
     if (re.test(tail)) return zone;
   }

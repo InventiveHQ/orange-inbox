@@ -7,6 +7,7 @@ import {
   shouldOverwriteTz,
   type ContactTzSource,
 } from "./contact-tz";
+import { extractSignature } from "./signature-extract";
 
 // Contacts are per-mailbox. user_id is the visibility key:
 //   NULL  -> shared (every member of the mailbox sees this row)
@@ -556,10 +557,16 @@ export async function maybeInferContactTz(
   return { ...contact, tz_inferred_at: Math.floor(Date.now() / 1000) };
 }
 
-// Pull the most recent inbound message body for `email` and run the
-// signature heuristic against it. Returns the IANA zone or null. Cap the
-// scan at one message; signatures are stable per-sender so revisiting
-// older messages doesn't add information.
+// Pull the most recent inbound message body for `email`, extract the
+// signature trailer, and run the tz heuristic against it. Returns the IANA
+// zone or null. Cap the scan at one message; signatures are stable
+// per-sender so revisiting older messages doesn't add information.
+//
+// If the extractor finds nothing (no `-- ` delimiter, no recognisable
+// bottom block) we still fall back to scanning the raw body — the legacy
+// behaviour from #88. This keeps recall up for messages whose senders
+// don't use a structured trailer; the extracted-sig path just gives us
+// cleaner input when it works.
 async function inferTzFromLatestMessage(email: string): Promise<string | null> {
   const addr = email.trim().toLowerCase();
   if (!addr || !addr.includes("@")) return null;
@@ -588,6 +595,13 @@ async function inferTzFromLatestMessage(email: string): Promise<string | null> {
     }
   }
   if (!best) return null;
+  const sig = extractSignature(best.text);
+  if (sig) {
+    const fromSig = inferTzFromSignature(sig);
+    if (fromSig) return fromSig;
+  }
+  // Extractor didn't isolate a sig (or sig didn't contain a tz token) — try
+  // the raw body as a last resort. Same heuristic, noisier input.
   return inferTzFromSignature(best.text);
 }
 
