@@ -10,6 +10,7 @@ interface Props {
   initialStarred: boolean;
   initialArchived: boolean;
   initialMuted: boolean;
+  initialPinned: boolean;
 }
 
 // Window during which the user can hit Undo. Mirrors Gmail's "Conversation
@@ -38,16 +39,19 @@ export default function ThreadActions({
   initialStarred,
   initialArchived,
   initialMuted,
+  initialPinned,
 }: Props) {
   const router = useRouter();
   const { toast } = useToast();
   const [starred, setStarred] = useState(initialStarred);
   const [archived, setArchived] = useState(initialArchived);
   const [muted, setMuted] = useState(initialMuted);
+  const [pinned, setPinned] = useState(initialPinned);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [isStarPending, startStarTransition] = useTransition();
   const [isMutePending, startMuteTransition] = useTransition();
+  const [isPinPending, startPinTransition] = useTransition();
 
   function toggleStar() {
     const next = !starred;
@@ -100,6 +104,29 @@ export default function ThreadActions({
             router.refresh();
           },
         },
+      });
+      router.refresh();
+    });
+  }
+
+  function togglePin() {
+    const next = !pinned;
+    setPinned(next);
+    setError(null);
+    startPinTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinned: next }),
+      });
+      if (!res.ok) {
+        setPinned(!next);
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      toast({
+        message: next ? "Conversation pinned" : "Conversation unpinned",
       });
       router.refresh();
     });
@@ -209,6 +236,21 @@ export default function ThreadActions({
               }`}
             >
               {starred ? "★ Starred" : "☆ Star"}
+            </button>
+            <button
+              type="button"
+              data-action="pin"
+              onClick={togglePin}
+              disabled={isPinPending || anyPending}
+              aria-pressed={pinned}
+              title={pinned ? "Unpin thread" : "Pin thread — keep at top of inbox"}
+              className={`rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                pinned
+                  ? "border-amber-400 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+              }`}
+            >
+              {pinned ? "📌 Pinned" : "Pin"}
             </button>
             <button
               type="button"

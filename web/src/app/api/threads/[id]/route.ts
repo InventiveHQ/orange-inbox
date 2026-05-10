@@ -30,6 +30,7 @@ interface PatchBody {
   archived?: boolean;
   read?: boolean;
   muted?: boolean;
+  pinned?: boolean;
 }
 
 // Toggle thread-level state: star, archive, read. Source of truth for
@@ -73,6 +74,10 @@ export async function PATCH(
     if (typeof b.muted === "boolean") {
       indexUpdates.push("muted = ?");
       indexBinds.push(b.muted ? 1 : 0);
+    }
+    if (typeof b.pinned === "boolean") {
+      indexUpdates.push("pinned = ?");
+      indexBinds.push(b.pinned ? 1 : 0);
     }
 
     if (indexUpdates.length === 0) {

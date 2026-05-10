@@ -28,6 +28,14 @@ export default function ThreadView({ detail, mailboxId }: Props) {
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight break-words">
               {subject}
+              {thread.pinned === 1 && (
+                <span
+                  className="ml-2 align-middle inline-flex items-center gap-1 rounded-md bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-300"
+                  title="Pinned to the top of the inbox"
+                >
+                  📌 Pinned
+                </span>
+              )}
             </h1>
             <div className="mt-1 text-xs text-neutral-500 break-all">
               {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
@@ -41,6 +49,7 @@ export default function ThreadView({ detail, mailboxId }: Props) {
             initialStarred={thread.starred === 1}
             initialArchived={thread.archived === 1}
             initialMuted={thread.muted === 1}
+            initialPinned={thread.pinned === 1}
           />
           <ApplyLabelButton threadId={thread.id} />
           <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />

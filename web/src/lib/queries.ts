@@ -75,6 +75,7 @@ export interface ThreadListItem {
   starred: number;
   archived: number;
   muted: number;
+  pinned: number;
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
@@ -141,6 +142,7 @@ export async function listThreads(
       ti.starred,
       ti.archived,
       ti.muted,
+      ti.pinned,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -166,7 +168,7 @@ export async function listThreads(
     INNER JOIN domains d   ON d.id = mb.domain_id
     INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
     WHERE ${where.join(" AND ")}
-    ORDER BY ti.last_message_at DESC
+    ORDER BY ti.pinned DESC, ti.last_message_at DESC
     LIMIT ?
   `;
   binds.push(limit);
@@ -200,6 +202,7 @@ export interface ThreadDetail {
     starred: number;
     archived: number;
     muted: number;
+    pinned: number;
     domain_name: string;
     mailbox_id: string;
     mailbox_local_part: string;
@@ -255,7 +258,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .prepare(
       `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
               ti.message_count, ti.unread_count, ti.starred, ti.archived,
-              ti.muted, ti.snoozed_until,
+              ti.muted, ti.pinned, ti.snoozed_until,
               d.name AS domain_name,
               mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role
