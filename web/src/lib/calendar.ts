@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { seedDefaultReminder } from "./reminders";
 
 // Native calendar — control-DB store of per-user events. Inbound invites
 // land in `message_calendar_events` (mail-DB, populated by the email-worker
@@ -425,6 +426,14 @@ export async function createSelfEvent(
       input.description,
     )
     .run();
+  // #85: every new self event gets a 10-minute reminder by default. Failure
+  // here doesn't fail the event creation — the user can edit reminders later
+  // and the cron is idempotent on (event_id, minutes_before).
+  try {
+    await seedDefaultReminder(id);
+  } catch (err) {
+    console.warn("seedDefaultReminder failed for", id, err);
+  }
   return id;
 }
 
