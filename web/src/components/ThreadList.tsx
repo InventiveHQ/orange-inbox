@@ -13,6 +13,7 @@ import {
 } from "@/lib/triage";
 import Avatar from "./Avatar";
 import CategoryTabs from "./CategoryTabs";
+import EmptyState from "./EmptyState";
 import LabelChip from "./LabelChip";
 import UndoToast from "./UndoToast";
 
@@ -411,9 +412,15 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
       )}
 
       {threads.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-sm text-neutral-500 px-6 text-center">
-          No mail in this view yet. New messages appear here as they arrive.
-        </div>
+        <EmptyState
+          variant={scope === "vips" ? "inbox" : "inbox"}
+          title={scope === "vips" ? "No VIP mail yet" : undefined}
+          body={
+            scope === "vips"
+              ? "Mark a sender as VIP from any message menu to see their mail here."
+              : undefined
+          }
+        />
       ) : (
         <ul
           ref={listRef}

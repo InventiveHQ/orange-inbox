@@ -11,6 +11,7 @@ import {
 import type { Identity } from "@/lib/identities";
 import ContactStageBadge from "./ContactStageBadge";
 import ContactTagPills from "./ContactTagPills";
+import EmptyState from "./EmptyState";
 
 interface Props {
   contacts: ContactWithMailbox[];
@@ -119,11 +120,17 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
       </header>
 
       {filtered.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-sm text-neutral-500 px-6 text-center">
-          {contacts.length === 0
-            ? "No contacts in this view yet. They'll be added automatically when you send mail."
-            : "No contacts match these filters."}
-        </div>
+        contacts.length === 0 ? (
+          <EmptyState variant="contacts" />
+        ) : (
+          // Filter / search yielded nothing — use the "search" variant so the
+          // illustration carries the magnifier-on-envelope cue.
+          <EmptyState
+            variant="search"
+            title="No contacts match"
+            body="Try different keywords or clear your filters."
+          />
+        )
       ) : (
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800">
           {filtered.map(c => (
