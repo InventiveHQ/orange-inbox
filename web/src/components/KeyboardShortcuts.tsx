@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 // Gmail/Superhuman-style keyboard shortcuts for the inbox UI.
@@ -16,15 +16,14 @@ import { usePathname, useRouter } from "next/navigation";
 // fetches, so star/archive/snooze/label/reply all reuse their existing
 // optimistic + UndoToast plumbing.
 //
-// Custom event "orange:show-shortcuts" opens the cheat-sheet modal — the
-// Sidebar's "Keyboard shortcuts" footer button fires it.
+// `?` navigates to /inbox/help#shortcuts (the cheat sheet now lives as a
+// regular Help section instead of a modal overlay).
 
 const CHORD_TIMEOUT_MS = 1500;
 
 export default function KeyboardShortcuts() {
   const router = useRouter();
   const pathname = usePathname();
-  const [showCheatsheet, setShowCheatsheet] = useState(false);
   // selectedIndex is into the live document order of [data-thread-id] rows.
   // -1 means "nothing selected"; first j keypress moves to 0.
   const selectedIndexRef = useRef<number>(-1);
@@ -115,14 +114,7 @@ export default function KeyboardShortcuts() {
 
     function handleKey(e: KeyboardEvent) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTypingTarget(e.target)) {
-        // Allow Esc to dismiss the cheatsheet even when an input is focused.
-        if (e.key === "Escape" && showCheatsheet) {
-          setShowCheatsheet(false);
-          e.preventDefault();
-        }
-        return;
-      }
+      if (isTypingTarget(e.target)) return;
 
       // Resolve any pending chord first.
       const now = Date.now();
@@ -208,14 +200,8 @@ export default function KeyboardShortcuts() {
           e.preventDefault();
           return;
         case "?":
-          setShowCheatsheet(true);
+          router.push("/inbox/help#shortcuts");
           e.preventDefault();
-          return;
-        case "Escape":
-          if (showCheatsheet) {
-            setShowCheatsheet(false);
-            e.preventDefault();
-          }
           return;
         case "g":
           chordRef.current = { key: "g", expires: now + CHORD_TIMEOUT_MS };
@@ -228,17 +214,11 @@ export default function KeyboardShortcuts() {
       void focusAction;
     }
 
-    function handleShowEvent() {
-      setShowCheatsheet(true);
-    }
-
     document.addEventListener("keydown", handleKey);
-    document.addEventListener("orange:show-shortcuts", handleShowEvent);
     return () => {
       document.removeEventListener("keydown", handleKey);
-      document.removeEventListener("orange:show-shortcuts", handleShowEvent);
     };
-  }, [router, showCheatsheet]);
+  }, [router]);
 
   // Reset the selection when the route changes — selection-by-index is only
   // meaningful within a single rendered list.
@@ -246,86 +226,5 @@ export default function KeyboardShortcuts() {
     selectedIndexRef.current = -1;
   }, [pathname]);
 
-  if (!showCheatsheet) return null;
-  return <Cheatsheet onClose={() => setShowCheatsheet(false)} />;
-}
-
-function Cheatsheet({ onClose }: { onClose: () => void }) {
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Keyboard shortcuts"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-2xl rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <header className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-4 py-3">
-          <h2 className="text-base font-semibold">Keyboard shortcuts</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </header>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 px-4 py-4 text-sm">
-          <Section title="Navigation">
-            <Row keys={["j"]} desc="Next conversation" />
-            <Row keys={["k"]} desc="Previous conversation" />
-            <Row keys={["o", "Enter"]} desc="Open conversation" />
-            <Row keys={["u"]} desc="Back to list" />
-            <Row keys={["g", "i"]} desc="Go to All inboxes" />
-            <Row keys={["g", "s"]} desc="Go to Settings" />
-            <Row keys={["/"]} desc="Focus search" />
-          </Section>
-          <Section title="Actions">
-            <Row keys={["e"]} desc="Archive" />
-            <Row keys={["#"]} desc="Delete" />
-            <Row keys={["s"]} desc="Star / unstar" />
-            <Row keys={["l"]} desc="Apply label" />
-            <Row keys={["b"]} desc="Snooze" />
-            <Row keys={["r"]} desc="Reply" />
-            <Row keys={["c"]} desc="Compose" />
-            <Row keys={["?"]} desc="Show this cheatsheet" />
-          </Section>
-        </div>
-        <footer className="border-t border-neutral-200 dark:border-neutral-800 px-4 py-2 text-xs text-neutral-500">
-          Shortcuts are disabled while typing in inputs. Press Esc to close.
-        </footer>
-      </div>
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <h3 className="mt-2 mb-1 text-xs uppercase tracking-wider text-neutral-500">{title}</h3>
-      <ul className="space-y-1">{children}</ul>
-    </div>
-  );
-}
-
-function Row({ keys, desc }: { keys: string[]; desc: string }) {
-  return (
-    <li className="flex items-center justify-between gap-3">
-      <span className="text-neutral-700 dark:text-neutral-300">{desc}</span>
-      <span className="flex items-center gap-1">
-        {keys.map((k, i) => (
-          <span key={i} className="flex items-center gap-1">
-            {i > 0 && <span className="text-neutral-400 text-xs">then</span>}
-            <kbd className="inline-flex min-w-[1.5rem] justify-center rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-1.5 py-0.5 text-xs font-mono">
-              {k}
-            </kbd>
-          </span>
-        ))}
-      </span>
-    </li>
-  );
+  return null;
 }

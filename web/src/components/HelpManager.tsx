@@ -1,5 +1,20 @@
 import Link from "next/link";
 
+// Section IDs are exported so the Sidebar Help-mode drawer can render the
+// same anchor list as the page itself — single source of truth.
+export const HELP_SECTIONS: { id: string; label: string }[] = [
+  { id: "install", label: "Install" },
+  { id: "shortcuts", label: "Keyboard shortcuts" },
+  { id: "notifications", label: "Notifications" },
+  { id: "domains", label: "Mail domains" },
+  { id: "sharing", label: "Sharing" },
+  { id: "compose", label: "Compose" },
+  { id: "organizing", label: "Organizing" },
+  { id: "search", label: "Search" },
+  { id: "mobile", label: "Mobile" },
+  { id: "troubleshooting", label: "Troubleshooting" },
+];
+
 // In-app help. Renders as a full-page scope (like Settings) so it has room
 // for prose and is reachable from the sidebar without leaving the app.
 export default function HelpManager() {
@@ -11,6 +26,7 @@ export default function HelpManager() {
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 space-y-12">
           <InstallSection />
+          <KeyboardShortcutsSection />
           <NotificationsSection />
           <DomainsSection />
           <SharingSection />
@@ -26,14 +42,16 @@ export default function HelpManager() {
 }
 
 function Section({
+  id,
   title,
   children,
 }: {
+  id?: string;
   title: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-3">
+    <section id={id} className="space-y-3 scroll-mt-4">
       <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
         {title}
       </h2>
@@ -48,9 +66,75 @@ function Step({ children }: { children: React.ReactNode }) {
   return <li className="ml-5 list-decimal pl-1">{children}</li>;
 }
 
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="inline-flex min-w-[1.5rem] justify-center rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-1.5 py-0.5 text-xs font-mono">
+      {children}
+    </kbd>
+  );
+}
+
+function ShortcutRow({ keys, desc }: { keys: string[]; desc: string }) {
+  return (
+    <li className="flex items-center justify-between gap-3">
+      <span className="text-neutral-700 dark:text-neutral-300">{desc}</span>
+      <span className="flex items-center gap-1">
+        {keys.map((k, i) => (
+          <span key={i} className="flex items-center gap-1">
+            {i > 0 && <span className="text-neutral-400 text-xs">then</span>}
+            <Kbd>{k}</Kbd>
+          </span>
+        ))}
+      </span>
+    </li>
+  );
+}
+
+function KeyboardShortcutsSection() {
+  return (
+    <Section id="shortcuts" title="Keyboard shortcuts">
+      <p className="text-xs text-neutral-500">
+        Shortcuts are disabled while typing in inputs. Press <Kbd>?</Kbd> from
+        anywhere in the app to jump to this section.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 not-prose">
+        <div>
+          <h3 className="mt-2 mb-1 text-xs uppercase tracking-wider text-neutral-500">
+            Navigation
+          </h3>
+          <ul className="space-y-1">
+            <ShortcutRow keys={["j"]} desc="Next conversation" />
+            <ShortcutRow keys={["k"]} desc="Previous conversation" />
+            <ShortcutRow keys={["o", "Enter"]} desc="Open conversation" />
+            <ShortcutRow keys={["u"]} desc="Back to list" />
+            <ShortcutRow keys={["g", "i"]} desc="Go to All inboxes" />
+            <ShortcutRow keys={["g", "s"]} desc="Go to Settings" />
+            <ShortcutRow keys={["/"]} desc="Focus search" />
+          </ul>
+        </div>
+        <div>
+          <h3 className="mt-2 mb-1 text-xs uppercase tracking-wider text-neutral-500">
+            Actions
+          </h3>
+          <ul className="space-y-1">
+            <ShortcutRow keys={["e"]} desc="Archive" />
+            <ShortcutRow keys={["#"]} desc="Delete" />
+            <ShortcutRow keys={["s"]} desc="Star / unstar" />
+            <ShortcutRow keys={["l"]} desc="Apply label" />
+            <ShortcutRow keys={["b"]} desc="Snooze" />
+            <ShortcutRow keys={["r"]} desc="Reply" />
+            <ShortcutRow keys={["c"]} desc="Compose" />
+            <ShortcutRow keys={["?"]} desc="Show this section" />
+          </ul>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 function InstallSection() {
   return (
-    <Section title="Installing on your phone">
+    <Section id="install" title="Installing on your phone">
       <p>
         orange inbox is a Progressive Web App. Once installed it launches like
         a native app, full-screen, with its own icon on the home screen.
@@ -90,7 +174,7 @@ function InstallSection() {
 
 function NotificationsSection() {
   return (
-    <Section title="Push notifications">
+    <Section id="notifications" title="Push notifications">
       <p>
         Open <Link className="text-[var(--color-brand)] underline" href="/inbox/settings#notifications">Settings → Notifications</Link>
         {" "}and toggle them on. The browser will prompt for permission once.
@@ -106,7 +190,7 @@ function NotificationsSection() {
 
 function DomainsSection() {
   return (
-    <Section title="Adding mail domains">
+    <Section id="domains" title="Adding mail domains">
       <p>
         Admins add mail domains from
         <Link className="mx-1 text-[var(--color-brand)] underline" href="/inbox/settings#mail-domains">Settings → Mail domains</Link>.
@@ -128,7 +212,7 @@ function DomainsSection() {
 
 function SharingSection() {
   return (
-    <Section title="Sharing a mailbox with someone">
+    <Section id="sharing" title="Sharing a mailbox with someone">
       <p>
         Admins invite collaborators from
         <Link className="mx-1 text-[var(--color-brand)] underline" href="/inbox/settings#mailbox-access">Settings → Mailbox access</Link>.
@@ -149,7 +233,7 @@ function SharingSection() {
 
 function ComposeSection() {
   return (
-    <Section title="Composing mail">
+    <Section id="compose" title="Composing mail">
       <p>
         Click <span className="font-medium">Compose</span> in the sidebar, or
         hit <span className="font-medium">Reply</span> on any thread.
@@ -191,7 +275,7 @@ function ComposeSection() {
 
 function OrganizingSection() {
   return (
-    <Section title="Organizing threads">
+    <Section id="organizing" title="Organizing threads">
       <ul className="ml-5 list-disc space-y-1.5">
         <li>
           <span className="font-medium">Star</span> and <span className="font-medium">Archive</span> from the
@@ -218,7 +302,7 @@ function OrganizingSection() {
 
 function SearchSection() {
   return (
-    <Section title="Search">
+    <Section id="search" title="Search">
       <p>
         The search bar at the top runs full-text search across subjects,
         snippets, and bodies of every thread you can read. On desktop you can
@@ -231,7 +315,7 @@ function SearchSection() {
 
 function MobileSection() {
   return (
-    <Section title="On mobile">
+    <Section id="mobile" title="On mobile">
       <ul className="ml-5 list-disc space-y-1.5">
         <li>The sidebar opens as a drawer — tap the ☰ button in the top-left.</li>
         <li>Tap a thread to open it; the back arrow in the thread header returns to the list.</li>
@@ -244,7 +328,7 @@ function MobileSection() {
 
 function TroubleshootingSection() {
   return (
-    <Section title="Troubleshooting">
+    <Section id="troubleshooting" title="Troubleshooting">
       <ul className="ml-5 list-disc space-y-1.5">
         <li>
           <span className="font-medium">&quot;Sign in required&quot; on every load</span> —

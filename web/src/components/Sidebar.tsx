@@ -228,6 +228,24 @@ export default function Sidebar({
           }
         >
           <UtilityIcon
+            href="/inbox/all"
+            label="Mail"
+            active={isMailScope(scope)}
+            icon={<MailNavIcon />}
+          />
+          <UtilityIcon
+            href="/inbox/calendar"
+            label="Calendar"
+            active={scope === "calendar"}
+            icon={<CalendarIcon />}
+          />
+          <UtilityIcon
+            href="/inbox/contacts"
+            label="Contacts"
+            active={scope === "contacts"}
+            icon={<ContactsIcon />}
+          />
+          <UtilityIcon
             href="/inbox/settings"
             label="Settings"
             active={scope === "settings"}
@@ -239,7 +257,6 @@ export default function Sidebar({
             active={scope === "help"}
             icon={<HelpIcon />}
           />
-          <ShortcutsIconButton />
         </div>
       </div>
     </aside>
@@ -270,23 +287,6 @@ function UtilityIcon({
     >
       {icon}
     </Link>
-  );
-}
-
-function ShortcutsIconButton() {
-  function show() {
-    document.dispatchEvent(new CustomEvent("orange:show-shortcuts"));
-  }
-  return (
-    <button
-      type="button"
-      onClick={show}
-      title="Keyboard shortcuts (?)"
-      aria-label="Keyboard shortcuts"
-      className="flex items-center justify-center w-9 h-9 rounded-md text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-neutral-100"
-    >
-      <KeyboardIcon />
-    </button>
   );
 }
 
@@ -962,13 +962,6 @@ function HelpIcon() {
   );
 }
 
-function KeyboardIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7Zm2 1.25a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H4Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5ZM4 8.5a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H4Zm2 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H6Zm5.5 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Z" />
-    </svg>
-  );
-}
 
 function SettingsIcon() {
   return (
@@ -976,5 +969,38 @@ function SettingsIcon() {
       <path d="M9.405 1.05a.75.75 0 0 0-.81 0l-.97.583a.75.75 0 0 1-.69.045l-1.05-.45a.75.75 0 0 0-.79.146l-.834.835a.75.75 0 0 1-.598.218l-1.13-.084a.75.75 0 0 0-.79.554l-.314 1.087a.75.75 0 0 1-.45.5l-1.04.42a.75.75 0 0 0-.45.79l.187 1.115a.75.75 0 0 1-.146.62l-.69.89a.75.75 0 0 0 0 .91l.69.89a.75.75 0 0 1 .146.62l-.187 1.115a.75.75 0 0 0 .45.79l1.04.42a.75.75 0 0 1 .45.5l.314 1.087a.75.75 0 0 0 .79.554l1.13-.084a.75.75 0 0 1 .598.218l.834.835a.75.75 0 0 0 .79.146l1.05-.45a.75.75 0 0 1 .69.045l.97.583a.75.75 0 0 0 .81 0l.97-.583a.75.75 0 0 1 .69-.045l1.05.45a.75.75 0 0 0 .79-.146l.834-.835a.75.75 0 0 1 .598-.218l1.13.084a.75.75 0 0 0 .79-.554l.314-1.087a.75.75 0 0 1 .45-.5l1.04-.42a.75.75 0 0 0 .45-.79l-.187-1.115a.75.75 0 0 1 .146-.62l.69-.89a.75.75 0 0 0 0-.91l-.69-.89a.75.75 0 0 1-.146-.62l.187-1.115a.75.75 0 0 0-.45-.79l-1.04-.42a.75.75 0 0 1-.45-.5l-.314-1.087a.75.75 0 0 0-.79-.554l-1.13.084a.75.75 0 0 1-.598-.218l-.834-.835a.75.75 0 0 0-.79-.146l-1.05.45a.75.75 0 0 1-.69-.045l-.97-.583ZM8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
     </svg>
   );
+}
+
+function MailNavIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M2.5 3A1.5 1.5 0 0 0 1 4.5v7A1.5 1.5 0 0 0 2.5 13h11a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 3h-11Zm.5 1.94 5 3.06 5-3.06v.41L8.4 8.39a.8.8 0 0 1-.8 0L3 5.35v-.41Z" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M4 1.5a.75.75 0 0 1 1.5 0V2h5v-.5a.75.75 0 0 1 1.5 0V2h.5A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H4v-.5ZM3.5 5.5v7h9v-7h-9Z" />
+    </svg>
+  );
+}
+
+// Treat "everything mail-related" as the active state for the Mail bottom-row
+// icon: All inboxes, per-mailbox views, drafts/templates/scheduled/vips/
+// subscriptions/aliases, the unified domain views, and saved layouts. The
+// only scopes that *aren't* mail are the dedicated section pages.
+function isMailScope(scope: string): boolean {
+  if (
+    scope === "settings" ||
+    scope === "help" ||
+    scope === "calendar" ||
+    scope === "contacts" ||
+    scope === "storage"
+  ) {
+    return false;
+  }
+  return true;
 }
 

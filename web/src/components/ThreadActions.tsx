@@ -115,6 +115,31 @@ export default function ThreadActions({
     });
   }
 
+  // Mark the whole thread back to unread. The /api/threads/<id> PATCH already
+  // accepts `{ read: false }` and bumps unread_count to MAX(unread_count, 1)
+  // without flipping per-message read flags (so re-opening doesn't re-trigger
+  // first-unread highlighting). One-shot: no optimistic toggle since there's
+  // nothing to show in this view; toast + router.refresh() update the
+  // sidebar/list when the user navigates back.
+  const [isUnreadPending, startUnreadTransition] = useTransition();
+  function markUnread() {
+    setError(null);
+    startUnreadTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ read: false }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      toast({ message: "Marked unread" });
+      router.refresh();
+    });
+  }
+
   function togglePin() {
     const next = !pinned;
     setPinned(next);
@@ -282,6 +307,16 @@ export default function ThreadActions({
               }`}
             >
               {muted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              type="button"
+              data-action="mark-unread"
+              onClick={markUnread}
+              disabled={isUnreadPending || anyPending}
+              title="Mark unread — bring this back to your inbox as unread"
+              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
+            >
+              Mark unread
             </button>
             <button
               type="button"

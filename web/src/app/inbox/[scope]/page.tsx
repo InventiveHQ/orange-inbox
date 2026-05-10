@@ -17,6 +17,7 @@ import AliasesManager from "@/components/AliasesManager";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
+import CalendarManager from "@/components/CalendarManager";
 import HelpManager from "@/components/HelpManager";
 import StorageManager from "@/components/StorageManager";
 import SubscriptionsList from "@/components/SubscriptionsList";
@@ -37,6 +38,7 @@ export default async function InboxIndex({
   if (scope === "subscriptions") return <SubscriptionsRoute />;
   if (scope === "settings") return <SettingsRoute />;
   if (scope === "help") return <HelpManager />;
+  if (scope === "calendar") return <CalendarManager />;
   if (scope === "storage") return <StorageRoute />;
   if (scope === "vips") return <VipsRoute />;
   if (scope === "aliases") return <AliasesRoute />;
