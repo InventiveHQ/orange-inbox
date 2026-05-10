@@ -811,3 +811,81 @@ function buildConfidentialPlaceholderHtml(
 }
 
 export type { Identity };
+
+// ─── Calendar invite send (#81) ─────────────────────────────────────────
+// Lightweight outbound for `text/calendar; method=REQUEST` (and CANCEL).
+// We deliberately don't reuse `sendMessage` here — calendar invites don't
+// thread, don't go through Mail Drop, and don't need the confidential /
+// read-tracking machinery. The send_email binding builds MIME; we just
+// hand it the body, the alternative HTML, and the attachments list.
+//
+// DKIM: relies on the existing send_email pipeline to sign — no special
+// handling here. The "From" address is a real mailbox the user has access
+// to, so its domain has a DKIM key configured by the existing setup flow.
+
+export interface CalendarInviteSendInput {
+  // Mailbox the invite is sent FROM. Caller has already verified access.
+  fromMailboxId: string;
+  // Recipient list — typically the event's attendee emails.
+  to: string[];
+  // Subject line (typically "Invite: {summary}" or "Cancelled: {summary}").
+  subject: string;
+  // Plain-text human description for clients that don't render the .ics.
+  text: string;
+  // Optional HTML alt body. When omitted the binding sends text-only.
+  html?: string;
+  // RFC 5545 source — must already be METHOD=REQUEST (or CANCEL).
+  ics: string;
+  // Match the .ics METHOD: REQUEST | CANCEL. Drives the calendar part's
+  // Content-Type parameter so the recipient client treats it correctly
+  // (a REQUEST renders as a meeting invite; CANCEL deletes it).
+  method: "REQUEST" | "CANCEL";
+}
+
+export async function sendCalendarInvite(
+  userId: string,
+  input: CalendarInviteSendInput,
+): Promise<void> {
+  const identity = await findIdentity(userId, input.fromMailboxId);
+  if (!identity) {
+    throw new SendError("not_authorised", "You can't send from that mailbox.");
+  }
+  if (identity.role === "reader") {
+    throw new SendError("forbidden", "Your role on this domain is read-only.");
+  }
+  if (input.to.length === 0) {
+    throw new SendError("invalid", "At least one attendee is required.");
+  }
+
+  const env = getEnv();
+  const fromAddr = fullAddress(identity);
+  const fromName = identity.display_name?.trim() || undefined;
+  const filename = input.method === "CANCEL" ? "cancel.ics" : "invite.ics";
+  const contentType = `text/calendar; method=${input.method}; charset="utf-8"`;
+
+  try {
+    await env.EMAIL.send({
+      from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
+      to: input.to,
+      subject: input.subject,
+      text: input.text,
+      ...(input.html ? { html: input.html } : {}),
+      attachments: [
+        {
+          disposition: "attachment",
+          filename,
+          type: contentType,
+          content: input.ics,
+        },
+      ],
+    });
+  } catch (e) {
+    console.error("env.EMAIL.send (invite) rejected", {
+      error: serializeError(e),
+      to: input.to,
+      method: input.method,
+    });
+    const detail = e instanceof Error ? e.message : String(e);
+    throw new SendError("send_failed", `Cloudflare rejected the invite: ${detail}`);
+  }
+}

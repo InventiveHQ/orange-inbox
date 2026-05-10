@@ -273,6 +273,42 @@ export async function storeMessage(
     }
   }
 
+  // Calendar REPLY handling (#81). When an attendee replies to a
+  // self-event invite, the inbound mail carries METHOD=REPLY plus the
+  // ATTENDEE's PARTSTAT. We flip calendar_event_attendees.rsvp_status on
+  // the matching (ical_uid, email) row instead of the user-RSVP path —
+  // the user-RSVP path is for THIS user RSVPing to someone ELSE's invite,
+  // not the other way around. Best-effort: a missing attendee row just
+  // means the REPLY arrived for an event we don't own, which is fine to
+  // silently ignore.
+  if (
+    calendarParse &&
+    calendarParse.parsedMethod === "REPLY" &&
+    calendarParse.parsedUid &&
+    calendarParse.replyAttendee &&
+    calendarParse.replyPartstat
+  ) {
+    try {
+      await env.DB
+        .prepare(
+          `UPDATE calendar_event_attendees
+              SET rsvp_status = ?, responded_at = unixepoch()
+            WHERE email = ?
+              AND event_id IN (
+                SELECT id FROM calendar_events WHERE ical_uid = ? AND source = 'self'
+              )`,
+        )
+        .bind(
+          calendarParse.replyPartstat,
+          calendarParse.replyAttendee,
+          calendarParse.parsedUid,
+        )
+        .run();
+    } catch (err) {
+      console.warn("calendar REPLY routing failed", err);
+    }
+  }
+
   // Control-side bookkeeping. Independent of the mail batch — failures here
   // mean the message is still on disk and visible via the next read; we just
   // log so a sweeper can reconcile.
@@ -383,6 +419,10 @@ interface CalendarParseResult {
   stmt: D1PreparedStatement;
   parsedUid: string | null;
   parsedMethod: string | null;   // uppercase: REQUEST | CANCEL | REPLY | …
+  // METHOD=REPLY only — surface so the caller can route the rsvp flip
+  // without re-parsing. Both null on REQUEST/CANCEL/PUBLISH.
+  replyAttendee: string | null;
+  replyPartstat: "ACCEPTED" | "TENTATIVE" | "DECLINED" | "NEEDS-ACTION" | null;
 }
 
 // Build the message_calendar_events INSERT for the first text/calendar
@@ -428,6 +468,8 @@ function buildCalendarInsert(
         stmt,
         parsedUid: parsed.uid,
         parsedMethod: parsed.method ? parsed.method.toUpperCase() : null,
+        replyAttendee: parsed.replyAttendee,
+        replyPartstat: parsed.replyPartstat,
       };
     } catch (err) {
       console.warn("ics parse failed", err);
