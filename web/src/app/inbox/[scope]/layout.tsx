@@ -6,6 +6,7 @@ import {
   listDomainsForUser,
   listDueFollowups,
   listMailboxesForUser,
+  listSpamReportedThreads,
   listThreads,
   listVipThreads,
   type MessageCategory,
@@ -110,6 +111,10 @@ export default async function InboxLayout({
     // have passed the per-thread day threshold without a reply. Listing
     // logic lives in queries.ts → listDueFollowups.
     "followups",
+    // Spam (issue #74): threads the user reported as spam. Reported-spam
+    // messages are auto-archived, so this scope is the only place to
+    // review/restore them. Listing logic in queries.ts → listSpamReportedThreads.
+    "spam",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
   // a given domain — picked up below in the listThreads filter. `layout:<id>`
@@ -133,6 +138,7 @@ export default async function InboxLayout({
   const isVips = effectiveScope === "vips";
   const isFollowups = effectiveScope === "followups";
   const isAssigned = effectiveScope === "assigned";
+  const isSpam = effectiveScope === "spam";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
@@ -156,6 +162,7 @@ export default async function InboxLayout({
     isVips ||
     isFollowups ||
     isAssigned ||
+    isSpam ||
     isFullPage ||
     isDomainScope ||
     isLayoutScope
@@ -173,6 +180,10 @@ export default async function InboxLayout({
         ? // Assigned-to-me (#27) spans every mailbox the user is a member of,
           // just like VIPs but filtered on thread_assignments.assignee_id.
           listAssignedToUser(user.id)
+        : isSpam
+        ? // Spam (#74) spans every mailbox — reported-spam messages were
+          // auto-archived so this view is the only place to review them.
+          listSpamReportedThreads(user.id)
         : isVips
         ? // VIPs view spans every mailbox the user can read — see
           // listVipThreads. Cross-mailbox by design: VIPs are a per-user
@@ -253,6 +264,8 @@ export default async function InboxLayout({
         ? "Follow-ups"
         : isAssigned
           ? "Assigned to me"
+          : isSpam
+          ? "Spam"
           : effectiveScope === "all"
           ? "All inboxes"
           : isDomainScope

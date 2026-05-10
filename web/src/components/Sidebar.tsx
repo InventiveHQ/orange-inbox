@@ -385,6 +385,13 @@ export default function Sidebar({
           icon={<ScheduledIcon />}
           collapsed={collapsed}
         />
+        <SpecialLink
+          href="/inbox/spam"
+          label="Spam"
+          active={scope === "spam"}
+          icon={<SpamIcon />}
+          collapsed={collapsed}
+        />
 
         {!collapsed && domainEntries.length > 0 && (
           <div className="mt-5 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
@@ -1263,6 +1270,14 @@ function ScheduledIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.75 3.5v3.69l2.53 1.46a.75.75 0 1 1-.75 1.3L7.625 9.16A.75.75 0 0 1 7.25 8.5v-4a.75.75 0 0 1 1.5 0Z" />
+    </svg>
+  );
+}
+
+function SpamIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm-.75 3.5a.75.75 0 0 1 1.5 0v4a.75.75 0 0 1-1.5 0v-4ZM8 12.05a.95.95 0 1 1 0-1.9.95.95 0 0 1 0 1.9Z" />
     </svg>
   );
 }

@@ -959,6 +959,86 @@ export async function listVipThreads(
   return (results ?? []).map(parseThreadListRow);
 }
 
+// Threads where the user has personally hit "Report spam" on at least one
+// message. Backs the /inbox/spam scope — the reported messages were already
+// archived by the report-spam handler, so this is the only way to find them
+// again. spam_reported_by_user_id lives in the mail-plane DBs, so we fan out
+// across active mail DBs to collect candidate thread_ids, then resolve them
+// back through threads_index in the control DB.
+//
+// Includes archived threads by design (every reported-spam thread is
+// archived — that's the whole point of giving the user a place to review).
+export async function listSpamReportedThreads(
+  userId: string,
+  opts: { limit?: number } = {},
+): Promise<ThreadListItem[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+
+  const mailDbs = await getActiveMailDbs();
+  const threadIds = new Set<string>();
+  for (const { db } of mailDbs) {
+    const { results } = await db
+      .prepare(
+        `SELECT DISTINCT thread_id
+           FROM messages
+          WHERE spam_reported_by_user_id = ?`,
+      )
+      .bind(userId)
+      .all<{ thread_id: string }>();
+    for (const r of results ?? []) threadIds.add(r.thread_id);
+  }
+  if (threadIds.size === 0) return [];
+
+  const ids = Array.from(threadIds);
+  const placeholders = ids.map(() => "?").join(",");
+  const sql = `
+    SELECT
+      ti.thread_id AS id,
+      ti.subject_normalized,
+      ti.last_message_at,
+      ti.message_count,
+      ti.unread_count,
+      ti.starred,
+      ti.archived,
+      ti.muted,
+      ti.pinned,
+      ti.remind_at,
+      d.id   AS domain_id,
+      d.name AS domain_name,
+      mb.id  AS mailbox_id,
+      mb.local_part AS mailbox_local_part,
+      ti.last_subject   AS last_subject,
+      ti.last_from_addr AS last_from_addr,
+      ti.last_from_name AS last_from_name,
+      ti.last_snippet   AS last_snippet,
+      (
+        SELECT JSON_GROUP_ARRAY(
+                 JSON_OBJECT('id', l.id, 'name', l.name, 'color', l.color)
+               )
+          FROM (
+            SELECT l.id, l.name, l.color
+              FROM thread_labels tl
+              INNER JOIN labels l ON l.id = tl.label_id
+             WHERE tl.thread_id = ti.thread_id
+             ORDER BY l.name
+          ) AS l
+      ) AS labels_json
+    FROM threads_index ti
+    INNER JOIN mailboxes mb ON mb.id = ti.mailbox_id
+    INNER JOIN domains d   ON d.id = mb.domain_id
+    INNER JOIN user_mailbox_access uma
+            ON uma.mailbox_id = ti.mailbox_id AND uma.user_id = ?
+    WHERE ti.thread_id IN (${placeholders})
+    ORDER BY ti.last_message_at DESC
+    LIMIT ?
+  `;
+  const { results } = await getDb()
+    .prepare(sql)
+    .bind(userId, ...ids, limit)
+    .all<ThreadListRow>();
+  return (results ?? []).map(parseThreadListRow);
+}
+
 // ─── Follow-up nudges (issue #26) ────────────────────────────────────────
 //
 // "You sent this N days ago and they haven't replied — bump?" Surfaces
