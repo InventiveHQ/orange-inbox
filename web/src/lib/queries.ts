@@ -260,6 +260,21 @@ export interface AttachmentRow {
   is_executable: number;
 }
 
+// Calendar invite (#70). Populated for messages that arrived with a
+// parseable text/calendar attachment — the email-worker drops the parsed
+// VEVENT into message_calendar_events at ingest, the reader LEFT JOINs it
+// back here so ThreadView can render an inline RSVP card without a second
+// round-trip.
+export interface CalendarEvent {
+  starts_at: number;          // unix seconds
+  ends_at: number | null;
+  summary: string | null;
+  location: string | null;
+  organizer: string | null;
+  uid: string | null;
+  method: string | null;
+}
+
 export interface ThreadMessage {
   id: string;
   message_id_header: string;
@@ -295,6 +310,10 @@ export interface ThreadMessage {
   list_unsub_one_click: number;
   unsubscribed_at: number | null;
   attachments: AttachmentRow[];
+  // 0026: parsed VEVENT from a text/calendar attachment, if any. NULL when
+  // the message had no .ics, the .ics was unparseable, or the attachment
+  // didn't carry a DTSTART. Drives the inline calendar card + RSVP buttons.
+  calendar_event: CalendarEvent | null;
 }
 
 // The thread head (visibility check + listing-style fields) comes from the
@@ -329,8 +348,20 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
 
   // Mail-DB row shape — sent_by_user_id stays here; we resolve it to email +
   // display_name via a follow-up control-DB lookup since users live there.
-  type RawMessageRow = Omit<ThreadMessage, "attachments" | "sent_by_email" | "sent_by_display_name"> & {
+  // Calendar fields come from a LEFT JOIN against message_calendar_events
+  // and are repacked into the nested `calendar_event` shape below.
+  type RawMessageRow = Omit<
+    ThreadMessage,
+    "attachments" | "sent_by_email" | "sent_by_display_name" | "calendar_event"
+  > & {
     sent_by_user_id: string | null;
+    cal_starts_at: number | null;
+    cal_ends_at: number | null;
+    cal_summary: string | null;
+    cal_location: string | null;
+    cal_organizer: string | null;
+    cal_uid: string | null;
+    cal_method: string | null;
   };
 
   const { results } = await mailDb
@@ -340,8 +371,16 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
               m.html_r2_key, m.read, m.starred, m.sent_by_user_id,
               m.auth_results, m.first_contact, m.reply_to_addr,
               m.list_unsub_url, m.list_unsub_mailto, m.list_unsub_one_click,
-              m.unsubscribed_at
+              m.unsubscribed_at,
+              ce.starts_at AS cal_starts_at,
+              ce.ends_at   AS cal_ends_at,
+              ce.summary   AS cal_summary,
+              ce.location  AS cal_location,
+              ce.organizer AS cal_organizer,
+              ce.uid       AS cal_uid,
+              ce.method    AS cal_method
          FROM messages m
+         LEFT JOIN message_calendar_events ce ON ce.message_id = m.id
         WHERE m.thread_id = ?
         ORDER BY m.date ASC`,
     )
@@ -392,13 +431,34 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
 
   const messages: ThreadMessage[] = messageRows.map(m => {
     const sender = m.sent_by_user_id ? senderMap.get(m.sent_by_user_id) ?? null : null;
-    const { sent_by_user_id: _drop, ...rest } = m;
+    const {
+      sent_by_user_id: _drop,
+      cal_starts_at, cal_ends_at, cal_summary, cal_location,
+      cal_organizer, cal_uid, cal_method,
+      ...rest
+    } = m;
     void _drop;
+    // The LEFT JOIN nulls every cal_* field for messages without a row in
+    // message_calendar_events. cal_starts_at is NOT NULL in the table, so
+    // a non-null value there is the unambiguous "we have an event" signal.
+    const calendar_event: CalendarEvent | null =
+      cal_starts_at != null
+        ? {
+            starts_at: cal_starts_at,
+            ends_at: cal_ends_at,
+            summary: cal_summary,
+            location: cal_location,
+            organizer: cal_organizer,
+            uid: cal_uid,
+            method: cal_method,
+          }
+        : null;
     return {
       ...rest,
       sent_by_email: sender?.email ?? null,
       sent_by_display_name: sender?.display_name ?? null,
       attachments: attachmentsByMessage.get(m.id) ?? [],
+      calendar_event,
     };
   });
 
