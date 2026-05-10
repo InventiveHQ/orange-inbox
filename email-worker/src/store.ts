@@ -446,11 +446,15 @@ function buildCalendarInsert(
       const ics = new TextDecoder().decode(a.bytes);
       const parsed = parseIcs(ics);
       if (!parsed) continue;
+      // #89: rrule + tz threaded onto the row so promoteInvitesForThread
+      // can carry recurrence and the originating IANA zone into the per-user
+      // calendar_events table. Both are already on ParsedIcs and may be
+      // NULL (single-shot / floating / UTC-only invites).
       const stmt = mailDb
         .prepare(
           `INSERT INTO message_calendar_events
-             (message_id, starts_at, ends_at, summary, location, organizer, uid, method, raw_ics)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             (message_id, starts_at, ends_at, summary, location, organizer, uid, method, raw_ics, rrule, tz)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (message_id) DO NOTHING`,
         )
         .bind(
@@ -463,6 +467,8 @@ function buildCalendarInsert(
           parsed.uid,
           parsed.method,
           ics,
+          parsed.rrule,
+          parsed.tz,
         );
       return {
         stmt,
