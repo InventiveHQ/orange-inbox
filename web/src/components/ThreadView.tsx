@@ -4,6 +4,7 @@ import ApplyLabelButton from "./ApplyLabelButton";
 import AttachmentPreview from "./AttachmentPreview";
 import Avatar from "./Avatar";
 import BackToListButton from "./BackToListButton";
+import CalendarEventCard from "./CalendarEventCard";
 import ExecutableAttachment from "./ExecutableAttachment";
 import ReplyButton from "./ReplyButton";
 import ReplyAllButton from "./ReplyAllButton";
@@ -140,14 +141,27 @@ export default function ThreadView({ detail, mailboxId, vipAddrs }: Props) {
 
       <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
         {messages.map(m => (
-          <MessageBlock key={m.id} m={m} isVip={vipAddrs.has(m.from_addr.trim().toLowerCase())} />
+          <MessageBlock
+            key={m.id}
+            m={m}
+            threadId={thread.id}
+            isVip={vipAddrs.has(m.from_addr.trim().toLowerCase())}
+          />
         ))}
       </div>
     </article>
   );
 }
 
-function MessageBlock({ m, isVip }: { m: ThreadMessage; isVip: boolean }) {
+function MessageBlock({
+  m,
+  threadId,
+  isVip,
+}: {
+  m: ThreadMessage;
+  threadId: string;
+  isVip: boolean;
+}) {
   const to = parseAddrs(m.to_json);
   const isOutbound = m.direction === "outbound";
   const sentByLabel =
@@ -231,6 +245,14 @@ function MessageBlock({ m, isVip }: { m: ThreadMessage; isVip: boolean }) {
         <TrustBanner
           firstContact={showFirstContact}
           replyToAddr={showReplyToWarn ? m.reply_to_addr : null}
+        />
+      )}
+
+      {m.calendar_event && (
+        <CalendarEventCard
+          event={m.calendar_event}
+          threadId={threadId}
+          messageId={m.id}
         />
       )}
 

@@ -132,3 +132,19 @@ CREATE TRIGGER messages_au AFTER UPDATE OF subject, snippet, text_body ON messag
   INSERT INTO messages_fts(rowid, subject, snippet, text_body)
     VALUES (new.rowid, new.subject, new.snippet, new.text_body);
 END;
+
+-- 0026_calendar_events: inline calendar invites (#70). Populated at ingest by
+-- the email-worker when the message has a text/calendar attachment; the web
+-- reader LEFT JOINs this table to render an inline RSVP card above the body.
+CREATE TABLE message_calendar_events (
+  message_id TEXT PRIMARY KEY,
+  starts_at  INTEGER NOT NULL,
+  ends_at    INTEGER,
+  summary    TEXT,
+  location   TEXT,
+  organizer  TEXT,
+  uid        TEXT,
+  method     TEXT,
+  raw_ics    TEXT NOT NULL
+);
+CREATE INDEX message_calendar_events_starts ON message_calendar_events(starts_at DESC);

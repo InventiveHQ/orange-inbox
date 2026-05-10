@@ -1,4 +1,5 @@
 import { maybeAutoReply } from "./autoresponder";
+import { parseIcs } from "./ics-parse";
 import {
   getMailDbForNewThread,
   getMailDbForThread,
@@ -203,6 +204,13 @@ export async function storeMessage(
     );
   }
 
+  // Calendar invite (#70). The first text/calendar attachment we can parse
+  // populates message_calendar_events for the inline RSVP card. Wrapped in
+  // try/catch — a malformed .ics must never block ingest of an otherwise
+  // perfectly good message.
+  const icsInsert = buildCalendarInsert(mailDb, messageId, parsed.attachments);
+  if (icsInsert) stmts.push(icsInsert);
+
   // Bump thread counters on the mail-DB threads row. Source of truth for the
   // listing UI is threads_index in control (upserted just below); this keeps
   // the local thread row consistent so internal joins (next reply lookup,
@@ -325,6 +333,49 @@ export async function storeMessage(
   ctx.waitUntil(maybeAutoReply(env, recipient.mailboxId, parsed));
 
   return { messageId, threadId: thread.threadId, duplicate: false };
+}
+
+// Build the message_calendar_events INSERT for the first text/calendar
+// attachment we can parse, or return null if the message has none / nothing
+// parseable. Decoding is wrapped in try/catch so a hostile/malformed .ics
+// can't poison the ingest pipeline — we'd rather lose the calendar card
+// than the message.
+function buildCalendarInsert(
+  mailDb: D1Database,
+  messageId: string,
+  attachments: ParsedMessage["attachments"],
+): D1PreparedStatement | null {
+  for (const a of attachments) {
+    const ct = (a.contentType || "").toLowerCase();
+    if (!ct.startsWith("text/calendar")) continue;
+    try {
+      const ics = new TextDecoder().decode(a.bytes);
+      const parsed = parseIcs(ics);
+      if (!parsed) continue;
+      return mailDb
+        .prepare(
+          `INSERT INTO message_calendar_events
+             (message_id, starts_at, ends_at, summary, location, organizer, uid, method, raw_ics)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (message_id) DO NOTHING`,
+        )
+        .bind(
+          messageId,
+          parsed.startsAt,
+          parsed.endsAt,
+          parsed.summary,
+          parsed.location,
+          parsed.organizer,
+          parsed.uid,
+          parsed.method,
+          ics,
+        );
+    } catch (err) {
+      console.warn("ics parse failed", err);
+      continue;
+    }
+  }
+  return null;
 }
 
 async function notifyWebOfNewMessage(
