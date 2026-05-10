@@ -40,6 +40,11 @@ const SWIPE_UNDO_SECONDS = 5;
 const SCROLL_KEY_PREFIX = "orange-inbox:threadlist-scroll:";
 const SCROLL_SAVE_DEBOUNCE_MS = 120;
 
+// Default day-count for follow-up nudges (issue #26). Kept in sync with
+// listDueFollowups' defaultDays argument so the inline "Waiting N days"
+// badge here doesn't disagree with the server's "this thread is due" check.
+const DEFAULT_FOLLOWUP_DAYS = 4;
+
 // Quadrant tabs only make sense for the unified All view — per-mailbox
 // scopes already have a single intent. Returning false hides the toggle bar.
 function showsTriageBar(scope: string): boolean {
@@ -540,6 +545,22 @@ function ThreadRow({
   const isUnread = t.unread_count > 0;
   const avatarSeed = t.last_from_addr || sender;
 
+  // Follow-up nudges (issue #26). When the user has opted this thread in
+  // AND `last_message_at` is older than `follow_up_days` (or the default),
+  // show a subtle "Waiting on reply" badge. We can't tell here whether the
+  // most-recent message is outbound — that check lives server-side in
+  // listDueFollowups — so the badge may show on threads where the other
+  // side replied but a server hop hasn't refreshed yet. Cheap, harmless:
+  // the badge is informational, not actionable.
+  const followUpThreshold =
+    t.follow_up_enabled === 1 ? t.follow_up_days ?? DEFAULT_FOLLOWUP_DAYS : null;
+  const waitingDays =
+    followUpThreshold !== null
+      ? Math.floor((Date.now() / 1000 - t.last_message_at) / 86400)
+      : 0;
+  const showWaitingBadge =
+    followUpThreshold !== null && waitingDays >= followUpThreshold;
+
   // Swipe state lives per-row so simultaneous swipes don't fight. Translate
   // is applied as inline style during the gesture for fluidity, then snapped
   // back via a CSS transition class once the gesture ends.
@@ -701,6 +722,14 @@ function ThreadRow({
                       </span>
                     )}
                   </span>
+                  {showWaitingBadge && (
+                    <span
+                      className="shrink-0 inline-flex items-center gap-1 rounded-md bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 px-1.5 py-0.5 text-[10px] font-medium"
+                      title={`Waiting on reply — ${waitingDays} day${waitingDays === 1 ? "" : "s"}`}
+                    >
+                      ⏰ Waiting {waitingDays}d
+                    </span>
+                  )}
                 </div>
                 <div className="truncate text-xs text-neutral-500">{t.last_snippet || ""}</div>
                 {showDomain && (

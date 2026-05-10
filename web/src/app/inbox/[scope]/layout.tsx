@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import {
   listDomainsForUser,
+  listDueFollowups,
   listMailboxesForUser,
   listThreads,
   listVipThreads,
@@ -78,6 +79,10 @@ export default async function InboxLayout({
     "aliases",
     "calendar",
     "scheduled",
+    // Follow-ups (issue #26): threads the user opted in for nudges that
+    // have passed the per-thread day threshold without a reply. Listing
+    // logic lives in queries.ts → listDueFollowups.
+    "followups",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
   // a given domain — picked up below in the listThreads filter. `layout:<id>`
@@ -99,6 +104,7 @@ export default async function InboxLayout({
 
   const isDrafts = effectiveScope === "drafts";
   const isVips = effectiveScope === "vips";
+  const isFollowups = effectiveScope === "followups";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
@@ -120,6 +126,7 @@ export default async function InboxLayout({
     effectiveScope === "all" ||
     isDrafts ||
     isVips ||
+    isFollowups ||
     isFullPage ||
     isDomainScope ||
     isLayoutScope
@@ -129,7 +136,12 @@ export default async function InboxLayout({
   const [threads, drafts] = await Promise.all([
     isDrafts || isFullPage
       ? Promise.resolve([])
-      : isVips
+      : isFollowups
+        ? // Follow-ups (issue #26): threads opted into nudges that are now
+          // overdue without a reply. Cross-mailbox by design — same shape as
+          // the VIPs view, no per-mailbox filter.
+          listDueFollowups(user.id)
+        : isVips
         ? // VIPs view spans every mailbox the user can read — see
           // listVipThreads. Cross-mailbox by design: VIPs are a per-user
           // concept, not per-mailbox.
@@ -200,14 +212,16 @@ export default async function InboxLayout({
     ? "Drafts"
     : isVips
       ? "VIPs"
-      : effectiveScope === "all"
-        ? "All inboxes"
-        : isDomainScope
-          ? matchedDomain!.name
-          : (() => {
-              const mb = mailboxes.find(m => m.id === effectiveScope);
-              return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
-            })();
+      : isFollowups
+        ? "Follow-ups"
+        : effectiveScope === "all"
+          ? "All inboxes"
+          : isDomainScope
+            ? matchedDomain!.name
+            : (() => {
+                const mb = mailboxes.find(m => m.id === effectiveScope);
+                return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
+              })();
 
   const searchMailboxes = mailboxes.map(mb => ({
     id: mb.id,
