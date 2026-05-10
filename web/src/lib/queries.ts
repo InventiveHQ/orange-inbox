@@ -74,6 +74,7 @@ export interface ThreadListItem {
   unread_count: number;
   starred: number;
   archived: number;
+  muted: number;
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
@@ -103,7 +104,7 @@ interface ThreadListRow extends Omit<ThreadListItem, "labels"> {
 // every field needed for a row in the inbox view is denormalised here.
 export async function listThreads(
   userId: string,
-  opts: { mailboxId?: string; limit?: number } = {},
+  opts: { mailboxId?: string; limit?: number; includeMuted?: boolean } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   // Hide threads that are still in a future-snooze. The cron clears
@@ -115,6 +116,12 @@ export async function listThreads(
     "(ti.snoozed_until IS NULL OR ti.snoozed_until <= unixepoch())",
   ];
   const binds: unknown[] = [userId];
+
+  // Muted threads are visible in the unified "all" view but hidden from
+  // per-mailbox inboxes — caller decides which by passing includeMuted.
+  if (!opts.includeMuted) {
+    where.push("ti.muted = 0");
+  }
 
   if (opts.mailboxId) {
     where.push("ti.mailbox_id = ?");
@@ -133,6 +140,7 @@ export async function listThreads(
       ti.unread_count,
       ti.starred,
       ti.archived,
+      ti.muted,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -191,6 +199,7 @@ export interface ThreadDetail {
     unread_count: number;
     starred: number;
     archived: number;
+    muted: number;
     domain_name: string;
     mailbox_id: string;
     mailbox_local_part: string;
@@ -246,7 +255,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .prepare(
       `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
               ti.message_count, ti.unread_count, ti.starred, ti.archived,
-              ti.snoozed_until,
+              ti.muted, ti.snoozed_until,
               d.name AS domain_name,
               mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role

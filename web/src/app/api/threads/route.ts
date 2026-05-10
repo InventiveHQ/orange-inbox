@@ -12,6 +12,7 @@ export async function GET(req: NextRequest) {
     const threads = await listThreads(user.id, {
       mailboxId: scope === "all" ? undefined : scope,
       limit,
+      includeMuted: scope === "all",
     });
     return NextResponse.json({ threads, scope });
   } catch (e) {

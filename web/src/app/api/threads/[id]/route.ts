@@ -29,6 +29,7 @@ interface PatchBody {
   starred?: boolean;
   archived?: boolean;
   read?: boolean;
+  muted?: boolean;
 }
 
 // Toggle thread-level state: star, archive, read. Source of truth for
@@ -68,6 +69,10 @@ export async function PATCH(
       // Marking read zeroes unread_count. Marking unread bumps it to at
       // least 1 so the inbox row goes back to bold.
       indexUpdates.push(b.read ? "unread_count = 0" : "unread_count = MAX(unread_count, 1)");
+    }
+    if (typeof b.muted === "boolean") {
+      indexUpdates.push("muted = ?");
+      indexBinds.push(b.muted ? 1 : 0);
     }
 
     if (indexUpdates.length === 0) {

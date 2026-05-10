@@ -8,6 +8,7 @@ interface Props {
   threadId: string;
   initialStarred: boolean;
   initialArchived: boolean;
+  initialMuted: boolean;
 }
 
 // Window during which the user can hit Undo. Mirrors Gmail's "Conversation
@@ -19,8 +20,9 @@ type PendingAction =
   | { kind: "archive"; previousArchived: boolean }
   | { kind: "delete" };
 
-// Header actions: star toggle, archive, delete. Star is a plain optimistic
-// toggle. Archive and delete go through an undo-toast pattern:
+// Header actions: star toggle, archive, mute, delete. Star and mute are
+// plain optimistic toggles. Archive and delete go through an undo-toast
+// pattern:
 //
 //   - Archive fires the PATCH immediately (the operation is reversible
 //     server-side via the same endpoint with `{archived: false}`). If the
@@ -30,13 +32,20 @@ type PendingAction =
 //     the irreversibility means we'd rather not call the server at all
 //     than try to soft-undelete after the fact. While the toast is up the
 //     thread is hidden behind a "Conversation deleted" placeholder.
-export default function ThreadActions({ threadId, initialStarred, initialArchived }: Props) {
+export default function ThreadActions({
+  threadId,
+  initialStarred,
+  initialArchived,
+  initialMuted,
+}: Props) {
   const router = useRouter();
   const [starred, setStarred] = useState(initialStarred);
   const [archived, setArchived] = useState(initialArchived);
+  const [muted, setMuted] = useState(initialMuted);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [isStarPending, startStarTransition] = useTransition();
+  const [isMutePending, startMuteTransition] = useTransition();
 
   function toggleStar() {
     const next = !starred;
@@ -51,6 +60,26 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
       if (!res.ok) {
         // Roll back the optimistic flip on failure.
         setStarred(!next);
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    setError(null);
+    startMuteTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ muted: next }),
+      });
+      if (!res.ok) {
+        setMuted(!next);
         const b = (await res.json().catch(() => ({}))) as { error?: string };
         setError(b.error ?? `Failed (${res.status})`);
         return;
@@ -139,6 +168,7 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
   }
 
   const isDeletePending = pending?.kind === "delete";
+  const anyPending = pending !== null;
 
   return (
     <>
@@ -152,7 +182,7 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
               type="button"
               data-action="star"
               onClick={toggleStar}
-              disabled={isStarPending || pending !== null}
+              disabled={isStarPending || anyPending}
               aria-pressed={starred}
               title={starred ? "Unstar" : "Star"}
               className={`rounded-md border px-2 py-1.5 text-sm disabled:opacity-50 ${
@@ -167,7 +197,7 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
               type="button"
               data-action="archive"
               onClick={archive}
-              disabled={pending !== null}
+              disabled={anyPending}
               title={archived ? "Unarchive" : "Archive"}
               className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
             >
@@ -175,9 +205,24 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
             </button>
             <button
               type="button"
+              data-action="mute"
+              onClick={toggleMute}
+              disabled={isMutePending || anyPending}
+              aria-pressed={muted}
+              title={muted ? "Unmute thread" : "Mute thread — new replies stay archived"}
+              className={`rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                muted
+                  ? "border-neutral-400 bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+              }`}
+            >
+              {muted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              type="button"
               data-action="delete"
               onClick={deleteThread}
-              disabled={pending !== null}
+              disabled={anyPending}
               title="Delete"
               className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50"
             >
