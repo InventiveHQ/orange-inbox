@@ -1,4 +1,5 @@
-import PostalMime, { type Address, type Attachment } from "postal-mime";
+import PostalMime, { type Address, type Attachment, type Header } from "postal-mime";
+import { parseAuthenticationResults } from "./auth-results";
 import type { AddressInfo, ParsedAttachment, ParsedMessage } from "./types";
 
 export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
@@ -6,12 +7,30 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
 
   const text = parsed.text;
   const html = parsed.html;
+  const from = flattenOne(parsed.from) ?? { addr: "" };
+
+  // Concatenate all Authentication-Results headers (some MTAs stamp more
+  // than one — e.g. one per upstream hop). The parser treats `;`-joined
+  // input as multiple methods, which is what we want.
+  const authResultsHeader = collectHeader(parsed.headers, "authentication-results");
+  const authResults = parseAuthenticationResults(authResultsHeader);
+
+  // Reply-To: postal-mime gives us an Address[] (could be a single mailbox
+  // or a group). We only care about the first usable address, lowercased.
+  // We surface it ONLY if it differs from from.addr — that's the trigger
+  // for the safety banner downstream, and storing-only-when-different
+  // keeps the column meaningful as an `IS NOT NULL` predicate.
+  const replyTo = flattenOne(parsed.replyTo?.[0]);
+  const fromAddrLower = from.addr.toLowerCase();
+  const replyToLower = replyTo?.addr ? replyTo.addr.toLowerCase() : null;
+  const replyToAddr =
+    replyToLower && replyToLower !== fromAddrLower ? replyToLower : null;
 
   return {
     messageId: parsed.messageId ?? `<${crypto.randomUUID()}@orange-inbox.local>`,
     inReplyTo: parsed.inReplyTo,
     references: splitReferences(parsed.references),
-    from: flattenOne(parsed.from) ?? { addr: "" },
+    from,
     to: flattenMany(parsed.to),
     cc: flattenMany(parsed.cc),
     bcc: flattenMany(parsed.bcc),
@@ -21,7 +40,43 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
     html,
     snippet: makeSnippet(text, html),
     attachments: (parsed.attachments ?? []).map(toParsedAttachment),
+    authResults,
+    replyToAddr,
   };
+}
+
+// Collect every header value matching the (lowercase) name and join them
+// with `;` so the Authentication-Results parser sees them as a single
+// multi-segment value.
+function collectHeader(headers: Header[] | undefined, lowerName: string): string {
+  if (!headers || headers.length === 0) return "";
+  const values: string[] = [];
+  for (const h of headers) {
+    if (h.key.toLowerCase() === lowerName && h.value) {
+      values.push(h.value);
+    }
+  }
+  return values.join("; ");
+}
+
+// Returns true when this mailbox has never received a message from the
+// given from_addr before. Case-insensitive (we lowercase on insert too).
+// `mailDb` is the *target* mail DB for the new message — running the
+// lookup against any other DB would miss the previous message. Catches
+// both first-ever-message and first-ever-message-in-this-mailbox.
+export async function isFirstContact(
+  mailDb: D1Database,
+  mailboxId: string,
+  fromAddrLower: string,
+): Promise<boolean> {
+  if (!fromAddrLower) return false;
+  const row = await mailDb
+    .prepare(
+      "SELECT 1 AS hit FROM messages WHERE mailbox_id = ? AND LOWER(from_addr) = ? LIMIT 1",
+    )
+    .bind(mailboxId, fromAddrLower)
+    .first<{ hit: number }>();
+  return row === null;
 }
 
 // Exported so tests can hit the helper directly without going through
