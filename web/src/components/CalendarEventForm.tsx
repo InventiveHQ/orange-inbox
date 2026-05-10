@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { type CalendarEvent } from "./CalendarManager";
+import { type CalendarEvent, type CalendarSummary } from "./CalendarManager";
 
 // Create / edit modal for self events. Invites are read-only — for those
 // this form renders a "View original message" link plus the readonly fields
@@ -16,6 +16,14 @@ interface Props {
     endsAt?: number;
     allDay?: boolean;
   };
+  // Calendars the user can post to (#78). Personal is always present;
+  // mailbox calendars come from the API. Pre-existing callers (none today)
+  // can pass an empty list and the dropdown collapses to Personal-only.
+  calendars?: CalendarSummary[];
+  // Initial value for the Calendar dropdown. "personal" (default) lands
+  // events in Personal; a mailbox id places them on that mailbox's
+  // calendar. Edit mode falls back to the existing row's mailbox_id.
+  defaultCalendarId?: string;
   onClose: () => void;
   onSaved: () => void;
   onDeleted: () => void;
@@ -24,6 +32,8 @@ interface Props {
 export default function CalendarEventForm({
   event,
   defaults,
+  calendars = [],
+  defaultCalendarId = "personal",
   onClose,
   onSaved,
   onDeleted,
@@ -40,6 +50,13 @@ export default function CalendarEventForm({
   const [location, setLocation] = useState(event?.location ?? "");
   const [description, setDescription] = useState(event?.description ?? "");
   const [allDay, setAllDay] = useState(initialAllDay);
+  // Edit mode preserves the row's calendar attribution; create mode picks
+  // from the prop (typically the sidebar's current scope, defaulting to
+  // Personal on the consolidated view).
+  const initialCalendarId = event
+    ? event.mailbox_id ?? "personal"
+    : defaultCalendarId;
+  const [calendarId, setCalendarId] = useState<string>(initialCalendarId);
   const [startsAt, setStartsAt] = useState<string>(toLocalInput(initialStartSec));
   const [endsAt, setEndsAt] = useState<string>(
     initialEndSec != null ? toLocalInput(initialEndSec) : "",
@@ -95,6 +112,9 @@ export default function CalendarEventForm({
       all_day: allDay,
       location: location.trim() || null,
       description: description.trim() || null,
+      // The API normalises "personal" → null on its end. Sending the
+      // string keeps the wire format symmetric with the GET ?mailbox= path.
+      mailbox_id: calendarId,
     };
 
     startTransition(async () => {
@@ -170,6 +190,32 @@ export default function CalendarEventForm({
               placeholder="What's the event?"
             />
           </label>
+
+          {/*
+            Calendar dropdown (#78). Hidden in invite mode — invite rows
+            are already attributed to the mailbox they came in on, and
+            the API blocks mailbox_id changes via the source != 'self'
+            guard. We still surface the read-only label below to avoid
+            a confusing "where did this end up?" gap.
+          */}
+          {!isInvite && calendars.length > 0 && (
+            <label className="block">
+              <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                Calendar
+              </span>
+              <select
+                value={calendarId}
+                onChange={e => setCalendarId(e.target.value)}
+                className="mt-1 block w-full rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 px-2 py-1 text-sm"
+              >
+                {calendars.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <label className="block">

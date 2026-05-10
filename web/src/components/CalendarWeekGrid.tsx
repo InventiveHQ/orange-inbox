@@ -12,6 +12,10 @@ import { type CalendarEvent, type NewEventDraft, startOfWeek } from "./CalendarM
 interface Props {
   cursor: Date;
   events: CalendarEvent[];
+  // Per-event color override (#78). The CalendarManager provides a lookup
+  // that maps the event's mailbox_id back to the user's calendar prefs;
+  // returning null falls back to the default sky/brand tones.
+  colorFor?: (ev: CalendarEvent) => string | null;
   onEditEvent: (ev: CalendarEvent) => void;
   onCreateAt: (draft: NewEventDraft) => void;
 }
@@ -19,7 +23,7 @@ interface Props {
 const HOUR_HEIGHT = 40; // px — also drives slot row height in the grid template
 const SLOT_MINUTES = 30; // quick-create snap granularity
 
-export default function CalendarWeekGrid({ cursor, events, onEditEvent, onCreateAt }: Props) {
+export default function CalendarWeekGrid({ cursor, events, colorFor, onEditEvent, onCreateAt }: Props) {
   const router = useRouter();
   const weekStart = startOfWeek(cursor);
   const days: Date[] = Array.from({ length: 7 }, (_, i) => {
@@ -68,6 +72,7 @@ export default function CalendarWeekGrid({ cursor, events, onEditEvent, onCreate
           key={`ad-${d.toISOString()}`}
           date={d}
           events={allDayEventsForDay(allDay, d)}
+          colorFor={colorFor}
           onClick={handleClick}
           onCreate={() => onCreateAt(allDayDraftForDate(d))}
         />
@@ -80,6 +85,7 @@ export default function CalendarWeekGrid({ cursor, events, onEditEvent, onCreate
           key={`col-${d.toISOString()}`}
           date={d}
           events={timedEventsForDay(timed, d)}
+          colorFor={colorFor}
           onClick={handleClick}
           onCreate={draft => onCreateAt(draft)}
         />
@@ -109,11 +115,13 @@ function DayHeader({ date }: { date: Date }) {
 function AllDayCell({
   date,
   events,
+  colorFor,
   onClick,
   onCreate,
 }: {
   date: Date;
   events: CalendarEvent[];
+  colorFor?: (ev: CalendarEvent) => string | null;
   onClick: (e: CalendarEvent) => void;
   onCreate: () => void;
 }) {
@@ -134,7 +142,13 @@ function AllDayCell({
       className="border-b border-r border-neutral-200 dark:border-neutral-800 min-h-[28px] py-1 px-1 flex flex-col gap-0.5 sticky top-[44px] z-10 bg-white dark:bg-neutral-950 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-900/60"
     >
       {events.map(ev => (
-        <EventChip key={ev.id} event={ev} onClick={onClick} compact />
+        <EventChip
+          key={ev.id}
+          event={ev}
+          colorOverride={colorFor?.(ev) ?? null}
+          onClick={onClick}
+          compact
+        />
       ))}
       {events.length === 0 && <div className="text-[10px] text-neutral-300">{" "}</div>}
       {/* date prop unused in render — kept so the layout can derive a tooltip later */}
@@ -162,11 +176,13 @@ function HourLabelsColumn() {
 function DayColumn({
   date,
   events,
+  colorFor,
   onClick,
   onCreate,
 }: {
   date: Date;
   events: CalendarEvent[];
+  colorFor?: (ev: CalendarEvent) => string | null;
   onClick: (e: CalendarEvent) => void;
   onCreate: (draft: NewEventDraft) => void;
 }) {
@@ -194,6 +210,8 @@ function DayColumn({
       ))}
       {events.map(ev => {
         const { top, height } = positionEvent(ev, date);
+        const override = colorFor?.(ev) ?? null;
+        const styleOverride = eventStyle(ev, override);
         return (
           <button
             key={ev.id}
@@ -202,8 +220,10 @@ function DayColumn({
               e.stopPropagation();
               onClick(ev);
             }}
-            className={`absolute left-1 right-1 rounded text-left text-[11px] px-1.5 py-0.5 truncate border ${eventTone(ev)}`}
-            style={{ top, height: Math.max(height, 16) }}
+            className={`absolute left-1 right-1 rounded text-left text-[11px] px-1.5 py-0.5 truncate border ${eventTone(ev, override)}`}
+            // Merge geometry + tone style. eventStyle returns undefined
+            // for the no-override path, so we spread conditionally.
+            style={{ top, height: Math.max(height, 16), ...(styleOverride ?? {}) }}
             title={ev.summary || "(no title)"}
           >
             <span className={ev.cancelled ? "line-through" : ""}>
@@ -264,10 +284,12 @@ function formatSlot(hour: number, minute: number): string {
 
 function EventChip({
   event,
+  colorOverride,
   onClick,
   compact,
 }: {
   event: CalendarEvent;
+  colorOverride?: string | null;
   onClick: (e: CalendarEvent) => void;
   compact?: boolean;
 }) {
@@ -280,7 +302,8 @@ function EventChip({
         e.stopPropagation();
         onClick(event);
       }}
-      className={`text-left text-[11px] truncate rounded px-1.5 ${compact ? "py-0" : "py-0.5"} border ${eventTone(event)}`}
+      className={`text-left text-[11px] truncate rounded px-1.5 ${compact ? "py-0" : "py-0.5"} border ${eventTone(event, colorOverride)}`}
+      style={eventStyle(event, colorOverride)}
       title={event.summary || "(no title)"}
     >
       <span className={event.cancelled ? "line-through" : ""}>
@@ -293,16 +316,58 @@ function EventChip({
 export { allDayDraftForDate, slotDraftForDate, SLOT_MINUTES };
 
 // Tone selection: cancelled is loud (rose) regardless of source so the user
-// can spot dead events at a glance; invites are sky, self events use brand
-// so they pop against the inviter-heavy default.
-export function eventTone(ev: CalendarEvent): string {
+// can spot dead events at a glance. Otherwise we fall back to a per-calendar
+// color (#78) when the caller supplies one — that's the sidebar swatch the
+// user picked. Without an override (legacy callers / not-yet-loaded prefs),
+// we keep the original sky/brand split so events still render usefully.
+//
+// The override is consumed via inline style — Tailwind can't generate
+// arbitrary hex classes at runtime, and the prefs UI lets the user pick
+// any hex value. We emit just the structural utility classes here and
+// expect callers to spread `eventStyle()` into the `style` prop alongside.
+export function eventTone(ev: CalendarEvent, colorOverride?: string | null): string {
   if (ev.cancelled === 1) {
     return "bg-rose-100 dark:bg-rose-950/40 border-rose-300 dark:border-rose-900 text-rose-900 dark:text-rose-200";
+  }
+  if (colorOverride) {
+    // Border + text get the override color; background is a translucent
+    // tint applied via inline style. Border / text inherit currentColor so
+    // the inline style flow keeps them in sync.
+    return "border text-current";
   }
   if (ev.source === "self") {
     return "bg-[var(--color-brand)]/15 border-[var(--color-brand)]/40 text-[var(--color-brand)]";
   }
   return "bg-sky-100 dark:bg-sky-950/40 border-sky-300 dark:border-sky-900 text-sky-900 dark:text-sky-200";
+}
+
+// Inline-style companion to eventTone: returns a style object that paints
+// the event with a per-calendar color override, or `undefined` when no
+// override applies (in which case eventTone's static utility classes
+// handle painting). Cancelled events ignore the override — the rose tone
+// dominates so the audit trail stays unambiguous.
+export function eventStyle(
+  ev: CalendarEvent,
+  colorOverride?: string | null,
+): React.CSSProperties | undefined {
+  if (ev.cancelled === 1 || !colorOverride) return undefined;
+  return {
+    color: colorOverride,
+    borderColor: hexWithAlpha(colorOverride, 0.5),
+    backgroundColor: hexWithAlpha(colorOverride, 0.15),
+  };
+}
+
+// `#rrggbb` + 0..1 alpha → `rgba(...)`. Tailwind's `bg-color/15` syntax
+// requires a known color name; users pick free-form hex from the swatch
+// dialog so we synth the rgba string ourselves.
+function hexWithAlpha(hex: string, alpha: number): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const r = parseInt(m[1].slice(0, 2), 16);
+  const g = parseInt(m[1].slice(2, 4), 16);
+  const b = parseInt(m[1].slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export function allDayEventsForDay(allDay: CalendarEvent[], day: Date): CalendarEvent[] {

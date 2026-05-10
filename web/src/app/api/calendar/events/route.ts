@@ -1,20 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import {
+  PERSONAL_CALENDAR,
+  type CalendarFilter,
   createSelfEvent,
   listCalendarEvents,
+  userHasMailboxAccess,
   type CalendarEventRow,
 } from "@/lib/calendar";
 
-// GET /api/calendar/events?from=<unix>&to=<unix>
+// GET /api/calendar/events?from=<unix>&to=<unix>[&mailbox=<id|personal>]
 //   Returns the caller's calendar rows that overlap [from, to). Both bounds
 //   are required: the grid views always query a bounded window, and an open
 //   range could in theory scan an entire user's history.
+//   `mailbox` filters to a single calendar:
+//     - "personal" → mailbox_id IS NULL only
+//     - any string → that mailbox's calendar (if user has access; mismatch
+//                    falls through to an empty result)
+//     - omitted    → consolidated view (every accessible calendar except
+//                    those marked hidden in user_calendar_prefs)
 //
 // POST /api/calendar/events
-//   Creates a self-authored event. Invites are never created via this route
-//   — those land via the email-worker → message_calendar_events → lazy
-//   promotion path in promoteInvitesForThread.
+//   Creates a self-authored event. Optional `mailbox_id` in the body picks
+//   the target calendar (#78); absence = Personal. Invites are never
+//   created via this route — those land via the email-worker →
+//   message_calendar_events → lazy promotion path in promoteInvitesForThread.
 
 // Cap the window to a year on either side of `from`. Defensive: a 10-year
 // range would still be fine for a typical user (calendar_events_user_starts
@@ -45,7 +55,21 @@ export async function GET(req: NextRequest) {
         { status: 400 },
       );
     }
-    const events = await listCalendarEvents(user.id, from, to);
+
+    // Mailbox filter: "personal" maps onto the NULL-mailbox path; any
+    // other value is treated as a mailbox id. We don't 403 on mismatch —
+    // listCalendarEvents will simply return the empty set, which matches
+    // the "no rows" UX of an unhidden mailbox the user happens to have
+    // never received an invite to. Saves an extra round trip here.
+    const mailboxParam = url.searchParams.get("mailbox");
+    const filter: CalendarFilter | undefined =
+      mailboxParam == null
+        ? undefined
+        : mailboxParam === PERSONAL_CALENDAR
+          ? PERSONAL_CALENDAR
+          : mailboxParam;
+
+    const events = await listCalendarEvents(user.id, from, to, filter);
     return NextResponse.json({ events });
   } catch (e) {
     return errorResponse(e);
@@ -59,6 +83,8 @@ interface CreateBody {
   all_day?: boolean;
   location?: string | null;
   description?: string | null;
+  // null / undefined / "personal" all map to the Personal calendar.
+  mailbox_id?: string | null;
 }
 
 export async function POST(req: NextRequest) {
@@ -96,8 +122,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Resolve the target calendar. NULL / "personal" / "" → Personal;
+    // anything else is a mailbox id and we enforce access before storing.
+    const requestedMailbox =
+      typeof b.mailbox_id === "string" && b.mailbox_id && b.mailbox_id !== PERSONAL_CALENDAR
+        ? b.mailbox_id
+        : null;
+    if (requestedMailbox && !(await userHasMailboxAccess(user.id, requestedMailbox))) {
+      return NextResponse.json(
+        { error: "forbidden_mailbox", message: "no access to that mailbox" },
+        { status: 403 },
+      );
+    }
+
     const id = await createSelfEvent({
       userId: user.id,
+      mailboxId: requestedMailbox,
       startsAt: b.starts_at,
       endsAt,
       allDay: !!b.all_day,
@@ -112,6 +152,7 @@ export async function POST(req: NextRequest) {
     const event: Partial<CalendarEventRow> = {
       id,
       user_id: user.id,
+      mailbox_id: requestedMailbox,
       source: "self",
       ical_uid: null,
       source_message_id: null,

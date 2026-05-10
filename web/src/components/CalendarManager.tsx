@@ -34,6 +34,8 @@ export interface NewEventDraft {
 export interface CalendarEvent {
   id: string;
   user_id: string;
+  // Per-mailbox attribution (#78). NULL = Personal calendar.
+  mailbox_id: string | null;
   ical_uid: string | null;
   source: "invite" | "self" | "imported";
   source_message_id: string | null;
@@ -52,6 +54,23 @@ export interface CalendarEvent {
   updated_at?: number;
 }
 
+// Sidebar entry (#78). One row per accessible calendar; "personal" is
+// always present, mailbox calendars come from listMailboxesForUser.
+export interface CalendarSummary {
+  id: string;             // "personal" or mailbox id — what the API takes back
+  mailbox_id: string | null;
+  name: string;
+  color: string;          // hex, fallback default supplied by the API
+  hidden: boolean;
+  kind: "personal" | "mailbox";
+}
+
+// Marker for "no specific calendar selected" — i.e. the consolidated view.
+// Distinct from "personal" (the literal Personal calendar) which is also a
+// valid sidebar selection.
+const SCOPE_ALL = "all" as const;
+type ScopeSelection = typeof SCOPE_ALL | string; // "all" | "personal" | mailbox id
+
 export default function CalendarManager() {
   const router = useRouter();
   const pathname = usePathname();
@@ -59,10 +78,15 @@ export default function CalendarManager() {
 
   const initialView: CalendarView = parseView(searchParams.get("view"));
   const initialDate = parseDate(searchParams.get("date"));
+  // Sidebar scope: which calendar the grid is filtered to. Stored in the
+  // URL so a copied link re-opens to the same view. Default = consolidated.
+  const initialScope: ScopeSelection = searchParams.get("calendar") ?? SCOPE_ALL;
 
   const [view, setView] = useState<CalendarView>(initialView);
   const [cursor, setCursor] = useState<Date>(initialDate);
+  const [scope, setScope] = useState<ScopeSelection>(initialScope);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [calendars, setCalendars] = useState<CalendarSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Modal state: null = closed, NewEventDraft = create (optionally prefilled
@@ -74,12 +98,39 @@ export default function CalendarManager() {
   // Sunday-first week too in v1.
   const fetchWindow = useMemo(() => computeWindow(view, cursor), [view, cursor]);
 
+  // Calendar list — loaded once on mount, refreshed after a pref change.
+  // The grid-event list is independent so a color tweak doesn't have to
+  // re-fetch the heavier event window.
+  const fetchCalendars = useCallback(async () => {
+    try {
+      const res = await fetch("/api/calendar/calendars");
+      const body = (await res.json().catch(() => ({}))) as {
+        calendars?: CalendarSummary[];
+      };
+      if (res.ok) setCalendars(body.calendars ?? []);
+    } catch {
+      // Soft-fail — the grid still works without prefs (default colors,
+      // no hide filtering); the next refresh attempt will retry.
+    }
+  }, []);
+  useEffect(() => {
+    // Mirror the fetchEvents pattern below — fetchCalendars is wrapped in
+    // useCallback and only setState's the calendar list on response.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchCalendars();
+  }, [fetchCalendars]);
+
   const fetchEvents = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const url = `/api/calendar/events?from=${fetchWindow.from}&to=${fetchWindow.to}`;
-      const res = await fetch(url);
+      // Pick up the scope filter — "all" omits the param so the API
+      // returns the consolidated view (with hidden calendars stripped).
+      const url = new URL("/api/calendar/events", window.location.origin);
+      url.searchParams.set("from", String(fetchWindow.from));
+      url.searchParams.set("to", String(fetchWindow.to));
+      if (scope !== SCOPE_ALL) url.searchParams.set("mailbox", scope);
+      const res = await fetch(url.pathname + url.search);
       const body = (await res.json().catch(() => ({}))) as {
         events?: CalendarEvent[];
         error?: string;
@@ -94,11 +145,61 @@ export default function CalendarManager() {
     } finally {
       setLoading(false);
     }
-  }, [fetchWindow.from, fetchWindow.to]);
+  }, [fetchWindow.from, fetchWindow.to, scope]);
 
   useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
+
+  // mailbox_id → color lookup so the grid can paint each event with its
+  // calendar's swatch. Personal events (mailbox_id null) use the Personal
+  // pref color; missing entries fall back to the original hard-coded tones
+  // in eventTone.
+  const colorByMailbox = useMemo(() => {
+    const m = new Map<string | null, string>();
+    for (const c of calendars) m.set(c.mailbox_id, c.color);
+    return m;
+  }, [calendars]);
+  const colorFor = useCallback(
+    (ev: CalendarEvent): string | null => colorByMailbox.get(ev.mailbox_id) ?? null,
+    [colorByMailbox],
+  );
+
+  // Patch a calendar pref (color or hidden). Optimistically updates the
+  // sidebar so the swatch + checkbox don't lag the click; on failure we
+  // re-fetch to undo.
+  const updateCalendar = useCallback(
+    async (id: string, patch: { color?: string; hidden?: boolean }) => {
+      // Snapshot for rollback.
+      const prev = calendars;
+      setCalendars(prev.map(c => (c.id === id ? { ...c, ...patch } : c)));
+      try {
+        const res = await fetch("/api/calendar/calendars", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            mailbox_id: id, // API normalises "personal" → null on its side
+            ...patch,
+          }),
+        });
+        if (!res.ok) {
+          // Rollback. fetchCalendars() will overwrite anyway, but this
+          // keeps the visual blip short.
+          setCalendars(prev);
+          fetchCalendars();
+          return;
+        }
+        // Hidden toggles affect the consolidated view's row set — re-fetch
+        // events so the grid mirrors the new visibility.
+        if (patch.hidden !== undefined && scope === SCOPE_ALL) {
+          fetchEvents();
+        }
+      } catch {
+        setCalendars(prev);
+      }
+    },
+    [calendars, fetchCalendars, fetchEvents, scope],
+  );
 
   // Keep the URL in sync so navigation feels right and links are sharable.
   // Using replace rather than push — view/date changes shouldn't flood the
@@ -107,6 +208,8 @@ export default function CalendarManager() {
     const params = new URLSearchParams(searchParams.toString());
     params.set("view", view);
     params.set("date", formatDateParam(cursor));
+    if (scope === SCOPE_ALL) params.delete("calendar");
+    else params.set("calendar", scope);
     const qs = params.toString();
     const next = qs ? `${pathname}?${qs}` : pathname;
     // Skip when already in sync (initial render carries the right params).
@@ -117,7 +220,7 @@ export default function CalendarManager() {
     // deps — they're stable enough and re-running on every searchParams
     // change would loop with our own replace().
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, cursor]);
+  }, [view, cursor, scope]);
 
   function shiftCursor(delta: number) {
     const next = new Date(cursor);
@@ -151,7 +254,14 @@ export default function CalendarManager() {
   }, [events, searchQuery]);
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex h-full min-h-0">
+      <CalendarSidebar
+        calendars={calendars}
+        scope={scope}
+        onScopeChange={setScope}
+        onUpdate={updateCalendar}
+      />
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
       <header className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 flex flex-wrap items-center gap-3">
         <h1 className="text-base font-semibold mr-2">Calendar</h1>
         {searchQuery && (
@@ -226,6 +336,7 @@ export default function CalendarManager() {
           <CalendarDayGrid
             cursor={cursor}
             events={filteredEvents}
+            colorFor={colorFor}
             onEditEvent={ev => setEditing(ev)}
             onCreateAt={draft => setEditing(draft)}
           />
@@ -233,6 +344,7 @@ export default function CalendarManager() {
           <CalendarWeekGrid
             cursor={cursor}
             events={filteredEvents}
+            colorFor={colorFor}
             onEditEvent={ev => setEditing(ev)}
             onCreateAt={draft => setEditing(draft)}
           />
@@ -240,6 +352,7 @@ export default function CalendarManager() {
           <CalendarMonthGrid
             cursor={cursor}
             events={filteredEvents}
+            colorFor={colorFor}
             onEditEvent={ev => setEditing(ev)}
             onSelectDate={d => {
               setCursor(d);
@@ -253,6 +366,12 @@ export default function CalendarManager() {
       {editing !== null && (
         <CalendarEventForm
           event={isNewDraft(editing) ? null : editing}
+          calendars={calendars}
+          // Default the dropdown to whichever calendar is scoped in the
+          // sidebar — if the user is looking at "Marketing", a "+ New event"
+          // click should land there, not in Personal. Consolidated view
+          // (SCOPE_ALL) falls back to Personal.
+          defaultCalendarId={scope === SCOPE_ALL ? "personal" : scope}
           defaults={
             isNewDraft(editing)
               ? {
@@ -273,7 +392,129 @@ export default function CalendarManager() {
           }}
         />
       )}
+      </div>
     </div>
+  );
+}
+
+// Left-rail sidebar: one row per calendar with a color swatch + visibility
+// checkbox. Clicking a row name scopes the grid to that calendar; clicking
+// "All calendars" returns to the consolidated view. Colors are clickable
+// → opens an inline picker with a fixed Tailwind palette so the user
+// doesn't have to type hex codes (the API still accepts free-form hex on
+// the wire, but UX defaults stay constrained).
+const COLOR_PALETTE: string[] = [
+  "#3b82f6", // blue
+  "#22c55e", // green
+  "#f97316", // orange
+  "#ef4444", // red
+  "#a855f7", // purple
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#eab308", // yellow
+  "#64748b", // slate
+];
+
+function CalendarSidebar({
+  calendars,
+  scope,
+  onScopeChange,
+  onUpdate,
+}: {
+  calendars: CalendarSummary[];
+  scope: ScopeSelection;
+  onScopeChange: (s: ScopeSelection) => void;
+  onUpdate: (id: string, patch: { color?: string; hidden?: boolean }) => void;
+}) {
+  const [openSwatchId, setOpenSwatchId] = useState<string | null>(null);
+  return (
+    <aside className="hidden md:flex w-56 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50/40 dark:bg-neutral-950/40 overflow-y-auto">
+      <div className="px-3 py-2 text-[11px] uppercase tracking-wider font-medium text-neutral-500">
+        Calendars
+      </div>
+      <button
+        type="button"
+        onClick={() => onScopeChange(SCOPE_ALL)}
+        className={`text-left px-3 py-1.5 text-xs ${
+          scope === SCOPE_ALL
+            ? "bg-[var(--color-brand)]/10 text-[var(--color-brand)] font-medium"
+            : "hover:bg-neutral-100 dark:hover:bg-neutral-900 text-neutral-700 dark:text-neutral-300"
+        }`}
+      >
+        All calendars
+      </button>
+      <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-neutral-400">
+        Filter
+      </div>
+      <ul className="flex-1 px-1 pb-2 space-y-0.5">
+        {calendars.map(c => {
+          const active = scope === c.id;
+          return (
+            <li key={c.id} className="relative">
+              <div
+                className={`group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs ${
+                  active
+                    ? "bg-[var(--color-brand)]/10"
+                    : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={!c.hidden}
+                  onChange={e => onUpdate(c.id, { hidden: !e.target.checked })}
+                  aria-label={`Show ${c.name}`}
+                  className="h-3 w-3 cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() => setOpenSwatchId(openSwatchId === c.id ? null : c.id)}
+                  aria-label={`Recolor ${c.name}`}
+                  className="h-3 w-3 rounded-full ring-1 ring-black/10 dark:ring-white/10 cursor-pointer shrink-0"
+                  style={{ backgroundColor: c.color }}
+                />
+                <button
+                  type="button"
+                  onClick={() => onScopeChange(c.id)}
+                  className={`flex-1 truncate text-left ${
+                    active
+                      ? "text-[var(--color-brand)] font-medium"
+                      : "text-neutral-700 dark:text-neutral-300"
+                  } ${c.hidden ? "opacity-50" : ""}`}
+                  title={c.name}
+                >
+                  {c.name}
+                </button>
+              </div>
+              {openSwatchId === c.id && (
+                <div
+                  className="absolute z-10 left-2 top-full mt-1 flex flex-wrap gap-1 p-2 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-md"
+                  role="dialog"
+                  aria-label={`Pick color for ${c.name}`}
+                >
+                  {COLOR_PALETTE.map(hex => (
+                    <button
+                      key={hex}
+                      type="button"
+                      aria-label={`Set color ${hex}`}
+                      onClick={() => {
+                        onUpdate(c.id, { color: hex });
+                        setOpenSwatchId(null);
+                      }}
+                      className={`h-4 w-4 rounded-full ring-1 ring-black/10 dark:ring-white/10 ${
+                        c.color.toLowerCase() === hex
+                          ? "outline outline-2 outline-offset-1 outline-[var(--color-brand)]"
+                          : ""
+                      }`}
+                      style={{ backgroundColor: hex }}
+                    />
+                  ))}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
   );
 }
 

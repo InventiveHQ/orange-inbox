@@ -132,6 +132,7 @@ export async function POST(
         icalUid: found.uid,
         status,
         fallback: {
+          mailboxId: found.mailboxId,
           sourceMessageId: id,
           startsAt: found.startsAt,
           endsAt: found.endsAt,
@@ -155,6 +156,7 @@ export async function POST(
 }
 
 interface RsvpContext {
+  mailboxId: string;
   mailboxLocalPart: string;
   mailboxDomainName: string;
   organizer: string | null;
@@ -204,6 +206,7 @@ async function lookupRsvpContext(
     if (access.role === "reader") return null; // readers can't send mail
 
     return {
+      mailboxId: row.mailbox_id,
       mailboxLocalPart: access.local_part,
       mailboxDomainName: access.domain_name,
       organizer: row.organizer,

@@ -5,6 +5,7 @@ import { type CalendarEvent, type NewEventDraft } from "./CalendarManager";
 import {
   allDayDraftForDate,
   allDayEventsForDay,
+  eventStyle,
   eventTone,
   positionEvent,
   slotDraftForDate,
@@ -19,13 +20,14 @@ import {
 interface Props {
   cursor: Date;
   events: CalendarEvent[];
+  colorFor?: (ev: CalendarEvent) => string | null;
   onEditEvent: (ev: CalendarEvent) => void;
   onCreateAt: (draft: NewEventDraft) => void;
 }
 
 const HOUR_HEIGHT = 40;
 
-export default function CalendarDayGrid({ cursor, events, onEditEvent, onCreateAt }: Props) {
+export default function CalendarDayGrid({ cursor, events, colorFor, onEditEvent, onCreateAt }: Props) {
   const router = useRouter();
   const day = new Date(cursor);
   day.setHours(0, 0, 0, 0);
@@ -82,22 +84,26 @@ export default function CalendarDayGrid({ cursor, events, onEditEvent, onCreateA
         {allDayForDay.length === 0 ? (
           <div className="text-[11px] text-neutral-400">No all-day events</div>
         ) : (
-          allDayForDay.map(ev => (
-            <button
-              key={ev.id}
-              type="button"
-              onClick={e => {
-                e.stopPropagation();
-                handleClick(ev);
-              }}
-              className={`text-left text-[12px] truncate rounded px-2 py-0.5 border ${eventTone(ev)}`}
-              title={ev.summary || "(no title)"}
-            >
-              <span className={ev.cancelled ? "line-through" : ""}>
-                {ev.summary || "(no title)"}
-              </span>
-            </button>
-          ))
+          allDayForDay.map(ev => {
+            const override = colorFor?.(ev) ?? null;
+            return (
+              <button
+                key={ev.id}
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  handleClick(ev);
+                }}
+                className={`text-left text-[12px] truncate rounded px-2 py-0.5 border ${eventTone(ev, override)}`}
+                style={eventStyle(ev, override)}
+                title={ev.summary || "(no title)"}
+              >
+                <span className={ev.cancelled ? "line-through" : ""}>
+                  {ev.summary || "(no title)"}
+                </span>
+              </button>
+            );
+          })
         )}
       </div>
 
@@ -132,6 +138,8 @@ export default function CalendarDayGrid({ cursor, events, onEditEvent, onCreateA
         ))}
         {timedForDay.map(ev => {
           const { top, height } = positionEvent(ev, day);
+          const override = colorFor?.(ev) ?? null;
+          const styleOverride = eventStyle(ev, override);
           return (
             <button
               key={ev.id}
@@ -140,8 +148,8 @@ export default function CalendarDayGrid({ cursor, events, onEditEvent, onCreateA
                 e.stopPropagation();
                 handleClick(ev);
               }}
-              className={`absolute left-2 right-2 rounded text-left text-[12px] px-2 py-0.5 truncate border ${eventTone(ev)}`}
-              style={{ top, height: Math.max(height, 18) }}
+              className={`absolute left-2 right-2 rounded text-left text-[12px] px-2 py-0.5 truncate border ${eventTone(ev, override)}`}
+              style={{ top, height: Math.max(height, 18), ...(styleOverride ?? {}) }}
               title={ev.summary || "(no title)"}
             >
               <div className={`font-medium truncate ${ev.cancelled ? "line-through" : ""}`}>

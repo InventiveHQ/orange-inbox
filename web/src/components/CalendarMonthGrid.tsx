@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { type CalendarEvent, type NewEventDraft, startOfWeek } from "./CalendarManager";
-import { allDayDraftForDate, eventTone } from "./CalendarWeekGrid";
+import { allDayDraftForDate, eventStyle, eventTone } from "./CalendarWeekGrid";
 
 // Month view: 6×7 day-cell grid. Each cell shows up to MAX_PER_CELL event
 // titles with a "+ N more" overflow indicator. Clicking the date number
@@ -14,6 +14,7 @@ const MAX_PER_CELL = 3;
 interface Props {
   cursor: Date;
   events: CalendarEvent[];
+  colorFor?: (ev: CalendarEvent) => string | null;
   onEditEvent: (ev: CalendarEvent) => void;
   onSelectDate: (d: Date) => void;
   onCreateAt: (draft: NewEventDraft) => void;
@@ -22,6 +23,7 @@ interface Props {
 export default function CalendarMonthGrid({
   cursor,
   events,
+  colorFor,
   onEditEvent,
   onSelectDate,
   onCreateAt,
@@ -62,6 +64,7 @@ export default function CalendarMonthGrid({
             date={d}
             month={cursor.getMonth()}
             events={eventsForDay(events, d)}
+            colorFor={colorFor}
             onEventClick={handleClick}
             onSelectDate={onSelectDate}
             onCreate={() => onCreateAt(allDayDraftForDate(d))}
@@ -76,6 +79,7 @@ function DayCell({
   date,
   month,
   events,
+  colorFor,
   onEventClick,
   onSelectDate,
   onCreate,
@@ -83,6 +87,7 @@ function DayCell({
   date: Date;
   month: number;
   events: CalendarEvent[];
+  colorFor?: (ev: CalendarEvent) => string | null;
   onEventClick: (ev: CalendarEvent) => void;
   onSelectDate: (d: Date) => void;
   onCreate: () => void;
@@ -129,22 +134,26 @@ function DayCell({
         {date.getDate()}
       </button>
       <div className="mt-0.5 flex flex-col gap-0.5 min-h-0">
-        {visible.map(ev => (
-          <button
-            key={ev.id}
-            type="button"
-            onClick={e => {
-              e.stopPropagation();
-              onEventClick(ev);
-            }}
-            className={`text-left text-[10px] leading-tight truncate rounded px-1 py-px border ${eventTone(ev)}`}
-            title={ev.summary || "(no title)"}
-          >
-            <span className={ev.cancelled ? "line-through" : ""}>
-              {ev.summary || "(no title)"}
-            </span>
-          </button>
-        ))}
+        {visible.map(ev => {
+          const override = colorFor?.(ev) ?? null;
+          return (
+            <button
+              key={ev.id}
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                onEventClick(ev);
+              }}
+              className={`text-left text-[10px] leading-tight truncate rounded px-1 py-px border ${eventTone(ev, override)}`}
+              style={eventStyle(ev, override)}
+              title={ev.summary || "(no title)"}
+            >
+              <span className={ev.cancelled ? "line-through" : ""}>
+                {ev.summary || "(no title)"}
+              </span>
+            </button>
+          );
+        })}
         {overflow > 0 && (
           <button
             type="button"
