@@ -1,6 +1,7 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
 import { formatFullDate, senderLabel } from "@/lib/format";
 import ApplyLabelButton from "./ApplyLabelButton";
+import AttachmentPreview from "./AttachmentPreview";
 import Avatar from "./Avatar";
 import BackToListButton from "./BackToListButton";
 import ReplyButton from "./ReplyButton";
@@ -153,24 +154,49 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
 }
 
 function AttachmentsList({ attachments }: { attachments: AttachmentRow[] }) {
+  // Split: images and PDFs are handed to the client previewer (thumbnails +
+  // chip+Preview button + lightbox); everything else stays as a plain
+  // download chip rendered server-side.
+  const previewable = attachments.filter(a => isPreviewable(a.content_type));
+  const other = attachments.filter(a => !isPreviewable(a.content_type));
+
   return (
-    <ul className="mt-3 flex flex-wrap gap-2">
-      {attachments.map(a => (
-        <li key={a.id}>
-          <a
-            href={`/api/attachments/${a.id}`}
-            download={a.filename ?? undefined}
-            className="inline-flex items-center gap-2 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-3 py-1.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800"
-          >
-            <span className="font-medium truncate max-w-[16rem]">
-              {a.filename || "attachment"}
-            </span>
-            <span className="text-neutral-500">{formatBytes(a.size)}</span>
-          </a>
-        </li>
-      ))}
-    </ul>
+    <>
+      {previewable.length > 0 && (
+        <AttachmentPreview
+          attachments={previewable.map(a => ({
+            id: a.id,
+            filename: a.filename,
+            content_type: a.content_type,
+            size: a.size,
+          }))}
+        />
+      )}
+      {other.length > 0 && (
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {other.map(a => (
+            <li key={a.id}>
+              <a
+                href={`/api/attachments/${a.id}`}
+                download={a.filename ?? undefined}
+                className="inline-flex items-center gap-2 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-3 py-1.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <span className="font-medium truncate max-w-[16rem]">
+                  {a.filename || "attachment"}
+                </span>
+                <span className="text-neutral-500">{formatBytes(a.size)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
+}
+
+function isPreviewable(contentType: string | null): boolean {
+  if (!contentType) return false;
+  return contentType.startsWith("image/") || contentType === "application/pdf";
 }
 
 function parseAddrs(json: string): Array<{ addr: string; name?: string }> {
