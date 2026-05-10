@@ -34,6 +34,12 @@ interface PatchBody {
   // Reminder timestamp (unix seconds). null clears the reminder. Different
   // from snooze — see remindThread / threads_index.remind_at.
   remind_at?: number | null;
+  // Follow-up nudges (issue #26). `follow_up_enabled` is the per-thread
+  // opt-in. `follow_up_days` is an optional override for the "due after N
+  // days" threshold — explicit null clears the override so the global
+  // default kicks back in.
+  follow_up_enabled?: boolean;
+  follow_up_days?: number | null;
 }
 
 // Toggle thread-level state: star, archive, read. Source of truth for
@@ -93,6 +99,27 @@ export async function PATCH(
       }
       indexUpdates.push("remind_at = ?");
       indexBinds.push(v);
+    }
+    // Follow-up nudges (issue #26). `follow_up_enabled` toggles tracking on
+    // the thread; `follow_up_days` is an optional per-thread day count
+    // override. Both fields are independent — the caller may set days
+    // without touching the on/off bit and vice versa.
+    if (typeof b.follow_up_enabled === "boolean") {
+      indexUpdates.push("follow_up_enabled = ?");
+      indexBinds.push(b.follow_up_enabled ? 1 : 0);
+    }
+    if (b.follow_up_days === null || typeof b.follow_up_days === "number") {
+      const days = b.follow_up_days;
+      if (typeof days === "number") {
+        if (!Number.isFinite(days) || days < 1 || days > 365) {
+          return NextResponse.json(
+            { error: "follow_up_days must be between 1 and 365" },
+            { status: 400 },
+          );
+        }
+      }
+      indexUpdates.push("follow_up_days = ?");
+      indexBinds.push(typeof days === "number" ? Math.floor(days) : null);
     }
 
     if (indexUpdates.length === 0) {

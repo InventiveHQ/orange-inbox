@@ -82,6 +82,8 @@ export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Pr
             initialMuted={thread.muted === 1}
             initialPinned={thread.pinned === 1}
             initialRemindAt={thread.remind_at}
+            initialFollowUpEnabled={thread.follow_up_enabled === 1}
+            initialFollowUpDays={thread.follow_up_days}
           />
           <ApplyLabelButton threadId={thread.id} />
           <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />

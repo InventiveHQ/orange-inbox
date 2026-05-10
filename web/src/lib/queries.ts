@@ -107,6 +107,13 @@ export interface ThreadListItem {
   // until the time elapses, remind keeps the thread visible and pops a
   // "Reminder due" banner at the chosen time. NULL when no reminder set.
   remind_at: number | null;
+  // Follow-up nudges (issue #26). When `follow_up_enabled = 1` the thread is
+  // a candidate for the Follow-ups view: it surfaces once `last_message_at`
+  // is older than `follow_up_days` AND the most-recent message is outbound
+  // (latter check happens at listDueFollowups time — not stored here). NULL
+  // `follow_up_days` means "use the global default" (4d).
+  follow_up_enabled: number;
+  follow_up_days: number | null;
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
@@ -218,6 +225,8 @@ export async function listThreads(
       ti.muted,
       ti.pinned,
       ti.remind_at,
+      ti.follow_up_enabled,
+      ti.follow_up_days,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -289,6 +298,11 @@ export interface ThreadDetail {
     // <= now() the reader shows a "Reminder due" banner; the thread itself
     // stays visible regardless of the timestamp (unlike snooze).
     remind_at: number | null;
+    // Follow-up nudge state (issue #26). `follow_up_enabled` is the
+    // per-thread opt-in; `follow_up_days` is an optional per-thread override
+    // for the "due after N days" threshold (NULL falls back to the default).
+    follow_up_enabled: number;
+    follow_up_days: number | null;
   };
   messages: ThreadMessage[];
 }
@@ -389,6 +403,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
       `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
               ti.message_count, ti.unread_count, ti.starred, ti.archived,
               ti.muted, ti.pinned, ti.snoozed_until, ti.remind_at,
+              ti.follow_up_enabled, ti.follow_up_days,
               d.name AS domain_name,
               mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role
@@ -751,6 +766,8 @@ export async function listVipThreads(
       ti.muted,
       ti.pinned,
       ti.remind_at,
+      ti.follow_up_enabled,
+      ti.follow_up_days,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -788,6 +805,109 @@ export async function listVipThreads(
     .bind(userId, limit)
     .all<ThreadListRow>();
   return (results ?? []).map(parseThreadListRow);
+}
+
+// ─── Follow-up nudges (issue #26) ────────────────────────────────────────
+//
+// "You sent this N days ago and they haven't replied — bump?" Surfaces
+// threads where:
+//   - follow_up_enabled = 1 (user has opted this thread in)
+//   - last_message_at is older than `follow_up_days` (per-thread override)
+//     or `defaultDays` (global fallback)
+//   - the thread isn't archived or muted (those views are deliberately
+//     quiet — nudging them defeats the point)
+//   - the most-recent message in the thread is outbound (we're waiting on
+//     them, not the other way around)
+//
+// The first three conditions are decided in SQL against threads_index. The
+// last one needs the mail DB: we fan out per-candidate using
+// getMailDbForThread and check the most-recent message's direction. The
+// candidate set is already filtered by the partial index from migration
+// 0034 (only `follow_up_enabled = 1` rows), so this fan-out is bounded by
+// "how many threads has the user marked for follow-up" rather than the
+// inbox at large. A cached `last_direction` column on threads_index can
+// land later if this query gets hot; for v1 the fan-out is fine.
+export async function listDueFollowups(
+  userId: string,
+  defaultDays = 4,
+): Promise<ThreadListItem[]> {
+  // Cap at 100 so the fan-out below stays bounded even if the user has
+  // turned on follow-ups for hundreds of threads. Most-recently-due first
+  // (i.e. oldest waiting threads sort to the top so the user attacks the
+  // longest-waiting ones first).
+  const limit = 100;
+  const sql = `
+    SELECT
+      ti.thread_id AS id,
+      ti.subject_normalized,
+      ti.last_message_at,
+      ti.message_count,
+      ti.unread_count,
+      ti.starred,
+      ti.archived,
+      ti.muted,
+      ti.pinned,
+      ti.remind_at,
+      ti.follow_up_enabled,
+      ti.follow_up_days,
+      d.id   AS domain_id,
+      d.name AS domain_name,
+      mb.id  AS mailbox_id,
+      mb.local_part AS mailbox_local_part,
+      ti.last_subject   AS last_subject,
+      ti.last_from_addr AS last_from_addr,
+      ti.last_from_name AS last_from_name,
+      ti.last_snippet   AS last_snippet,
+      (
+        SELECT JSON_GROUP_ARRAY(
+                 JSON_OBJECT('id', l.id, 'name', l.name, 'color', l.color)
+               )
+          FROM (
+            SELECT l.id, l.name, l.color
+              FROM thread_labels tl
+              INNER JOIN labels l ON l.id = tl.label_id
+             WHERE tl.thread_id = ti.thread_id
+             ORDER BY l.name
+          ) AS l
+      ) AS labels_json
+    FROM threads_index ti
+    INNER JOIN mailboxes mb ON mb.id = ti.mailbox_id
+    INNER JOIN domains d   ON d.id = mb.domain_id
+    INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
+    WHERE uma.user_id = ?
+      AND ti.follow_up_enabled = 1
+      AND ti.archived = 0
+      AND ti.muted = 0
+      AND ti.last_message_at < (unixepoch() - (COALESCE(ti.follow_up_days, ?) * 86400))
+    ORDER BY ti.last_message_at ASC
+    LIMIT ?
+  `;
+  const { results } = await getDb()
+    .prepare(sql)
+    .bind(userId, defaultDays, limit)
+    .all<ThreadListRow>();
+  const candidates = (results ?? []).map(parseThreadListRow);
+  if (candidates.length === 0) return [];
+
+  // Filter to threads whose latest message is outbound. Per-thread fan-out
+  // against each mail DB — single round-trip per candidate. We could batch
+  // by mail DB id, but the candidate cap above plus the partial index keep
+  // this O(opted-in threads), which is small in practice.
+  const out: ThreadListItem[] = [];
+  for (const t of candidates) {
+    const db = await getMailDbForThread(t.id);
+    const row = await db
+      .prepare(
+        `SELECT direction FROM messages
+          WHERE thread_id = ?
+          ORDER BY date DESC
+          LIMIT 1`,
+      )
+      .bind(t.id)
+      .first<{ direction: "inbound" | "outbound" }>();
+    if (row?.direction === "outbound") out.push(t);
+  }
+  return out;
 }
 
 // ─── Category tabs (issue #68) ───────────────────────────────────────────

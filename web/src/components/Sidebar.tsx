@@ -331,6 +331,13 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
+          href="/inbox/followups"
+          label="Follow-ups"
+          active={scope === "followups"}
+          icon={<FollowUpsIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/inbox/drafts"
           label="Drafts"
           active={scope === "drafts"}
@@ -1204,6 +1211,17 @@ function VipIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1.25 9.86 5l4.14.6-3 2.93.71 4.13L8 10.71l-3.71 1.95.71-4.13-3-2.93L6.14 5 8 1.25Z" />
+    </svg>
+  );
+}
+
+// Follow-ups icon — clock face with a small "out" arrow, visually distinct
+// from the Scheduled clock (which is a plain clock) and the Remind bell.
+// Signals "this is about something you sent that's still hanging".
+function FollowUpsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 1.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Zm.75 2.5a.75.75 0 0 0-1.5 0v3.25c0 .2.08.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94V5Z" />
     </svg>
   );
 }

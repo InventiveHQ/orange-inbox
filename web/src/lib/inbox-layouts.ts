@@ -385,6 +385,8 @@ export async function loadPaneThreads(
       ti.muted,
       ti.pinned,
       ti.remind_at,
+      ti.follow_up_enabled,
+      ti.follow_up_days,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -423,6 +425,8 @@ export async function loadPaneThreads(
     muted: number;
     pinned: number;
     remind_at: number | null;
+    follow_up_enabled: number;
+    follow_up_days: number | null;
     domain_id: string;
     domain_name: string;
     mailbox_id: string;

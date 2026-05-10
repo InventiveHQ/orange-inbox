@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "./ToastProvider";
 import RemindButton from "./RemindButton";
@@ -16,7 +16,18 @@ interface Props {
   // sibling-rendered below. Snooze stays in its own component — remind is
   // intentionally a separate concept and a separate mutation endpoint.
   initialRemindAt: number | null;
+  // Follow-up nudges (issue #26). When enabled the thread becomes a
+  // candidate for the Follow-ups view. `initialFollowUpDays` is the
+  // per-thread day-count override; NULL falls back to the global default
+  // (DEFAULT_FOLLOWUP_DAYS below). Kept in its own toolbar group so the
+  // parallel shared-mailbox-assignment work merges cleanly around it.
+  initialFollowUpEnabled?: boolean;
+  initialFollowUpDays?: number | null;
 }
+
+// Default day-count surfaced when the user enables nudges on a thread with
+// no per-thread override. Kept in sync with listDueFollowups' default.
+const DEFAULT_FOLLOWUP_DAYS = 4;
 
 // Window during which the user can hit Undo. Mirrors Gmail's "Conversation
 // archived" toast cadence; long enough to be a safety net, short enough that
@@ -46,6 +57,8 @@ export default function ThreadActions({
   initialMuted,
   initialPinned,
   initialRemindAt,
+  initialFollowUpEnabled = false,
+  initialFollowUpDays = null,
 }: Props) {
   const router = useRouter();
   const { toast } = useToast();
@@ -53,11 +66,19 @@ export default function ThreadActions({
   const [archived, setArchived] = useState(initialArchived);
   const [muted, setMuted] = useState(initialMuted);
   const [pinned, setPinned] = useState(initialPinned);
+  const [followUpEnabled, setFollowUpEnabled] = useState(initialFollowUpEnabled);
+  const [followUpDays, setFollowUpDays] = useState<number | null>(initialFollowUpDays);
+  const [followUpPopoverOpen, setFollowUpPopoverOpen] = useState(false);
+  const [followUpDaysDraft, setFollowUpDaysDraft] = useState(
+    String(initialFollowUpDays ?? DEFAULT_FOLLOWUP_DAYS),
+  );
+  const followUpPopoverRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [isStarPending, startStarTransition] = useTransition();
   const [isMutePending, startMuteTransition] = useTransition();
   const [isPinPending, startPinTransition] = useTransition();
+  const [isFollowUpPending, startFollowUpTransition] = useTransition();
 
   function toggleStar() {
     const next = !starred;
@@ -162,6 +183,75 @@ export default function ThreadActions({
       router.refresh();
     });
   }
+
+  // Follow-up nudges (issue #26). Toggling the button flips
+  // `follow_up_enabled` on threads_index; clicking the chevron beside it
+  // opens a small popover where the user can override the per-thread day
+  // count. Days override survives toggling off/on so users don't lose their
+  // chosen cadence by experimenting.
+  function toggleFollowUp() {
+    const next = !followUpEnabled;
+    setFollowUpEnabled(next);
+    setError(null);
+    startFollowUpTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ follow_up_enabled: next }),
+      });
+      if (!res.ok) {
+        setFollowUpEnabled(!next);
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      toast({
+        message: next ? "Follow-up nudges on" : "Follow-up nudges off",
+      });
+      router.refresh();
+    });
+  }
+
+  function submitFollowUpDays() {
+    const parsed = Number(followUpDaysDraft);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 365) {
+      setError("Days must be between 1 and 365");
+      return;
+    }
+    const next = Math.floor(parsed);
+    setFollowUpDays(next);
+    setFollowUpPopoverOpen(false);
+    setError(null);
+    startFollowUpTransition(async () => {
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ follow_up_days: next }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  // Close the days-popover on outside-click. Mirrors the pattern used by
+  // ThreadList's label menu so the UX feels consistent across the app.
+  useEffect(() => {
+    if (!followUpPopoverOpen) return;
+    function onDown(e: MouseEvent) {
+      if (
+        followUpPopoverRef.current &&
+        !followUpPopoverRef.current.contains(e.target as Node)
+      ) {
+        setFollowUpPopoverOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [followUpPopoverOpen]);
 
   function archive() {
     if (pending) return;
@@ -332,6 +422,93 @@ export default function ThreadActions({
           </>
         )}
       </div>
+      {/* Follow-up nudges (issue #26). Own toolbar group so the parallel
+          shared-mailbox-assignment work merging into ThreadActions doesn't
+          collide with the main button row above. */}
+      {!isDeletePending && (
+        <div
+          data-toolbar-group="follow-up"
+          className="flex items-center gap-1 mt-2 sm:mt-0 sm:ml-1"
+        >
+          <div className="relative inline-flex" ref={followUpPopoverRef}>
+            <button
+              type="button"
+              data-action="follow-up"
+              onClick={toggleFollowUp}
+              disabled={isFollowUpPending || anyPending}
+              aria-pressed={followUpEnabled}
+              title={
+                followUpEnabled
+                  ? `Follow-up nudges on — due in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
+                  : "Follow-up nudges off — turn on to get reminded when waiting on a reply"
+              }
+              className={`rounded-l-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+                followUpEnabled
+                  ? "border-indigo-400 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+              }`}
+            >
+              {followUpEnabled
+                ? `⏰ Nudge in ${followUpDays ?? DEFAULT_FOLLOWUP_DAYS}d`
+                : "⏰ Nudge"}
+            </button>
+            <button
+              type="button"
+              data-action="follow-up-days"
+              onClick={() => {
+                setFollowUpDaysDraft(
+                  String(followUpDays ?? DEFAULT_FOLLOWUP_DAYS),
+                );
+                setFollowUpPopoverOpen(o => !o);
+              }}
+              disabled={isFollowUpPending || anyPending}
+              aria-label="Edit follow-up days"
+              aria-expanded={followUpPopoverOpen}
+              title="Change follow-up cadence"
+              className={`rounded-r-md border-y border-r px-2 py-1.5 text-sm disabled:opacity-50 ${
+                followUpEnabled
+                  ? "border-indigo-400 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+              }`}
+            >
+              ▾
+            </button>
+            {followUpPopoverOpen && (
+              <div
+                role="dialog"
+                aria-label="Follow-up cadence"
+                className="absolute right-0 top-full mt-1 z-30 w-56 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg p-3"
+              >
+                <label className="block text-xs text-neutral-600 dark:text-neutral-400 mb-1">
+                  Nudge after how many days?
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={followUpDaysDraft}
+                    onChange={e => setFollowUpDaysDraft(e.target.value)}
+                    className="w-20 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={submitFollowUpDays}
+                    className="rounded-md bg-[var(--color-brand)] px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                  >
+                    Save
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-neutral-500">
+                  Default {DEFAULT_FOLLOWUP_DAYS}d. Threads surface in the
+                  Follow-ups view once they pass this threshold without a
+                  reply.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {pending?.kind === "archive" && (
         <UndoToast
           key={`archive-${threadId}-${pending.previousArchived}`}
