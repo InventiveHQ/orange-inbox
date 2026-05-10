@@ -17,6 +17,14 @@ interface Body {
   reply_to_message_id?: string;
   draft_id?: string;
   attachment_ids?: string[];
+  // #66 Confidential mode. expires_at is unix seconds, passcode is an
+  // optional 4-digit string. Empty/missing passcode means "no prompt".
+  confidential?: {
+    expires_at?: number;
+    passcode?: string | null;
+  };
+  // #69 Opt-in read receipts.
+  track_opens?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -31,6 +39,21 @@ export async function POST(req: NextRequest) {
     }
     if (!b.body) return NextResponse.json({ error: "body required" }, { status: 400 });
 
+    // Confidential mode requires an absolute expiry — we let send.ts re-check
+    // the bound and re-validate the passcode shape, but reject obviously
+    // malformed input here to keep the SendError path clean.
+    let confidential: { expiresAt: number; passcode?: string | null } | undefined;
+    if (b.confidential) {
+      const expires = Number(b.confidential.expires_at);
+      if (!Number.isFinite(expires) || expires <= Math.floor(Date.now() / 1000)) {
+        return NextResponse.json(
+          { error: "confidential.expires_at must be a future unix timestamp" },
+          { status: 400 },
+        );
+      }
+      confidential = { expiresAt: Math.floor(expires), passcode: b.confidential.passcode ?? null };
+    }
+
     const { messageId, threadId } = await sendMessage(user.id, {
       fromMailboxId: b.from_mailbox_id,
       sendAsAliasId: b.send_as_alias_id,
@@ -44,6 +67,8 @@ export async function POST(req: NextRequest) {
       attachmentIds: Array.isArray(b.attachment_ids)
         ? b.attachment_ids.filter(x => typeof x === "string")
         : undefined,
+      confidential,
+      trackOpens: b.track_opens === true,
     });
     return NextResponse.json({ messageId, threadId }, { status: 201 });
   } catch (e) {

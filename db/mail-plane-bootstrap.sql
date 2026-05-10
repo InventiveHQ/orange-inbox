@@ -79,7 +79,13 @@ CREATE TABLE messages (
   -- (one of 'primary' / 'promotions' / 'updates' / 'social' / 'forums').
   -- NULL on rows ingested before the categorizer landed; the listing query
   -- treats NULL as Primary so the column can be added without a backfill.
-  category           TEXT
+  category           TEXT,
+  -- 0033_read_tracking: per-message opt-in read-receipt token. Non-null when
+  -- the sender enabled "Track opens" in the composer; the outbound HTML body
+  -- carries a <img src="/api/track/<token>.png"> that the recipient's mail
+  -- client fetches on display. Open events live in the control DB
+  -- (message_read_events) — see migration 0033 for details.
+  tracking_token     TEXT
 );
 CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
 CREATE INDEX        messages_thread_date   ON messages(thread_id, date);

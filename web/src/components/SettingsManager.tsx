@@ -243,6 +243,41 @@ function SendingSection({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // Track-opens default (#69). Loaded async from /api/me/preferences — the
+  // user's preferences row is the source of truth. We keep the undo-send
+  // and track-opens controls in the same section since both are about
+  // "what happens when you press Send by default".
+  const [trackOpens, setTrackOpens] = useState(false);
+  const [trackOpensLoaded, setTrackOpensLoaded] = useState(false);
+  const [trackOpensSavedAt, setTrackOpensSavedAt] = useState<number | null>(null);
+  const [trackOpensError, setTrackOpensError] = useState<string | null>(null);
+  const [trackOpensPending, startTrackOpensTransition] = useTransition();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/me/preferences");
+        if (cancelled || !res.ok) {
+          setTrackOpensLoaded(true);
+          return;
+        }
+        const j = (await res.json()) as {
+          preferences: { default_track_opens?: boolean };
+        };
+        if (!cancelled) {
+          setTrackOpens(!!j.preferences.default_track_opens);
+          setTrackOpensLoaded(true);
+        }
+      } catch {
+        if (!cancelled) setTrackOpensLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function change(next: number) {
     setError(null);
     setValue(next);
@@ -261,30 +296,78 @@ function SendingSection({
     });
   }
 
+  function changeTrackOpens(next: boolean) {
+    setTrackOpensError(null);
+    setTrackOpens(next);
+    startTrackOpensTransition(async () => {
+      const res = await fetch("/api/me/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ default_track_opens: next }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setTrackOpensError(b.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      setTrackOpensSavedAt(Date.now());
+    });
+  }
+
   return (
     <section id={id} className="scroll-mt-4">
       <SectionHeader
         title="Sending"
-        description="Hold outgoing messages briefly so you can undo before they leave. Cron dispatches each minute, so the actual send may follow the countdown by up to a minute."
+        description="Defaults for the compose window. Per-message overrides live in the send menu."
       />
-      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4">
-        <label className="block text-sm font-medium mb-2">Undo send</label>
-        <select
-          value={value}
-          onChange={e => change(Number(e.target.value))}
-          disabled={isPending}
-          className="w-full sm:w-48 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
-        >
-          {UNDO_SEND_OPTIONS.map(o => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
-          {isPending && <span>Saving…</span>}
-          {!isPending && savedAt && <span>Saved</span>}
-          {error && <span className="text-red-600">{error}</span>}
+      <div className="space-y-4">
+        <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4">
+          <label className="block text-sm font-medium mb-2">Undo send</label>
+          <select
+            value={value}
+            onChange={e => change(Number(e.target.value))}
+            disabled={isPending}
+            className="w-full sm:w-48 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
+          >
+            {UNDO_SEND_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-2 text-xs text-neutral-500">
+            Hold outgoing messages briefly so you can undo before they leave. Cron dispatches each minute, so the actual send may follow the countdown by up to a minute.
+          </p>
+          <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
+            {isPending && <span>Saving…</span>}
+            {!isPending && savedAt && <span>Saved</span>}
+            {error && <span className="text-red-600">{error}</span>}
+          </div>
+        </div>
+        <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4">
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={trackOpens}
+              onChange={e => changeTrackOpens(e.target.checked)}
+              disabled={!trackOpensLoaded || trackOpensPending}
+              className="mt-0.5"
+            />
+            <span className="flex-1">
+              <span className="font-medium">Track opens by default</span>
+              <span className="mt-1 block text-xs text-neutral-500">
+                When on, new compose windows start with the &ldquo;Track opens&rdquo; toggle pre-checked. The outbound HTML body carries a 1×1 tracking pixel so we can record when (and how often) the recipient&apos;s mail client loads it.
+              </span>
+              <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
+                Privacy trade-off: trackers like this are widely considered intrusive and many mail clients (including this one&apos;s inbound view) strip remote images by default. Leave this off unless you have a specific reason to need read receipts on every send.
+              </span>
+            </span>
+          </label>
+          <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
+            {trackOpensPending && <span>Saving…</span>}
+            {!trackOpensPending && trackOpensSavedAt && <span>Saved</span>}
+            {trackOpensError && <span className="text-red-600">{trackOpensError}</span>}
+          </div>
         </div>
       </div>
     </section>

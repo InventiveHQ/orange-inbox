@@ -12,6 +12,7 @@ import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
 import { listSavedSearches } from "@/lib/saved-searches";
 import { listInboxLayouts } from "@/lib/inbox-layouts";
+import { getUserPreferences } from "@/lib/preferences";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
@@ -35,13 +36,14 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, mailboxes, identities, savedSearches, inboxLayouts, cookieStore, headerStore] =
+  const [domains, mailboxes, identities, savedSearches, inboxLayouts, prefs, cookieStore, headerStore] =
     await Promise.all([
       listDomainsForUser(user.id),
       listMailboxesForUser(user.id),
       listIdentities(user.id),
       listSavedSearches(user.id),
       listInboxLayouts(user.id),
+      getUserPreferences(user.id),
       cookies(),
       headers(),
     ]);
@@ -171,7 +173,11 @@ export default async function InboxLayout({
   ) {
     return (
       <ToastProvider>
-        <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
+        <ComposeProvider
+          identities={identities}
+          undoSendSeconds={user.undo_send_seconds}
+          defaultTrackOpens={prefs.default_track_opens}
+        >
           <ComposeFromUrl />
           <AppBadgeSync />
           <MobileShell
@@ -234,7 +240,11 @@ export default async function InboxLayout({
 
   return (
     <ToastProvider>
-      <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
+      <ComposeProvider
+        identities={identities}
+        undoSendSeconds={user.undo_send_seconds}
+        defaultTrackOpens={prefs.default_track_opens}
+      >
         <ComposeFromUrl />
         <AppBadgeSync />
         <KeyboardShortcuts />
