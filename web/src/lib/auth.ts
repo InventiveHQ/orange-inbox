@@ -7,6 +7,10 @@ export interface User {
   display_name: string | null;
   is_admin: boolean;
   undo_send_seconds: number;
+  // 0 = Sunday (US default), 1 = Monday (ISO). Other ints are reserved
+  // (Saturday-first locales) — for now any value besides 1 is treated as 0
+  // on the read side.
+  week_start_day: number;
 }
 
 interface UserRow {
@@ -15,6 +19,7 @@ interface UserRow {
   display_name: string | null;
   is_admin: number;
   undo_send_seconds: number;
+  week_start_day: number | null;
 }
 
 const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
@@ -28,7 +33,9 @@ export async function getCurrentUser(): Promise<User | null> {
 
   const db = getDb();
   const existing = await db
-    .prepare("SELECT id, email, display_name, is_admin, undo_send_seconds FROM users WHERE email = ?")
+    .prepare(
+      "SELECT id, email, display_name, is_admin, undo_send_seconds, week_start_day FROM users WHERE email = ?",
+    )
     .bind(email)
     .first<UserRow>();
   if (existing) {
@@ -41,7 +48,14 @@ export async function getCurrentUser(): Promise<User | null> {
     .prepare("INSERT INTO users (id, email, last_seen_at) VALUES (?, ?, unixepoch())")
     .bind(id, email)
     .run();
-  return { id, email, display_name: null, is_admin: false, undo_send_seconds: 0 };
+  return {
+    id,
+    email,
+    display_name: null,
+    is_admin: false,
+    undo_send_seconds: 0,
+    week_start_day: 0,
+  };
 }
 
 export async function requireUser(): Promise<User> {
@@ -79,6 +93,7 @@ function rowToUser(row: UserRow): User {
     display_name: row.display_name,
     is_admin: row.is_admin === 1,
     undo_send_seconds: row.undo_send_seconds ?? 0,
+    week_start_day: row.week_start_day === 1 ? 1 : 0,
   };
 }
 

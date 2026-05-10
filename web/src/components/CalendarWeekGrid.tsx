@@ -1,13 +1,28 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { type CalendarEvent, type NewEventDraft, startOfWeek } from "./CalendarManager";
+import {
+  type CalendarEvent,
+  type NewEventDraft,
+  startOfWeekFor,
+} from "./CalendarManager";
+import { useMinuteTick } from "./useMinuteTick";
 
 // Week view: 7 columns × 24 hour rows + an all-day strip across the top.
 // Events are absolute-positioned by their start hour + duration; clicks on
 // an invite navigate back to the source thread, clicks on a self event
 // open the edit form. Clicks on empty hour cells / all-day strip open the
 // New Event modal prefilled with that slot's time.
+//
+// Drag interactions (#79):
+//   - drag-to-create: pointerdown on empty space → ghost block → pointerup
+//     opens the New Event modal prefilled with the dragged start/end.
+//   - drag-to-move: pointerdown on an event chip body → translates the
+//     event in 30-minute snaps; pointerup PATCHes the new starts_at/ends_at.
+//   - drag-to-resize: pointerdown on the bottom-edge handle of an event
+//     chip → drags the end forward; pointerup PATCHes the new ends_at.
+//   - Click vs drag: anything under DRAG_THRESHOLD_PX (≈3) stays a click.
 
 interface Props {
   cursor: Date;
@@ -16,16 +31,30 @@ interface Props {
   // that maps the event's mailbox_id back to the user's calendar prefs;
   // returning null falls back to the default sky/brand tones.
   colorFor?: (ev: CalendarEvent) => string | null;
+  weekStartDay: number;
   onEditEvent: (ev: CalendarEvent) => void;
   onCreateAt: (draft: NewEventDraft) => void;
+  // Called after a successful drag-move/resize PATCH so the parent can
+  // refresh the event list — keeps the displayed geometry in sync without
+  // a full page reload.
+  onPatched?: () => void;
 }
 
 const HOUR_HEIGHT = 40; // px — also drives slot row height in the grid template
 const SLOT_MINUTES = 30; // quick-create snap granularity
+const DRAG_THRESHOLD_PX = 3; // pointer travel under this stays a click
 
-export default function CalendarWeekGrid({ cursor, events, colorFor, onEditEvent, onCreateAt }: Props) {
+export default function CalendarWeekGrid({
+  cursor,
+  events,
+  colorFor,
+  weekStartDay,
+  onEditEvent,
+  onCreateAt,
+  onPatched,
+}: Props) {
   const router = useRouter();
-  const weekStart = startOfWeek(cursor);
+  const weekStart = startOfWeekFor(cursor, weekStartDay);
   const days: Date[] = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart);
     d.setDate(d.getDate() + i);
@@ -56,7 +85,7 @@ export default function CalendarWeekGrid({ cursor, events, colorFor, onEditEvent
   }
 
   return (
-    <div className="grid" style={{ gridTemplateColumns: "60px repeat(7, 1fr)" }}>
+    <div className="grid calendar-week-grid" style={{ gridTemplateColumns: "60px repeat(7, 1fr)" }}>
       {/* Day-header row */}
       <div className="border-b border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 sticky top-0 z-10" />
       {days.map(d => (
@@ -88,6 +117,7 @@ export default function CalendarWeekGrid({ cursor, events, colorFor, onEditEvent
           colorFor={colorFor}
           onClick={handleClick}
           onCreate={draft => onCreateAt(draft)}
+          onPatched={onPatched}
         />
       ))}
     </div>
@@ -173,38 +203,187 @@ function HourLabelsColumn() {
   );
 }
 
+// Internal drag state for a DayColumn. Drag-to-create draws a translucent
+// ghost block between the pointerdown slot and the current pointer; the
+// modal opens on pointerup. Drag-to-move/resize tracks an event id +
+// initial geometry so pointermove can paint an in-flight preview without
+// committing until pointerup.
+type DragState =
+  | { kind: "create"; startMin: number; currentMin: number }
+  | {
+      kind: "move";
+      eventId: string;
+      startMin: number;     // original event start (minutes from midnight)
+      durationMin: number;
+      pointerStartMin: number;
+      currentMin: number;
+    }
+  | {
+      kind: "resize";
+      eventId: string;
+      startMin: number;
+      endMin: number;       // current end (minutes from midnight)
+    };
+
 function DayColumn({
   date,
   events,
   colorFor,
   onClick,
   onCreate,
+  onPatched,
 }: {
   date: Date;
   events: CalendarEvent[];
   colorFor?: (ev: CalendarEvent) => string | null;
   onClick: (e: CalendarEvent) => void;
   onCreate: (draft: NewEventDraft) => void;
+  onPatched?: () => void;
 }) {
-  // Absolute-positioned event blocks over a 24×HOUR_HEIGHT column.
-  // Each hour row is a click target — y-offset within the row snaps to
-  // SLOT_MINUTES so clicking the top half of a row → :00, bottom half → :30.
+  const columnRef = useRef<HTMLDivElement | null>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
+  // Suppresses the click handlers that fire after a drag pointerup; React
+  // delivers a click event right after pointerup on the same element, and
+  // we don't want the empty-cell click to also pop a New Event modal.
+  const suppressClickRef = useRef(false);
+  const viewerTz = useViewerTz();
+
+  // Convert clientY to absolute minutes-of-day, snapped to SLOT_MINUTES.
+  function yToMinute(clientY: number): number {
+    const el = columnRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
+    const totalMin = (y / HOUR_HEIGHT) * 60;
+    return Math.max(0, Math.min(24 * 60, Math.round(totalMin / SLOT_MINUTES) * SLOT_MINUTES));
+  }
+
+  function commitMove(eventId: string, newStartMin: number, newEndMin: number) {
+    const startsAt = secondsAt(date, newStartMin);
+    const endsAt = secondsAt(date, newEndMin);
+    patchEvent(eventId, { starts_at: startsAt, ends_at: endsAt }).then(ok => {
+      if (ok) onPatched?.();
+    });
+  }
+
+  function commitResize(eventId: string, newEndMin: number) {
+    const endsAt = secondsAt(date, newEndMin);
+    patchEvent(eventId, { ends_at: endsAt }).then(ok => {
+      if (ok) onPatched?.();
+    });
+  }
+
+  function onColumnPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    // Only react to the primary button. Right-clicks / middle-clicks fall
+    // through to default browser behavior.
+    if (e.button !== 0) return;
+    // Skip if the actual target is a button/chip — those have their own
+    // pointer handlers.
+    if ((e.target as HTMLElement).closest("button")) return;
+    const minute = yToMinute(e.clientY);
+    setDrag({ kind: "create", startMin: minute, currentMin: minute });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onColumnPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!drag) return;
+    const m = yToMinute(e.clientY);
+    if (drag.kind === "create") {
+      setDrag({ ...drag, currentMin: m });
+      return;
+    }
+    if (drag.kind === "move") {
+      setDrag({ ...drag, currentMin: m });
+      return;
+    }
+    if (drag.kind === "resize") {
+      // Resize can't take the end past midnight or before its start.
+      const next = Math.max(drag.startMin + SLOT_MINUTES, Math.min(24 * 60, m));
+      setDrag({ ...drag, endMin: next });
+      return;
+    }
+  }
+
+  function onColumnPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!drag) return;
+    try {
+      if (drag.kind === "create") {
+        const { startMin, currentMin } = drag;
+        const lo = Math.min(startMin, currentMin);
+        const hi = Math.max(startMin, currentMin);
+        // Click-vs-drag: if the user barely moved, treat as a click and
+        // default to a 1-hour block from the clicked slot.
+        const travelPx = Math.abs((currentMin - startMin) / 60) * HOUR_HEIGHT;
+        if (travelPx < DRAG_THRESHOLD_PX) {
+          onCreate(slotDraftForMinutes(date, lo, lo + 60));
+        } else {
+          onCreate(slotDraftForMinutes(date, lo, Math.max(hi, lo + SLOT_MINUTES)));
+        }
+        suppressClickRef.current = true;
+      } else if (drag.kind === "move") {
+        const delta = drag.currentMin - drag.pointerStartMin;
+        const newStart = Math.max(0, Math.min(24 * 60 - drag.durationMin, drag.startMin + delta));
+        if (Math.abs(delta) >= 1) {
+          commitMove(drag.eventId, newStart, newStart + drag.durationMin);
+        }
+        suppressClickRef.current = true;
+      } else if (drag.kind === "resize") {
+        commitResize(drag.eventId, drag.endMin);
+        suppressClickRef.current = true;
+      }
+    } finally {
+      setDrag(null);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // Capture may already have been released on a child node — ignore.
+      }
+      // Clear the suppress flag on the next tick so a future click is
+      // accepted normally.
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+  }
+
+  // The today column gets a horizontal red now-line at the current minute.
+  const tickMinute = useMinuteTick();
+  const isTodayColumn = isSameDay(date, new Date());
+  const nowOffset = (() => {
+    if (!isTodayColumn) return null;
+    const now = new Date();
+    const min = now.getHours() * 60 + now.getMinutes();
+    // tickMinute is read so the component re-renders each minute; the
+    // actual y-offset comes from `now` which lines up to the second.
+    void tickMinute;
+    return (min / 60) * HOUR_HEIGHT;
+  })();
+
+  // Render the ghost block for a drag-to-create in progress.
+  const ghost = drag && drag.kind === "create" ? (() => {
+    const lo = Math.min(drag.startMin, drag.currentMin);
+    const hi = Math.max(drag.startMin, drag.currentMin);
+    return {
+      top: (lo / 60) * HOUR_HEIGHT,
+      height: Math.max(((hi - lo) / 60) * HOUR_HEIGHT, 2),
+    };
+  })() : null;
+
   return (
     <div
-      className="relative border-r border-neutral-200 dark:border-neutral-800"
+      ref={columnRef}
+      className="relative border-r border-neutral-200 dark:border-neutral-800 select-none"
       style={{ height: 24 * HOUR_HEIGHT }}
+      onPointerDown={onColumnPointerDown}
+      onPointerMove={onColumnPointerMove}
+      onPointerUp={onColumnPointerUp}
+      onPointerCancel={() => setDrag(null)}
     >
       {Array.from({ length: 24 }, (_, h) => (
         <div
           key={h}
-          role="button"
-          tabIndex={-1}
-          aria-label={`Create event at ${formatSlot(h, 0)}`}
-          onClick={e => {
-            const slot = slotFromClick(e, h);
-            onCreate(slotDraftForDate(date, slot.hour, slot.minute));
-          }}
-          className="border-b border-neutral-100 dark:border-neutral-900 cursor-pointer hover:bg-[var(--color-brand)]/5"
+          aria-hidden
+          className="border-b border-neutral-100 dark:border-neutral-900 hover:bg-[var(--color-brand)]/5"
           style={{ height: HOUR_HEIGHT }}
         />
       ))}
@@ -212,44 +391,159 @@ function DayColumn({
         const { top, height } = positionEvent(ev, date);
         const override = colorFor?.(ev) ?? null;
         const styleOverride = eventStyle(ev, override);
+        // If this event is currently being dragged, override its geometry
+        // with the in-flight values so the user sees the live preview.
+        let liveTop = top;
+        let liveHeight = Math.max(height, 16);
+        if (drag && (drag.kind === "move" || drag.kind === "resize") && drag.eventId === ev.id) {
+          if (drag.kind === "move") {
+            const delta = drag.currentMin - drag.pointerStartMin;
+            const newStart = Math.max(0, Math.min(24 * 60 - drag.durationMin, drag.startMin + delta));
+            liveTop = (newStart / 60) * HOUR_HEIGHT;
+            liveHeight = (drag.durationMin / 60) * HOUR_HEIGHT;
+          } else {
+            liveTop = (drag.startMin / 60) * HOUR_HEIGHT;
+            liveHeight = ((drag.endMin - drag.startMin) / 60) * HOUR_HEIGHT;
+          }
+        }
+        const tzSubtitle = eventTzSubtitle(ev, viewerTz);
+        const canMutate = ev.source === "self" && !ev.source_message_id;
         return (
           <button
             key={ev.id}
             type="button"
+            data-event-id={ev.id}
+            onPointerDown={e => {
+              if (e.button !== 0) return;
+              if (!canMutate) return;
+              // Resize handle: bottom 6px of the chip → resize, else move.
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const inResizeHandle = e.clientY >= rect.bottom - 6;
+              const { top: evTop, height: evH } = positionEvent(ev, date);
+              const evStartMin = (evTop / HOUR_HEIGHT) * 60;
+              const evDurMin = (evH / HOUR_HEIGHT) * 60;
+              const evEndMin = evStartMin + evDurMin;
+              const pointerMin = yToMinute(e.clientY);
+              if (inResizeHandle) {
+                setDrag({
+                  kind: "resize",
+                  eventId: ev.id,
+                  startMin: evStartMin,
+                  endMin: evEndMin,
+                });
+              } else {
+                setDrag({
+                  kind: "move",
+                  eventId: ev.id,
+                  startMin: evStartMin,
+                  durationMin: evDurMin,
+                  pointerStartMin: pointerMin,
+                  currentMin: pointerMin,
+                });
+              }
+              // Capture on the column so subsequent move/up fire there
+              // even if the pointer leaves the chip rect.
+              if (columnRef.current) {
+                try {
+                  columnRef.current.setPointerCapture(e.pointerId);
+                } catch {
+                  // Some browsers throw if capture already set — fine.
+                }
+              }
+              e.stopPropagation();
+            }}
             onClick={e => {
+              if (suppressClickRef.current) {
+                // Drag just ended — swallow the synthetic click.
+                e.stopPropagation();
+                return;
+              }
               e.stopPropagation();
               onClick(ev);
             }}
-            className={`absolute left-1 right-1 rounded text-left text-[11px] px-1.5 py-0.5 truncate border ${eventTone(ev, override)}`}
+            className={`absolute left-1 right-1 rounded text-left text-[11px] px-1.5 py-0.5 truncate border ${eventTone(ev, override)} ${canMutate ? "cursor-grab" : ""}`}
             // Merge geometry + tone style. eventStyle returns undefined
             // for the no-override path, so we spread conditionally.
-            style={{ top, height: Math.max(height, 16), ...(styleOverride ?? {}) }}
+            style={{ top: liveTop, height: Math.max(liveHeight, 16), ...(styleOverride ?? {}) }}
             title={ev.summary || "(no title)"}
           >
             <span className={ev.cancelled ? "line-through" : ""}>
               {ev.summary || "(no title)"}
             </span>
+            {tzSubtitle && (
+              <span className="block text-[9px] opacity-70 truncate">{tzSubtitle}</span>
+            )}
+            {canMutate && (
+              <span
+                aria-hidden
+                // Tiny non-interactive handle bar — pointerdown for resize
+                // is detected via clientY against the chip rect, so this
+                // span is purely a visual affordance.
+                className="absolute inset-x-0 bottom-0 h-1 cursor-ns-resize"
+              />
+            )}
           </button>
         );
       })}
+      {ghost && (
+        <div
+          aria-hidden
+          className="absolute left-1 right-1 rounded border border-[var(--color-brand)] bg-[var(--color-brand)]/15 pointer-events-none"
+          style={{ top: ghost.top, height: Math.max(ghost.height, 4) }}
+        />
+      )}
+      {nowOffset != null && (
+        <div
+          aria-hidden
+          className="now-line absolute left-0 right-0 pointer-events-none"
+          style={{ top: nowOffset }}
+        >
+          <div className="absolute left-0 -translate-x-1/2 -translate-y-1/2 h-2 w-2 rounded-full bg-red-500" />
+          <div className="h-px bg-red-500" />
+        </div>
+      )}
     </div>
   );
 }
 
-// Convert a click on an hour row into a (hour, minute) slot. offsetY is
-// the y-coordinate within the row (0..HOUR_HEIGHT); we bucket it to
-// SLOT_MINUTES so the user lands on a half-hour boundary.
-function slotFromClick(
-  e: React.MouseEvent<HTMLDivElement>,
-  hour: number,
-): { hour: number; minute: number } {
-  const rect = e.currentTarget.getBoundingClientRect();
-  const offsetY = e.clientY - rect.top;
-  const fraction = Math.max(0, Math.min(1, offsetY / HOUR_HEIGHT));
-  const minute = Math.floor((fraction * 60) / SLOT_MINUTES) * SLOT_MINUTES;
-  return { hour, minute };
+// PATCH /api/calendar/events/[id] with new starts_at/ends_at. Returns true
+// on success; failures are swallowed so a stale optimistic UI flips back
+// on the next refresh.
+async function patchEvent(
+  id: string,
+  patch: { starts_at?: number; ends_at?: number | null },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/calendar/events/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
+function secondsAt(date: Date, minutesOfDay: number): number {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setMinutes(minutesOfDay);
+  return Math.floor(d.getTime() / 1000);
+}
+
+function slotDraftForMinutes(date: Date, startMin: number, endMin: number): NewEventDraft {
+  return {
+    kind: "new",
+    startsAt: secondsAt(date, startMin),
+    endsAt: secondsAt(date, endMin),
+    allDay: false,
+  };
+}
+
+// Returned for callers (DayGrid) that still construct drafts from
+// (hour, minute) — keeps the old factory available so the day grid's
+// quick-create paths don't need a rewrite.
 function slotDraftForDate(date: Date, hour: number, minute: number): NewEventDraft {
   const start = new Date(date);
   start.setHours(hour, minute, 0, 0);
@@ -274,12 +568,6 @@ function allDayDraftForDate(date: Date): NewEventDraft {
     endsAt: Math.floor(end.getTime() / 1000),
     allDay: true,
   };
-}
-
-function formatSlot(hour: number, minute: number): string {
-  const h12 = ((hour + 11) % 12) + 1;
-  const ampm = hour < 12 ? "AM" : "PM";
-  return `${h12}:${minute.toString().padStart(2, "0")} ${ampm}`;
 }
 
 function EventChip({
@@ -313,7 +601,7 @@ function EventChip({
   );
 }
 
-export { allDayDraftForDate, slotDraftForDate, SLOT_MINUTES };
+export { allDayDraftForDate, slotDraftForDate, SLOT_MINUTES, patchEvent };
 
 // Tone selection: cancelled is loud (rose) regardless of source so the user
 // can spot dead events at a glance. Otherwise we fall back to a per-calendar
@@ -437,3 +725,53 @@ function formatHourLabel(h: number): string {
   if (h > 12) return `${h - 12} PM`;
   return `${h} AM`;
 }
+
+// Viewer's IANA zone, computed once per browser session. We use it to
+// decide when an event's `tz` is worth surfacing as a subtitle — if it
+// matches the viewer's zone, we'd just be noise.
+function useViewerTz(): string | null {
+  const [tz, setTz] = useState<string | null>(null);
+  useEffect(() => {
+    // One-shot read of the platform-resolved zone. The React 19 rule
+    // about setState-in-effect doesn't have a cleaner expression for
+    // "read a browser API on mount" — this is the canonical pattern.
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTz(Intl.DateTimeFormat().resolvedOptions().timeZone || null);
+    } catch {
+      setTz(null);
+    }
+  }, []);
+  return tz;
+}
+
+// Build the small "10:00 AM PT" subtitle for an event whose source tz
+// differs from the viewer's.
+export function eventTzSubtitle(ev: CalendarEvent, viewerTz: string | null): string | null {
+  const tz = ev.tz;
+  if (!tz || !viewerTz || tz === viewerTz) return null;
+  if (ev.all_day === 1) return null;
+  // Format the event's start time in its source zone. Trim to short
+  // weekday-less form — column already conveys the date.
+  let timeStr: string;
+  try {
+    timeStr = new Date(ev.starts_at * 1000).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: tz,
+    });
+  } catch {
+    return null;
+  }
+  return `${timeStr} ${shortTz(tz)}`;
+}
+
+// "America/Los_Angeles" → "Los Angeles". For the IANA UTC-zone family we
+// strip the prefix; legacy/unprefixed entries get returned as-is so we
+// always have something printable.
+function shortTz(tz: string): string {
+  const idx = tz.indexOf("/");
+  if (idx === -1) return tz;
+  return tz.slice(idx + 1).replace(/_/g, " ");
+}
+

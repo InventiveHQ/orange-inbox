@@ -153,4 +153,22 @@
     color: #000000 !important;
     text-decoration: underline;
   }
+
+  /* Calendar week-view print stylesheet (#87). The week grid is the only
+     calendar surface that prints meaningfully; day is too narrow and month
+     is too dense. We strip chrome, force a B/W palette so event chips
+     don't lose their outlines on a B/W printer, and hide the live now-line
+     since it's not a useful artifact on paper. */
+  .calendar-week-grid {
+    box-shadow: none !important;
+  }
+  .calendar-week-grid button {
+    break-inside: avoid;
+    color: #000 !important;
+    background: #fff !important;
+    border-color: #000 !important;
+  }
+  .calendar-week-grid .now-line {
+    display: none !important;
+  }
 }
