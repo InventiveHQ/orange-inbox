@@ -129,7 +129,7 @@ export default function MessageHtmlFrame({ messageId, inlineAttachments, fallbac
       // grow the iframe — safe only because scripts are blocked.
       sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
       referrerPolicy="no-referrer"
-      className="mt-3 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white"
+      className="mt-3 w-full rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
       style={{ height: `${height}px` }}
       title="Email body"
     />
@@ -137,9 +137,15 @@ export default function MessageHtmlFrame({ messageId, inlineAttachments, fallbac
 }
 
 // Prepend a viewport meta + reset CSS so wide email layouts (fixed-pixel
-// tables, oversized images) don't overflow horizontally on mobile. Email
-// HTML is appended after, so its own styles still apply where they don't
-// conflict; ours use !important to win on the few properties we care about.
+// tables, oversized images) don't overflow horizontally on mobile, and a
+// `prefers-color-scheme: dark` block so simple emails honor the user's dark
+// mode instead of showing as a glaring white card. Email HTML is appended
+// after, so its own styles still apply where they don't conflict; ours use
+// !important to win on the few properties we care about. Emails with their
+// own intentional colors keep them — we only override the cases where the
+// email is relying on browser defaults or the old-school
+// `bgcolor="#ffffff"` wrapper-table pattern that would otherwise punch a
+// bright hole through the dark UI.
 function wrapEmailHtml(emailHtml: string): string {
   const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>
   html, body { margin: 0 !important; padding: 12px !important; max-width: 100% !important; box-sizing: border-box !important; overflow-wrap: break-word !important; word-break: break-word !important; -webkit-text-size-adjust: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #111; }
@@ -147,6 +153,34 @@ function wrapEmailHtml(emailHtml: string): string {
   table { max-width: 100% !important; }
   td, th { word-break: break-word; }
   pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
+
+  @media (prefers-color-scheme: dark) {
+    html, body {
+      background-color: #0a0a0a !important;
+      color: #e5e5e5 !important;
+      color-scheme: dark;
+    }
+    a { color: #fb923c !important; }
+    /* Strip explicit white backgrounds from common wrapper patterns so the
+       dark canvas shows through. Branded emails using non-white colors are
+       left alone. */
+    [bgcolor="#ffffff" i],
+    [bgcolor="#fff" i],
+    [bgcolor="white" i],
+    [style*="background-color:#ffffff" i],
+    [style*="background-color:#fff" i],
+    [style*="background-color: #ffffff" i],
+    [style*="background-color: #fff" i],
+    [style*="background-color:white" i],
+    [style*="background:#ffffff" i],
+    [style*="background:#fff" i],
+    [style*="background: #ffffff" i],
+    [style*="background: #fff" i],
+    [style*="background:white" i] {
+      background-color: transparent !important;
+      background: transparent !important;
+    }
+  }
 </style>`;
   return head + emailHtml;
 }
