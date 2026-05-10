@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 interface Props {
   sidebar: React.ReactNode;
@@ -18,16 +18,23 @@ interface Props {
 export default function MobileShell({ sidebar, topBar, list, main }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
 
   // /inbox/[scope]/[threadId] => 3+ segments => thread is selected.
   const segments = pathname.split("/").filter(Boolean);
   const onThread = segments[0] === "inbox" && segments.length >= 3;
 
   // Close the drawer on navigation so tapping a link feels like a real
-  // single-pane phone app.
+  // single-pane phone app. We watch query params too — the context-aware
+  // drawer body can update state via `?calendar=` / `?mailbox=` without
+  // changing the pathname, and that should still dismiss the drawer
+  // (otherwise picking a calendar on mobile leaves the drawer covering
+  // the grid you wanted to see).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDrawerOpen(false);
-  }, [pathname]);
+  }, [pathname, searchKey]);
 
   return (
     <div className="flex h-screen relative">

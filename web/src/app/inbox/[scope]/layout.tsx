@@ -40,6 +40,12 @@ import MobileShell from "@/components/MobileShell";
 import AppBadgeSync from "@/components/AppBadgeSync";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import CommandPaletteShortcut from "@/components/CommandPaletteShortcut";
+import { CalendarUIProvider } from "@/components/CalendarUIContext";
+import { ContactsUIProvider } from "@/components/ContactsUIContext";
+import CalendarSidebarBody from "@/components/sidebar/CalendarSidebarBody";
+import ContactsSidebarBody from "@/components/sidebar/ContactsSidebarBody";
+import SettingsSidebarBody from "@/components/sidebar/SettingsSidebarBody";
+import { buildSettingsSections } from "@/lib/settings-sections";
 
 export default async function InboxLayout({
   children,
@@ -303,6 +309,38 @@ export default async function InboxLayout({
     domain_name: mb.domain_name,
   }));
 
+  // Context-aware drawer (#TBD): /inbox/calendar, /inbox/contacts, and
+  // /inbox/settings render their section controls inside the global
+  // Sidebar's `sectionBody` slot instead of as in-page chrome. The
+  // mail-nav block (All inboxes / Mailboxes / Layouts / Smart
+  // Mailboxes) is hidden while one of these is active; the bottom
+  // utility row stays so users can still jump between sections.
+  const calendarMode = effectiveScope === "calendar";
+  const contactsMode = effectiveScope === "contacts";
+  const settingsMode = effectiveScope === "settings";
+  const mailboxIdentities = identities.filter(i => i.kind === "mailbox");
+  const settingsSections = settingsMode
+    ? buildSettingsSections({
+        isAdmin: user.is_admin,
+        // Mirror the same flag derivation used by SettingsRoute in
+        // page.tsx — drawer must hide the same rows the in-page list
+        // would have hidden, otherwise the drawer would link to
+        // anchors that don't exist.
+        hasOwnedMailboxes: identities.some(
+          i => i.role === "owner" && i.kind === "mailbox",
+        ),
+        hasAuditAccess: identities.some(i => i.kind === "mailbox"),
+      })
+    : null;
+  const sectionBody: React.ReactNode = calendarMode ? (
+    <CalendarSidebarBody />
+  ) : contactsMode ? (
+    <ContactsSidebarBody />
+  ) : settingsMode && settingsSections ? (
+    <SettingsSidebarBody sections={settingsSections} />
+  ) : null;
+  const initialContactsMailbox = readMailboxParamFromHeaders(headerStore);
+
   const listContent = isFullPage ? null : (
     <>
       <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
@@ -334,28 +372,70 @@ export default async function InboxLayout({
         <AppBadgeSync />
         <KeyboardShortcuts />
         <CommandPaletteShortcut />
-        <MobileShell
-          sidebar={
-            <Sidebar
-              domains={domains}
-              mailboxes={mailboxes}
-              scope={effectiveScope}
-              initialCollapsed={sidebarCollapsed}
-              isAdmin={user.is_admin}
-              savedSearches={savedSearches}
-              inboxLayouts={inboxLayouts}
-              initialSmartOpen={smartMailboxesOpen}
-              initialLayoutsOpen={inboxLayoutsOpen}
-              assignedCount={assignedCount}
-            />
+        <SectionDrawerWrap
+          mode={
+            calendarMode
+              ? "calendar"
+              : contactsMode
+                ? "contacts"
+                : "none"
           }
-          topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}
-          list={listContent}
-          main={children}
-        />
+          contactsIdentities={mailboxIdentities}
+          initialContactsMailbox={initialContactsMailbox}
+        >
+          <MobileShell
+            sidebar={
+              <Sidebar
+                domains={domains}
+                mailboxes={mailboxes}
+                scope={effectiveScope}
+                initialCollapsed={sidebarCollapsed}
+                isAdmin={user.is_admin}
+                savedSearches={savedSearches}
+                inboxLayouts={inboxLayouts}
+                initialSmartOpen={smartMailboxesOpen}
+                initialLayoutsOpen={inboxLayoutsOpen}
+                assignedCount={assignedCount}
+                sectionBody={sectionBody}
+              />
+            }
+            topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}
+            list={listContent}
+            main={children}
+          />
+        </SectionDrawerWrap>
       </ComposeProvider>
     </ToastProvider>
   );
+}
+
+// Conditionally wraps the layout body in the section's UI context
+// provider. Calendar and Contacts both have a drawer body that needs
+// to share state with the page body — the provider hosts that. Settings
+// doesn't need one (its drawer is purely scroll-anchor based).
+function SectionDrawerWrap({
+  mode,
+  contactsIdentities,
+  initialContactsMailbox,
+  children,
+}: {
+  mode: "calendar" | "contacts" | "none";
+  contactsIdentities: Awaited<ReturnType<typeof listIdentities>>;
+  initialContactsMailbox: string;
+  children: React.ReactNode;
+}) {
+  if (mode === "calendar") return <CalendarUIProvider>{children}</CalendarUIProvider>;
+  if (mode === "contacts") {
+    return (
+      <ContactsUIProvider
+        identities={contactsIdentities}
+        initialMailboxFilter={initialContactsMailbox}
+      >
+        {children}
+      </ContactsUIProvider>
+    );
+  }
+  return <>{children}</>;
 }
 
 interface SearchMailbox {
@@ -412,6 +492,20 @@ function readAssignmentStatusFromHeaders(
     return parseAssignmentStatus(u.searchParams.get("status"));
   } catch {
     return "active";
+  }
+}
+
+function readMailboxParamFromHeaders(
+  headerStore: Awaited<ReturnType<typeof headers>>,
+): string {
+  const candidate =
+    headerStore.get("next-url") ?? headerStore.get("referer") ?? null;
+  if (!candidate) return "all";
+  try {
+    const u = new URL(candidate, "http://localhost");
+    return u.searchParams.get("mailbox") ?? "all";
+  } catch {
+    return "all";
   }
 }
 

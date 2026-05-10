@@ -130,6 +130,13 @@ interface Props {
   // "Assigned to me" badge (#27). Optional so existing call sites stay
   // compatible; defaults to 0 = no badge rendered.
   assignedCount?: number;
+  // Context-aware drawer slot. When provided, this replaces the default
+  // mail-nav block (All inboxes / Mailboxes / Layouts / Smart Mailboxes)
+  // — the layout passes a section-specific body for /inbox/calendar,
+  // /inbox/contacts, /inbox/settings. Top (logo + Compose) and bottom
+  // utility row stay constant either way so users can always switch
+  // sections from the bottom row.
+  sectionBody?: React.ReactNode;
 }
 
 export default function Sidebar({
@@ -143,6 +150,7 @@ export default function Sidebar({
   initialSmartOpen = true,
   initialLayoutsOpen = true,
   assignedCount = 0,
+  sectionBody,
 }: Props) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [smartOpen, setSmartOpen] = useState(initialSmartOpen);
@@ -308,7 +316,7 @@ export default function Sidebar({
       </div>
 
       <div className={`pb-3 ${collapsed ? "px-2" : "px-3"}`}>
-        <ComposeButton scope={scope} collapsed={collapsed} />
+        <SectionPrimaryAction scope={scope} collapsed={collapsed} />
       </div>
 
       {/*
@@ -317,17 +325,206 @@ export default function Sidebar({
       */}
       <nav
         id="orange-sidebar-nav"
-        aria-label="Mailboxes"
+        aria-label={sectionBody ? sectionLabel(scope) : "Mailboxes"}
         className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-1.5 pr-2.5" : "px-2"}`}
       >
-        <SpecialLink
-          href="/inbox/all"
-          label="All inboxes"
-          active={scope === "all"}
-          icon={<InboxIcon />}
-          collapsed={collapsed}
-          unreadCount={totalUnread}
-        />
+        {sectionBody ? sectionBody : (
+          <MailNavBody
+            scope={scope}
+            collapsed={collapsed}
+            totalUnread={totalUnread}
+            assignedCount={assignedCount}
+            domainEntries={domainEntries}
+            moveDomain={moveDomain}
+            moveMailboxWithinDomain={moveMailboxWithinDomain}
+            layoutsOpen={layoutsOpen}
+            toggleLayouts={toggleLayouts}
+            inboxLayouts={inboxLayouts}
+            smartOpen={smartOpen}
+            toggleSmart={toggleSmart}
+            savedSearches={savedSearches}
+          />
+        )}
+      </nav>
+
+      {!collapsed && <QuickSearchHint />}
+
+      {/*
+        Settings + Help sit at the bottom of the drawer — common Gmail/Slack
+        pattern, and an out-of-the-way home for things you only touch
+        occasionally (mailbox access, signatures, labels, domains, install
+        instructions, storage usage).
+      */}
+      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2">
+        <div
+          className={
+            collapsed
+              ? "flex flex-col items-center gap-1"
+              : "flex items-center justify-around"
+          }
+        >
+          <UtilityIcon
+            href="/inbox/all"
+            label="Mail"
+            active={isMailScope(scope)}
+            icon={<MailNavIcon />}
+          />
+          <UtilityIcon
+            href="/inbox/calendar"
+            label="Calendar"
+            active={scope === "calendar"}
+            icon={<CalendarIcon />}
+          />
+          <UtilityIcon
+            href="/inbox/contacts"
+            label="Contacts"
+            active={scope === "contacts"}
+            icon={<ContactsIcon />}
+          />
+          <UtilityIcon
+            href="/inbox/settings"
+            label="Settings"
+            active={scope === "settings"}
+            icon={<SettingsIcon />}
+          />
+          <UtilityIcon
+            href="/inbox/help"
+            label="Help"
+            active={scope === "help"}
+            icon={<HelpIcon />}
+          />
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// Scope-aware primary CTA. Mail scopes get the standard Compose button
+// (which opens the global compose modal). Calendar / contacts dispatch
+// a CustomEvent that the page's manager component listens for and uses
+// to open its own create modal — that keeps modal state colocated with
+// the form it controls. Settings has nothing to "create", so we render
+// nothing there.
+function SectionPrimaryAction({ scope, collapsed }: { scope: string; collapsed: boolean }) {
+  if (scope === "calendar") {
+    return (
+      <SectionEventButton
+        collapsed={collapsed}
+        eventName="orange:calendar:new-event"
+        label="New event"
+      />
+    );
+  }
+  if (scope === "contacts") {
+    return (
+      <SectionEventButton
+        collapsed={collapsed}
+        eventName="orange:contacts:new-contact"
+        label="New contact"
+      />
+    );
+  }
+  if (scope === "settings") {
+    // Nothing meaningful to create from a Settings drawer; suppress
+    // the slot rather than render an inactive shell.
+    return null;
+  }
+  return <ComposeButton scope={scope} collapsed={collapsed} />;
+}
+
+function SectionEventButton({
+  collapsed,
+  eventName,
+  label,
+}: {
+  collapsed: boolean;
+  eventName: string;
+  label: string;
+}) {
+  function fire() {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent(eventName));
+  }
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={fire}
+        title={label}
+        aria-label={label}
+        className="w-full h-10 flex items-center justify-center rounded-md bg-[var(--color-brand)] text-white hover:brightness-95"
+      >
+        <PlusIcon />
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={fire}
+      className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-[var(--color-brand)] px-3 py-2 text-sm font-medium text-white hover:brightness-95"
+    >
+      <PlusIcon /> {label}
+    </button>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 2.5a.75.75 0 0 1 .75.75v4h4a.75.75 0 0 1 0 1.5h-4v4a.75.75 0 0 1-1.5 0v-4h-4a.75.75 0 0 1 0-1.5h4v-4A.75.75 0 0 1 8 2.5Z" />
+    </svg>
+  );
+}
+
+function sectionLabel(scope: string): string {
+  if (scope === "calendar") return "Calendars";
+  if (scope === "contacts") return "Contact filters";
+  if (scope === "settings") return "Settings sections";
+  return "Section";
+}
+
+interface MailNavBodyProps {
+  scope: string;
+  collapsed: boolean;
+  totalUnread: number;
+  assignedCount: number;
+  domainEntries: { domain: DomainRow; list: MailboxRow[] }[];
+  moveDomain: (fromDomainId: string, toDomainId: string) => void;
+  moveMailboxWithinDomain: (fromId: string, toId: string) => void;
+  layoutsOpen: boolean;
+  toggleLayouts: () => void;
+  inboxLayouts: InboxLayoutRow[];
+  smartOpen: boolean;
+  toggleSmart: () => void;
+  savedSearches: SavedSearchRow[];
+}
+
+function MailNavBody({
+  scope,
+  collapsed,
+  totalUnread,
+  assignedCount,
+  domainEntries,
+  moveDomain,
+  moveMailboxWithinDomain,
+  layoutsOpen,
+  toggleLayouts,
+  inboxLayouts,
+  smartOpen,
+  toggleSmart,
+  savedSearches,
+}: MailNavBodyProps) {
+  return (
+    <>
+      <SpecialLink
+        href="/inbox/all"
+        label="All inboxes"
+        active={scope === "all"}
+        icon={<InboxIcon />}
+        collapsed={collapsed}
+        unreadCount={totalUnread}
+      />
         <SpecialLink
           href="/inbox/vips"
           label="VIPs"
@@ -425,57 +622,7 @@ export default function Sidebar({
           onToggle={toggleSmart}
           savedSearches={savedSearches}
         />
-      </nav>
-
-      {!collapsed && <QuickSearchHint />}
-
-      {/*
-        Settings + Help sit at the bottom of the drawer — common Gmail/Slack
-        pattern, and an out-of-the-way home for things you only touch
-        occasionally (mailbox access, signatures, labels, domains, install
-        instructions, storage usage).
-      */}
-      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2">
-        <div
-          className={
-            collapsed
-              ? "flex flex-col items-center gap-1"
-              : "flex items-center justify-around"
-          }
-        >
-          <UtilityIcon
-            href="/inbox/all"
-            label="Mail"
-            active={isMailScope(scope)}
-            icon={<MailNavIcon />}
-          />
-          <UtilityIcon
-            href="/inbox/calendar"
-            label="Calendar"
-            active={scope === "calendar"}
-            icon={<CalendarIcon />}
-          />
-          <UtilityIcon
-            href="/inbox/contacts"
-            label="Contacts"
-            active={scope === "contacts"}
-            icon={<ContactsIcon />}
-          />
-          <UtilityIcon
-            href="/inbox/settings"
-            label="Settings"
-            active={scope === "settings"}
-            icon={<SettingsIcon />}
-          />
-          <UtilityIcon
-            href="/inbox/help"
-            label="Help"
-            active={scope === "help"}
-            icon={<HelpIcon />}
-          />
-        </div>
-      </div>
-    </aside>
+    </>
   );
 }
 

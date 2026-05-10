@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
@@ -83,167 +83,61 @@ export default function SettingsManager({
     [memberIdentities],
   );
   const hasAuditAccess = auditMailboxes.length > 0;
-  const sections = useMemo(
-    () => [
-      { id: "profile", label: "Profile" },
-      { id: "mail-domains", label: "Mail domains" },
-      ...(isAdmin ? [{ id: "mailbox-names", label: "Mailbox names" }] : []),
-      ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
-      ...(hasOwnedMailboxes ? [{ id: "signatures", label: "Signatures" }] : []),
-      ...(hasOwnedMailboxes ? [{ id: "vacation", label: "Vacation responder" }] : []),
-      { id: "labels", label: "Labels" },
-      { id: "rules", label: "Rules" },
-      { id: "inbox-layouts", label: "Inbox layouts" },
-      { id: "blocked-senders", label: "Blocked senders" },
-      { id: "sending", label: "Sending" },
-      { id: "notifications", label: "Notifications" },
-      ...(hasAuditAccess ? [{ id: "audit-log", label: "Audit log" }] : []),
-      { id: "calendar-subscription", label: "Calendar subscription" },
-      { id: "export", label: "Import / Export" },
-      ...(isAdmin ? [{ id: "storage", label: "Storage" }] : []),
-      { id: "appearance", label: "Appearance" },
-      { id: "about", label: "About" },
-    ],
-    [isAdmin, hasOwnedMailboxes, hasAuditAccess],
-  );
-  const active = useActiveSection(
-    scrollRef,
-    sections.map(s => s.id),
-  );
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header className="px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
         <h1 className="text-base font-semibold">Settings</h1>
       </header>
+      {/* Section anchor list lives in the global Sidebar's section
+          drawer (SettingsSidebarBody) — clicking an entry there
+          scrolls these anchors via document.getElementById + ScrollIntoView. */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-8 flex gap-10">
-          <aside className="hidden md:block w-44 shrink-0">
-            <nav className="sticky top-0 space-y-0.5">
-              {sections.map(s => (
-                <SectionNavLink
-                  key={s.id}
-                  id={s.id}
-                  label={s.label}
-                  active={active === s.id}
-                  scrollRoot={scrollRef}
-                />
-              ))}
-            </nav>
-          </aside>
-          <div className="flex-1 min-w-0 space-y-12">
-            <ProfileSection id="profile" />
-            <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
-            {isAdmin && (
-              <MailboxNamesSection
-                id="mailbox-names"
-                identities={manageableIdentities}
-              />
-            )}
-            {isAdmin && (
-              <MailboxAccessSection
-                id="mailbox-access"
-                identities={manageableIdentities}
-              />
-            )}
-            {hasOwnedMailboxes && (
-              <SignaturesSection id="signatures" identities={ownedIdentities} />
-            )}
-            {hasOwnedMailboxes && (
-              <VacationResponderSection id="vacation" identities={ownedIdentities} />
-            )}
-            <LabelsSection id="labels" initialLabels={initialLabels} />
-            <RulesSection
-              id="rules"
-              identities={ownedIdentities}
-              labels={initialLabels}
+        <div className="mx-auto max-w-3xl px-4 py-8 sm:px-8 space-y-12">
+          <ProfileSection id="profile" />
+          <MailDomainsSection id="mail-domains" domains={domains} isAdmin={isAdmin} />
+          {isAdmin && (
+            <MailboxNamesSection
+              id="mailbox-names"
+              identities={manageableIdentities}
             />
-            <InboxLayoutEditor
-              initialLayouts={initialInboxLayouts}
-              savedSearches={savedSearches}
+          )}
+          {isAdmin && (
+            <MailboxAccessSection
+              id="mailbox-access"
+              identities={manageableIdentities}
             />
-            <BlockedSendersSection id="blocked-senders" />
-            <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
-            <NotificationsSection id="notifications" />
-            {hasAuditAccess && (
-              <AuditLogSection id="audit-log" mailboxes={auditMailboxes} />
-            )}
-            <CalendarSubscriptionSection id="calendar-subscription" />
-            <ExportSection id="export" ownedIdentities={ownedIdentities} />
-            {isAdmin && <StorageSection id="storage" />}
-            <AppearanceSection id="appearance" />
-            <AboutSection id="about" />
-          </div>
+          )}
+          {hasOwnedMailboxes && (
+            <SignaturesSection id="signatures" identities={ownedIdentities} />
+          )}
+          {hasOwnedMailboxes && (
+            <VacationResponderSection id="vacation" identities={ownedIdentities} />
+          )}
+          <LabelsSection id="labels" initialLabels={initialLabels} />
+          <RulesSection
+            id="rules"
+            identities={ownedIdentities}
+            labels={initialLabels}
+          />
+          <InboxLayoutEditor
+            initialLayouts={initialInboxLayouts}
+            savedSearches={savedSearches}
+          />
+          <BlockedSendersSection id="blocked-senders" />
+          <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
+          <NotificationsSection id="notifications" />
+          {hasAuditAccess && (
+            <AuditLogSection id="audit-log" mailboxes={auditMailboxes} />
+          )}
+          <CalendarSubscriptionSection id="calendar-subscription" />
+          <ExportSection id="export" ownedIdentities={ownedIdentities} />
+          {isAdmin && <StorageSection id="storage" />}
+          <AppearanceSection id="appearance" />
+          <AboutSection id="about" />
         </div>
       </div>
     </div>
   );
-}
-
-function SectionNavLink({
-  id,
-  label,
-  active,
-  scrollRoot,
-}: {
-  id: string;
-  label: string;
-  active: boolean;
-  scrollRoot: React.RefObject<HTMLDivElement | null>;
-}) {
-  return (
-    <a
-      href={`#${id}`}
-      onClick={e => {
-        e.preventDefault();
-        const el = document.getElementById(id);
-        const root = scrollRoot.current;
-        if (!el || !root) return;
-        const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
-        root.scrollTo({ top, behavior: "smooth" });
-        history.replaceState(null, "", `#${id}`);
-      }}
-      className={`block rounded-md px-3 py-1.5 text-sm transition-colors ${
-        active
-          ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-medium"
-          : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50 dark:text-neutral-400 dark:hover:text-neutral-100 dark:hover:bg-neutral-900"
-      }`}
-    >
-      {label}
-    </a>
-  );
-}
-
-function useActiveSection(
-  scrollRef: React.RefObject<HTMLDivElement | null>,
-  ids: string[],
-) {
-  const [active, setActive] = useState(ids[0] ?? "");
-  useEffect(() => {
-    const root = scrollRef.current;
-    if (!root) return;
-    const observer = new IntersectionObserver(
-      entries => {
-        const visible = entries
-          .filter(e => e.isIntersecting)
-          .map(e => ({ id: e.target.id, top: e.boundingClientRect.top }));
-        if (visible.length === 0) return;
-        visible.sort((a, b) => a.top - b.top);
-        setActive(visible[0].id);
-      },
-      {
-        root,
-        rootMargin: "0px 0px -65% 0px",
-        threshold: 0,
-      },
-    );
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, [scrollRef, ids]);
-  return active;
 }
 
 const UNDO_SEND_OPTIONS: { value: number; label: string }[] = [

@@ -5,8 +5,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import CalendarDayGrid from "./CalendarDayGrid";
 import CalendarEventForm from "./CalendarEventForm";
 import CalendarMonthGrid from "./CalendarMonthGrid";
-import CalendarSidebar from "./CalendarSidebar";
 import CalendarWeekGrid from "./CalendarWeekGrid";
+import { useCalendarUI, SCOPE_ALL } from "./CalendarUIContext";
 
 // Top-level page component for /inbox/calendar (#77). Owns the view-switch
 // (day / week / month), the cursor date, the New Event modal, and the
@@ -73,28 +73,22 @@ export interface CalendarSummary {
   kind: "personal" | "mailbox";
 }
 
-// Marker for "no specific calendar selected" — i.e. the consolidated view.
-// Distinct from "personal" (the literal Personal calendar) which is also a
-// valid sidebar selection.
-const SCOPE_ALL = "all" as const;
-type ScopeSelection = typeof SCOPE_ALL | string; // "all" | "personal" | mailbox id
-
 export default function CalendarManager() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  // Calendar list, selected scope, color/hidden updates, and a
+  // change-token that bumps when calendar prefs flip — all owned by
+  // CalendarUIProvider so the drawer body (CalendarSidebarBody) and
+  // this manager share a single source of truth.
+  const { calendars, scope, changeToken } = useCalendarUI();
 
   const initialView: CalendarView = parseView(searchParams.get("view"));
   const initialDate = parseDate(searchParams.get("date"));
-  // Sidebar scope: which calendar the grid is filtered to. Stored in the
-  // URL so a copied link re-opens to the same view. Default = consolidated.
-  const initialScope: ScopeSelection = searchParams.get("calendar") ?? SCOPE_ALL;
 
   const [view, setView] = useState<CalendarView>(initialView);
   const [cursor, setCursor] = useState<Date>(initialDate);
-  const [scope, setScope] = useState<ScopeSelection>(initialScope);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [calendars, setCalendars] = useState<CalendarSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Modal state: null = closed, NewEventDraft = create (optionally prefilled
@@ -114,28 +108,6 @@ export default function CalendarManager() {
     () => computeWindow(view, cursor, weekStartDay),
     [view, cursor, weekStartDay],
   );
-
-  // Calendar list — loaded once on mount, refreshed after a pref change.
-  // The grid-event list is independent so a color tweak doesn't have to
-  // re-fetch the heavier event window.
-  const fetchCalendars = useCallback(async () => {
-    try {
-      const res = await fetch("/api/calendar/calendars");
-      const body = (await res.json().catch(() => ({}))) as {
-        calendars?: CalendarSummary[];
-      };
-      if (res.ok) setCalendars(body.calendars ?? []);
-    } catch {
-      // Soft-fail — the grid still works without prefs (default colors,
-      // no hide filtering); the next refresh attempt will retry.
-    }
-  }, []);
-  useEffect(() => {
-    // Mirror the fetchEvents pattern below — fetchCalendars is wrapped in
-    // useCallback and only setState's the calendar list on response.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchCalendars();
-  }, [fetchCalendars]);
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -165,12 +137,24 @@ export default function CalendarManager() {
   }, [fetchWindow.from, fetchWindow.to, scope]);
 
   useEffect(() => {
-    // fetchEvents wraps setLoading/setEvents — the same pattern as
-    // fetchCalendars above; the React 19 "no setState in effect" rule
-    // doesn't apply when the setter is gated on a network response.
+    // fetchEvents wraps setLoading/setEvents — same pattern as the rest
+    // of the file. `changeToken` is in the dep list so a hidden-flip
+    // from the drawer (which lives outside this component) re-runs the
+    // event query when the consolidated view's row set changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchEvents();
-  }, [fetchEvents]);
+  }, [fetchEvents, changeToken]);
+
+  // "+ New event" button in the global Sidebar dispatches this event;
+  // we're the listener since the modal state lives here, not in the
+  // sidebar.
+  useEffect(() => {
+    function onNew() {
+      setEditing({ kind: "new" });
+    }
+    window.addEventListener("orange:calendar:new-event", onNew);
+    return () => window.removeEventListener("orange:calendar:new-event", onNew);
+  }, []);
 
   // Load the week-start preference once on mount. We don't gate first
   // render on it — Sunday is the right default for most users and the
@@ -210,62 +194,20 @@ export default function CalendarManager() {
     [colorByMailbox],
   );
 
-  // Patch a calendar pref (color or hidden). Optimistically updates the
-  // sidebar so the swatch + checkbox don't lag the click; on failure we
-  // re-fetch to undo.
-  const updateCalendar = useCallback(
-    async (id: string, patch: { color?: string; hidden?: boolean }) => {
-      // Snapshot for rollback.
-      const prev = calendars;
-      setCalendars(prev.map(c => (c.id === id ? { ...c, ...patch } : c)));
-      try {
-        const res = await fetch("/api/calendar/calendars", {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            mailbox_id: id, // API normalises "personal" → null on its side
-            ...patch,
-          }),
-        });
-        if (!res.ok) {
-          // Rollback. fetchCalendars() will overwrite anyway, but this
-          // keeps the visual blip short.
-          setCalendars(prev);
-          fetchCalendars();
-          return;
-        }
-        // Hidden toggles affect the consolidated view's row set — re-fetch
-        // events so the grid mirrors the new visibility.
-        if (patch.hidden !== undefined && scope === SCOPE_ALL) {
-          fetchEvents();
-        }
-      } catch {
-        setCalendars(prev);
-      }
-    },
-    [calendars, fetchCalendars, fetchEvents, scope],
-  );
-
-  // Keep the URL in sync so navigation feels right and links are sharable.
-  // Using replace rather than push — view/date changes shouldn't flood the
-  // back stack.
+  // Keep view/date in the URL so a copied link re-opens the same place.
+  // The `?calendar=…` param is owned by CalendarUIProvider — it pushes
+  // updates whenever the drawer changes scope.
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("view", view);
     params.set("date", formatDateParam(cursor));
-    if (scope === SCOPE_ALL) params.delete("calendar");
-    else params.set("calendar", scope);
     const qs = params.toString();
     const next = qs ? `${pathname}?${qs}` : pathname;
-    // Skip when already in sync (initial render carries the right params).
     if (typeof window === "undefined") return;
     if (window.location.pathname + window.location.search === next) return;
     router.replace(next, { scroll: false });
-    // We intentionally exclude `router`, `pathname`, `searchParams` from
-    // deps — they're stable enough and re-running on every searchParams
-    // change would loop with our own replace().
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, cursor, scope]);
+  }, [view, cursor]);
 
   function shiftCursor(delta: number) {
     const next = new Date(cursor);
@@ -419,16 +361,8 @@ export default function CalendarManager() {
   const filteredEvents = events;
 
   return (
-    <div className="flex h-full min-h-0">
-      <CalendarSidebar
-        calendars={calendars}
-        scope={scope}
-        onScopeChange={setScope}
-        onUpdate={updateCalendar}
-        onReordered={fetchCalendars}
-      />
-      <div className="flex flex-col flex-1 min-w-0 min-h-0">
-      <header className="border-b border-neutral-200 dark:border-neutral-800 pl-12 pr-4 md:px-4 py-3 flex flex-wrap items-center gap-3 print:hidden">
+    <div className="flex flex-col h-full min-w-0 min-h-0">
+      <header className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 flex flex-wrap items-center gap-3 print:hidden">
         <h1 className="text-base font-semibold mr-2">Calendar</h1>
 
         <div className="flex items-center gap-1">
@@ -610,14 +544,9 @@ export default function CalendarManager() {
           }}
         />
       )}
-      </div>
     </div>
   );
 }
-
-// (CalendarSidebar lives in ./CalendarSidebar — extracted in #97 to add
-// the mobile drawer + drag-reorder + free-form hex picker without
-// growing this file further.)
 
 function isNewDraft(x: CalendarEvent | NewEventDraft): x is NewEventDraft {
   return (x as NewEventDraft).kind === "new";

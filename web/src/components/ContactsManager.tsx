@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   CONTACT_STAGES,
@@ -12,6 +12,7 @@ import type { Identity } from "@/lib/identities";
 import ContactStageBadge from "./ContactStageBadge";
 import ContactTagPills from "./ContactTagPills";
 import EmptyState from "./EmptyState";
+import { useContactsUI } from "./ContactsUIContext";
 
 interface Props {
   contacts: ContactWithMailbox[];
@@ -24,12 +25,15 @@ interface Props {
 // Client-side controller for the contacts page. Server provides the initial
 // list filtered by the URL param; this component handles in-page CRUD without
 // reloading by calling /api/contacts and then router.refresh().
+//
+// Filter rows (Mailbox / Stage / Tag) live in the global Sidebar's
+// section drawer (ContactsSidebarBody) — state is shared via
+// ContactsUIContext so this component still owns the actual list-
+// filtering logic.
 export default function ContactsManager({ contacts, identities, filter }: Props) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [creating, setCreating] = useState(false);
-  const [stageFilter, setStageFilter] = useState<"all" | ContactStage | "none">("all");
-  const [tagFilter, setTagFilter] = useState<string>("all");
+  const { stageFilter, tagFilter, setAllTags } = useContactsUI();
 
   // Search query — when the global SearchBar is on "contacts" mode it routes
   // `?q=` to this page. We filter in-memory by name / email / company / notes.
@@ -40,6 +44,22 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
     for (const c of contacts) for (const t of c.tags) s.add(t);
     return Array.from(s).sort();
   }, [contacts]);
+
+  // Push the derived tag list up to the context so the drawer can hide
+  // the Tag filter group when no contact has any tag.
+  useEffect(() => {
+    setAllTags(allTags);
+  }, [allTags, setAllTags]);
+
+  // "+ New contact" button in the Sidebar dispatches this — the modal
+  // lives here, so we listen for it and open the create dialog.
+  useEffect(() => {
+    function onNew() {
+      if (identities.length > 0) setCreating(true);
+    }
+    window.addEventListener("orange:contacts:new-contact", onNew);
+    return () => window.removeEventListener("orange:contacts:new-contact", onNew);
+  }, [identities.length]);
 
   const filtered = useMemo(() => {
     return contacts.filter(c => {
@@ -63,52 +83,10 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
     });
   }, [contacts, filter, stageFilter, tagFilter, searchQuery]);
 
-  function setFilter(next: string) {
-    const url = new URL(window.location.href);
-    if (next === "all") url.searchParams.delete("mailbox");
-    else url.searchParams.set("mailbox", next);
-    router.push(`${url.pathname}?${url.searchParams.toString()}`);
-  }
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 border-b border-neutral-200 dark:border-neutral-800">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-base font-semibold mr-2">Contacts</h1>
-          <FilterSelect
-            label="Mailbox"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: "all", label: "All mailboxes" },
-              ...identities.map(i => ({
-                value: i.mailbox_id,
-                label: `${i.local_part}@${i.domain_name}`,
-              })),
-            ]}
-          />
-          <FilterSelect
-            label="Stage"
-            value={stageFilter}
-            onChange={v => setStageFilter(v as typeof stageFilter)}
-            options={[
-              { value: "all", label: "All stages" },
-              { value: "none", label: "No stage" },
-              ...CONTACT_STAGES.map(s => ({ value: s, label: stageLabel(s) })),
-            ]}
-          />
-          {allTags.length > 0 && (
-            <FilterSelect
-              label="Tag"
-              value={tagFilter}
-              onChange={setTagFilter}
-              options={[
-                { value: "all", label: "All tags" },
-                ...allTags.map(t => ({ value: t, label: t })),
-              ]}
-            />
-          )}
-        </div>
+        <h1 className="text-base font-semibold">Contacts</h1>
         <button
           type="button"
           onClick={() => setCreating(true)}
@@ -186,35 +164,6 @@ export default function ContactsManager({ contacts, identities, filter }: Props)
         />
       )}
     </div>
-  );
-}
-
-function FilterSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <label className="flex items-center gap-1.5 text-xs text-neutral-500">
-      <span className="uppercase tracking-wider">{label}</span>
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent text-sm px-2 py-1 text-neutral-900 dark:text-neutral-100"
-      >
-        {options.map(o => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
