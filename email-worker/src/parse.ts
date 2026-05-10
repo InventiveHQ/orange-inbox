@@ -7,6 +7,27 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
   const text = parsed.text;
   const html = parsed.html;
 
+  // Pull anti-loop signals out of raw headers. postal-mime gives us the
+  // header array with lowercased keys; we look up each header inline so we
+  // don't need a per-message Map. RFC 3834 says auto-responders MUST NOT
+  // reply to mail bearing Auto-Submitted other than "no", and SHOULD NOT
+  // reply to anything that looks like a list/bulk delivery — these three
+  // booleans + the precedence string + the autoSubmitted string are what
+  // the responder needs to make that call without re-walking the headers.
+  const headers = parsed.headers ?? [];
+  let autoSubmitted: string | null = null;
+  let precedence: string | null = null;
+  let hasListHeaders = false;
+  for (const h of headers) {
+    if (h.key === "auto-submitted") {
+      autoSubmitted = h.value.trim().toLowerCase();
+    } else if (h.key === "precedence") {
+      precedence = h.value.trim().toLowerCase();
+    } else if (h.key.startsWith("list-")) {
+      hasListHeaders = true;
+    }
+  }
+
   return {
     messageId: parsed.messageId ?? `<${crypto.randomUUID()}@orange-inbox.local>`,
     inReplyTo: parsed.inReplyTo,
@@ -21,6 +42,9 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
     html,
     snippet: makeSnippet(text, html),
     attachments: (parsed.attachments ?? []).map(toParsedAttachment),
+    autoSubmitted,
+    precedence,
+    hasListHeaders,
   };
 }
 
