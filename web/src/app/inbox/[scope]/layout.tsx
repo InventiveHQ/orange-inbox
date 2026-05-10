@@ -34,10 +34,18 @@ export default async function InboxLayout({
   ]);
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
 
-  // Validate the scope: "all", "drafts", "contacts", "templates", "settings",
-  // "help", or a mailbox the user has access to. Anything else falls back to
-  // "all" rather than 404'ing the layout.
-  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates", "settings", "help"]);
+  // Validate the scope: "all", "drafts", "contacts", "templates",
+  // "subscriptions", "settings", "help", or a mailbox the user has access
+  // to. Anything else falls back to "all" rather than 404'ing the layout.
+  const SPECIAL_SCOPES = new Set([
+    "all",
+    "drafts",
+    "contacts",
+    "templates",
+    "subscriptions",
+    "settings",
+    "help",
+  ]);
   const isValidScope = SPECIAL_SCOPES.has(scope) || mailboxes.some(mb => mb.id === scope);
   const effectiveScope = isValidScope ? scope : "all";
 
@@ -46,6 +54,7 @@ export default async function InboxLayout({
   const isFullPage =
     effectiveScope === "contacts" ||
     effectiveScope === "templates" ||
+    effectiveScope === "subscriptions" ||
     effectiveScope === "settings" ||
     effectiveScope === "help";
   const mailboxId =
@@ -73,7 +82,12 @@ export default async function InboxLayout({
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
 
-  if (domains.length === 0 && effectiveScope !== "settings" && effectiveScope !== "help") {
+  if (
+    domains.length === 0 &&
+    effectiveScope !== "settings" &&
+    effectiveScope !== "help" &&
+    effectiveScope !== "subscriptions"
+  ) {
     return (
       <ToastProvider>
         <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>

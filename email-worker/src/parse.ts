@@ -1,4 +1,5 @@
 import PostalMime, { type Address, type Attachment } from "postal-mime";
+import { findHeader, parseListUnsubscribe } from "./list-unsubscribe";
 import type { AddressInfo, ParsedAttachment, ParsedMessage } from "./types";
 
 export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
@@ -6,6 +7,14 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
 
   const text = parsed.text;
   const html = parsed.html;
+
+  // RFC 2369 List-Unsubscribe + RFC 8058 one-click. Both headers travel as
+  // raw values on the parsed.headers array — postal-mime doesn't promote
+  // them to first-class fields the way it does From/To/Subject.
+  const unsub = parseListUnsubscribe(
+    findHeader(parsed.headers, "list-unsubscribe"),
+    findHeader(parsed.headers, "list-unsubscribe-post"),
+  );
 
   return {
     messageId: parsed.messageId ?? `<${crypto.randomUUID()}@orange-inbox.local>`,
@@ -21,6 +30,9 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
     html,
     snippet: makeSnippet(text, html),
     attachments: (parsed.attachments ?? []).map(toParsedAttachment),
+    listUnsubUrl: unsub.url,
+    listUnsubMailto: unsub.mailto,
+    listUnsubOneClick: unsub.oneClick,
   };
 }
 

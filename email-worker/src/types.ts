@@ -31,6 +31,14 @@ export interface ParsedMessage {
   html?: string;
   snippet: string;
   attachments: ParsedAttachment[];
+  // RFC 2369 / 8058 newsletter unsubscribe metadata. Populated from
+  // List-Unsubscribe + List-Unsubscribe-Post when the inbound message is a
+  // mailing-list / newsletter; otherwise all three are empty/false. The
+  // store layer persists these on the messages row so listing + the
+  // Subscriptions aggregation can query them without re-parsing headers.
+  listUnsubUrl: string | null;
+  listUnsubMailto: string | null;
+  listUnsubOneClick: boolean;
 }
 
 export interface ParsedAttachment {

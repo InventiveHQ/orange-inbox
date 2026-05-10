@@ -128,8 +128,9 @@ export async function storeMessage(
         `INSERT INTO messages
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
-          subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred)
-         VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+          subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred,
+          list_unsub_url, list_unsub_mailto, list_unsub_one_click)
+         VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`,
       )
       .bind(
         messageId,
@@ -149,6 +150,9 @@ export async function storeMessage(
         rawKey,
         htmlR2Key,
         parsed.text ?? null,
+        parsed.listUnsubUrl,
+        parsed.listUnsubMailto,
+        parsed.listUnsubOneClick ? 1 : 0,
       ),
   );
 

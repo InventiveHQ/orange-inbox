@@ -10,6 +10,7 @@ import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
 import MessageHtmlFrame from "./MessageHtmlFrame";
 import MessageMenu from "./MessageMenu";
+import UnsubscribeButton from "./UnsubscribeButton";
 
 interface Props {
   detail: ThreadDetail;
@@ -138,6 +139,14 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
   const senderText = senderLabel(m.from_addr, m.from_name);
   const avatarSeed = m.from_addr || senderText;
 
+  // RFC 2369/8058 unsubscribe chip — appears for inbound newsletters when
+  // we extracted at least one unsubscribe target at ingest. Outbound
+  // messages don't carry unsubscribe metadata so the chip never renders.
+  const hasUnsubTarget =
+    m.direction === "inbound" && (m.list_unsub_url || m.list_unsub_mailto);
+  const showUnsub = hasUnsubTarget && m.unsubscribed_at == null;
+  const showUnsubbedPill = hasUnsubTarget && m.unsubscribed_at != null;
+
   return (
     <section className="px-4 py-4 sm:px-6 sm:py-5">
       <div className="flex items-baseline justify-between gap-3">
@@ -171,7 +180,13 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          {(showUnsub || showUnsubbedPill) && (
+            <UnsubscribeButton
+              messageId={m.id}
+              alreadyUnsubscribed={!!showUnsubbedPill}
+            />
+          )}
           <span className="text-xs text-neutral-500">{formatFullDate(m.date)}</span>
           <MessageMenu messageId={m.id} fromAddr={m.from_addr} direction={m.direction} />
         </div>
