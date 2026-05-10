@@ -65,6 +65,7 @@ export default async function ScopedDetailPage({
   // Errors are swallowed; the next open will retry the same INSERT.
   promoteInvitesForThread(
     user.id,
+    detail.thread.mailbox_id,
     detail.messages.map(m => ({ id: m.id, calendar_event: m.calendar_event })),
   ).catch(err => console.warn("promoteInvitesForThread", err));
   return (

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import {
+  PERSONAL_CALENDAR,
   deleteSelfEvent,
   getCalendarEvent,
   updateSelfEvent,
+  userHasMailboxAccess,
 } from "@/lib/calendar";
 
 // PATCH and DELETE for the per-user calendar_events row. Invites (rows where
@@ -18,6 +20,9 @@ interface PatchBody {
   all_day?: boolean;
   location?: string | null;
   description?: string | null;
+  // Move between calendars (#78). null or "personal" → Personal; any
+  // other value is a mailbox id and is access-checked.
+  mailbox_id?: string | null;
 }
 
 export async function PATCH(
@@ -67,7 +72,25 @@ export async function PATCH(
       );
     }
 
+    // Resolve the (optional) mailbox move. Distinguish "field absent" from
+    // "field present with null/personal" — only the latter actually writes
+    // mailbox_id back to the row.
+    let nextMailboxId: string | null | undefined;
+    if (Object.prototype.hasOwnProperty.call(b, "mailbox_id")) {
+      const raw = b.mailbox_id;
+      const resolved =
+        typeof raw === "string" && raw && raw !== PERSONAL_CALENDAR ? raw : null;
+      if (resolved && !(await userHasMailboxAccess(user.id, resolved))) {
+        return NextResponse.json(
+          { error: "forbidden_mailbox", message: "no access to that mailbox" },
+          { status: 403 },
+        );
+      }
+      nextMailboxId = resolved;
+    }
+
     const ok = await updateSelfEvent(user.id, id, {
+      mailboxId: nextMailboxId,
       startsAt: b.starts_at,
       endsAt: b.ends_at,
       allDay: b.all_day,
