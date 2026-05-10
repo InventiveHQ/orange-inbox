@@ -32,6 +32,9 @@ export interface ComposeOpenArgs {
   quotedHtml?: string;
   // If present, edits/sends update this draft and delete it on send.
   draftId?: string;
+  // Thread the reply belongs to. Used by "Send and archive" to PATCH the
+  // thread archived=true after the send succeeds. No-op for new compose.
+  threadId?: string;
 }
 
 interface UploadedFile {
@@ -43,6 +46,10 @@ interface UploadedFile {
 
 interface ComposeCtx {
   open: (args?: ComposeOpenArgs) => void;
+  // Identities the current user can send from. Exposed on the context so
+  // reply/reply-all helpers can strip the user's own addresses from the
+  // recipient list without re-fetching.
+  identities: Identity[];
 }
 
 // Wrap a plain-text fragment as an HTML <p> block, preserving newlines as
@@ -113,7 +120,7 @@ export default function ComposeProvider({
     setInstanceKey(k => k + 1);
   }, []);
 
-  const ctx = useMemo<ComposeCtx>(() => ({ open }), [open]);
+  const ctx = useMemo<ComposeCtx>(() => ({ open, identities }), [open, identities]);
 
   return (
     <Ctx.Provider value={ctx}>
@@ -200,9 +207,14 @@ function ComposeModal({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
-  const scheduleRef = useRef<HTMLDivElement | null>(null);
+  // Split-button send menu: Send / Send and archive / Schedule. Replaces the
+  // older standalone schedule popover — both options now live in this menu.
+  const [sendMenuOpen, setSendMenuOpen] = useState(false);
+  const sendMenuRef = useRef<HTMLDivElement | null>(null);
+  // "Send and archive" only makes sense for replies. We track threadId so
+  // the post-send PATCH knows which thread to archive; no-op when null.
+  const archiveThreadId = args.threadId ?? null;
   const [error, setError] = useState<string | null>(null);
   const [draftId, setDraftId] = useState<string | null>(args.draftId ?? null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -220,10 +232,12 @@ function ComposeModal({
   // Using refs lets the listener (which captures over a single mount)
   // call into the latest `submit`/`setMinimized` without re-binding on
   // every state change.
-  const submitRef = useRef<() => void>(() => {});
+  const submitRef = useRef<(opts?: { archiveAfterSend?: boolean }) => void>(() => {});
   const minimizeRef = useRef<() => void>(() => {});
 
-  // ⌘/Ctrl+Enter → Send, Esc → minimize. Declared up here (before the
+  // ⌘/Ctrl+Enter → Send, ⌘/Ctrl+Shift+Enter → Send and archive (no-op for
+  // new compose — the send goes through but the archive is a noop without
+  // a threadId), Esc → minimize. Declared up here (before the
   // identities.length === 0 early return) so the hook count stays stable
   // across both render branches. Skipped when focus is inside a <select>
   // (the From picker) or while the schedule popover is open (Esc closes
@@ -232,19 +246,19 @@ function ComposeModal({
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       const inSelect = target?.tagName === "SELECT";
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !inSelect && !scheduleOpen) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !inSelect && !sendMenuOpen) {
         e.preventDefault();
-        submitRef.current();
+        submitRef.current({ archiveAfterSend: e.shiftKey });
         return;
       }
-      if (e.key === "Escape" && !inSelect && !scheduleOpen) {
+      if (e.key === "Escape" && !inSelect && !sendMenuOpen) {
         e.preventDefault();
         minimizeRef.current();
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [scheduleOpen]);
+  }, [sendMenuOpen]);
 
   // Keep ref targets pointing at the latest closures so the keydown
   // listener (registered once) calls into current state. No deps array →
@@ -253,6 +267,16 @@ function ComposeModal({
     submitRef.current = submit;
     minimizeRef.current = () => setMinimized(true);
   });
+
+  // Close the send-menu dropdown when clicking outside.
+  useEffect(() => {
+    if (!sendMenuOpen) return;
+    function onDoc(e: MouseEvent) {
+      if (!sendMenuRef.current?.contains(e.target as Node)) setSendMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [sendMenuOpen]);
 
   if (identities.length === 0) {
     return (
@@ -322,7 +346,7 @@ function ComposeModal({
     });
   }
 
-  function submit() {
+  function submit(opts?: { archiveAfterSend?: boolean }) {
     setError(null);
     const toList = splitList(to);
     const ccList = splitList(cc);
@@ -334,6 +358,9 @@ function ComposeModal({
       setError("Body can't be empty");
       return;
     }
+    // Archive only fires after a successful send and only when we have a
+    // thread to archive. New-compose flows pass undefined → no-op.
+    const shouldArchive = !!opts?.archiveAfterSend && !!archiveThreadId;
 
     startSending(async () => {
       // With Undo Send enabled, route through the scheduled pipeline with a
@@ -364,6 +391,7 @@ function ComposeModal({
         }
         const b = (await res.json()) as { id?: string };
         if (b.id) onQueuedUndoSend(b.id, undoSendSeconds);
+        if (shouldArchive) await archiveThreadAfterSend(archiveThreadId);
         onClose();
         router.refresh();
         return;
@@ -388,6 +416,7 @@ function ComposeModal({
         setError(b.error ?? `Send failed (${res.status})`);
         return;
       }
+      if (shouldArchive) await archiveThreadAfterSend(archiveThreadId);
       onClose();
       router.refresh();
     });
@@ -475,7 +504,7 @@ function ComposeModal({
         setError(b.error ?? `Schedule failed (${res.status})`);
         return;
       }
-      setScheduleOpen(false);
+      setSendMenuOpen(false);
       onClose();
       router.refresh();
       router.push("/scheduled");
@@ -705,10 +734,10 @@ function ComposeModal({
           >
             Save draft
           </button>
-          <div ref={scheduleRef} className="relative inline-flex">
+          <div ref={sendMenuRef} className="relative inline-flex">
             <button
               type="button"
-              onClick={submit}
+              onClick={() => submit()}
               disabled={isSending}
               className="rounded-l-md bg-[var(--color-brand)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
             >
@@ -716,54 +745,82 @@ function ComposeModal({
             </button>
             <button
               type="button"
-              onClick={() => setScheduleOpen(o => !o)}
+              onClick={() => setSendMenuOpen(o => !o)}
               disabled={isSending}
-              title="Schedule send"
-              aria-label="Schedule send"
+              title="More send options"
+              aria-label="More send options"
+              aria-haspopup="menu"
+              aria-expanded={sendMenuOpen}
               className="rounded-r-md bg-[var(--color-brand)] px-2 py-1.5 text-sm font-medium text-white border-l border-white/30 hover:brightness-95 disabled:opacity-50"
             >
               <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
                 <path d="M3.22 5.22a.75.75 0 0 1 1.06 0L8 8.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 6.28a.75.75 0 0 1 0-1.06Z" />
               </svg>
             </button>
-            {scheduleOpen && (
+            {sendMenuOpen && (
               <div
                 role="menu"
-                className="absolute right-0 bottom-full mb-1 z-30 w-72 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg p-3 space-y-2"
+                className="absolute right-0 bottom-full mb-1 z-30 w-72 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg overflow-hidden"
               >
-                <div className="text-xs uppercase tracking-wider text-neutral-500">Schedule send</div>
-                <input
-                  type="datetime-local"
-                  value={scheduleAt}
-                  onChange={e => setScheduleAt(e.target.value)}
-                  className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
-                />
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setScheduleOpen(false)}
-                    className="rounded-md px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const ms = Date.parse(scheduleAt);
-                      if (isNaN(ms)) {
-                        setError("Pick a date/time");
-                        return;
-                      }
-                      schedule(Math.floor(ms / 1000));
-                    }}
-                    disabled={isSending || !scheduleAt}
-                    className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-                  >
-                    Schedule
-                  </button>
-                </div>
-                <div className="text-xs text-neutral-500">
-                  Goes out at the selected time. View/cancel under Scheduled in the sidebar.
+                <button
+                  type="button"
+                  role="menuitem"
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    setSendMenuOpen(false);
+                    submit({ archiveAfterSend: true });
+                  }}
+                  disabled={isSending || !archiveThreadId}
+                  title={
+                    archiveThreadId
+                      ? "Send and archive this thread (⌘⇧⏎)"
+                      : "Only available on replies"
+                  }
+                  className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span>Send and archive</span>
+                    <span className="text-[10px] uppercase tracking-wider text-neutral-500 shrink-0">
+                      ⌘⇧⏎
+                    </span>
+                  </div>
+                </button>
+                <div className="border-t border-neutral-200 dark:border-neutral-800 p-3 space-y-2">
+                  <div className="text-xs uppercase tracking-wider text-neutral-500">Schedule send</div>
+                  <input
+                    type="datetime-local"
+                    value={scheduleAt}
+                    onChange={e => setScheduleAt(e.target.value)}
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSendMenuOpen(false)}
+                      className="rounded-md px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ms = Date.parse(scheduleAt);
+                        if (isNaN(ms)) {
+                          setError("Pick a date/time");
+                          return;
+                        }
+                        setSendMenuOpen(false);
+                        schedule(Math.floor(ms / 1000));
+                      }}
+                      disabled={isSending || !scheduleAt}
+                      className="rounded-md bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+                    >
+                      Schedule
+                    </button>
+                  </div>
+                  <div className="text-xs text-neutral-500">
+                    Goes out at the selected time. View/cancel under Scheduled in the sidebar.
+                  </div>
                 </div>
               </div>
             )}
@@ -1154,6 +1211,21 @@ function splitList(s: string): string[] {
     .split(",")
     .map(x => x.trim())
     .filter(Boolean);
+}
+
+// Best-effort PATCH to archive the thread after a successful send. We
+// deliberately swallow errors — the send already landed, and the user can
+// still archive manually if this PATCH fails.
+async function archiveThreadAfterSend(threadId: string): Promise<void> {
+  try {
+    await fetch(`/api/threads/${threadId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+  } catch {
+    // Silent — see comment above.
+  }
 }
 
 function trailingToken(s: string): string {
