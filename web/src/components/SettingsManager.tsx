@@ -9,6 +9,7 @@ import { APP_VERSION } from "@/lib/version";
 import LabelChip from "./LabelChip";
 import PushNotificationToggle from "./PushNotificationToggle";
 import RichTextEditor from "./RichTextEditor";
+import RulesEditor from "./RulesEditor";
 import usePWAUpdate from "./usePWAUpdate";
 
 interface Props {
@@ -52,6 +53,7 @@ export default function SettingsManager({
       ...(isAdmin ? [{ id: "mailbox-access", label: "Mailbox access" }] : []),
       ...(hasOwnedMailboxes ? [{ id: "signatures", label: "Signatures" }] : []),
       { id: "labels", label: "Labels" },
+      { id: "rules", label: "Rules" },
       { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
@@ -97,6 +99,11 @@ export default function SettingsManager({
               <SignaturesSection id="signatures" identities={ownedIdentities} />
             )}
             <LabelsSection id="labels" initialLabels={initialLabels} />
+            <RulesSection
+              id="rules"
+              identities={ownedIdentities}
+              labels={initialLabels}
+            />
             <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
@@ -886,6 +893,26 @@ function LabelsSection({ id, initialLabels }: { id: string; initialLabels: Label
         </div>
       </div>
       {actionError && <div className="mt-2 text-xs text-red-600">{actionError}</div>}
+    </section>
+  );
+}
+
+function RulesSection({
+  id,
+  identities,
+  labels,
+}: {
+  id: string;
+  identities: Identity[];
+  labels: LabelRow[];
+}) {
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Rules"
+        description="Automatically tag, archive, mark read, or delete inbound mail. Rules run in order; the first matching archive/delete wins."
+      />
+      <RulesEditor identities={identities} labels={labels} />
     </section>
   );
 }
