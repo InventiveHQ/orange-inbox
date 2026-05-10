@@ -9,9 +9,11 @@ import {
   eventStyle,
   eventTone,
   eventTzSubtitle,
+  LONG_PRESS_MS,
   patchEvent,
   positionEvent,
   SLOT_MINUTES,
+  TOUCH_SCROLL_CANCEL_PX,
   timedEventsForDay,
 } from "./CalendarWeekGrid";
 import { useMinuteTick } from "./useMinuteTick";
@@ -23,6 +25,10 @@ import { useMinuteTick } from "./useMinuteTick";
 // Drag interactions match the week view: drag-on-empty → create, drag-on
 // -chip → move, drag-bottom-edge → resize. Patches go through the same
 // `patchEvent` helper as the week grid.
+//
+// #93 follow-up: move drag on touch requires a long-press hold (matches
+// week view) so vertical scrolling stays unimpeded. Cross-day is N/A here
+// (single column).
 
 interface Props {
   cursor: Date;
@@ -47,6 +53,21 @@ type DragState =
       currentMin: number;
     }
   | { kind: "resize"; eventId: string; startMin: number; endMin: number };
+
+// Touch-only "armed" placeholder while the long-press timer ticks. Becomes
+// a real DragState.move once the timer fires; a sufficiently large
+// pointermove cancels and lets the browser scroll.
+type ArmedTouch = {
+  pointerId: number;
+  eventId: string;
+  clientX: number;
+  clientY: number;
+  startMin: number;
+  durationMin: number;
+  // Snapped minute-of-day under the finger at pointerdown — used as the
+  // promoted DragState.move's pointerStartMin so the chip doesn't jump.
+  pointerStartMin: number;
+};
 
 export default function CalendarDayGrid({
   cursor,
@@ -180,6 +201,27 @@ function DayBody({
   const tickMinute = useMinuteTick();
   const isToday = isSameDay(date, new Date());
 
+  const longPressTimerRef = useRef<number | null>(null);
+  const armedRef = useRef<ArmedTouch | null>(null);
+  const [armedEventId, setArmedEventId] = useState<string | null>(null);
+
+  function clearLongPress() {
+    if (longPressTimerRef.current != null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    armedRef.current = null;
+    setArmedEventId(null);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current != null) {
+        window.clearTimeout(longPressTimerRef.current);
+      }
+    };
+  }, []);
+
   function yToMinute(clientY: number): number {
     const el = columnRef.current;
     if (!el) return 0;
@@ -219,6 +261,22 @@ function DayBody({
   }
 
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    // Cancel a pending long-press if the finger drifted too far.
+    const armed = armedRef.current;
+    if (armed && armed.pointerId === e.pointerId && !drag) {
+      const dx = Math.abs(e.clientX - armed.clientX);
+      const dy = Math.abs(e.clientY - armed.clientY);
+      if (Math.max(dx, dy) > TOUCH_SCROLL_CANCEL_PX) {
+        clearLongPress();
+        try {
+          (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+        } catch {
+          // ok
+        }
+      }
+      return;
+    }
+
     if (!drag) return;
     const m = yToMinute(e.clientY);
     if (drag.kind === "create") setDrag({ ...drag, currentMin: m });
@@ -230,6 +288,16 @@ function DayBody({
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    // Long-press still pending → no drag, fall through to chip click.
+    if (armedRef.current && !drag) {
+      clearLongPress();
+      try {
+        (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+      } catch {
+        // ok
+      }
+      return;
+    }
     if (!drag) return;
     try {
       if (drag.kind === "create") {
@@ -304,7 +372,10 @@ function DayBody({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => setDrag(null)}
+      onPointerCancel={() => {
+        clearLongPress();
+        setDrag(null);
+      }}
     >
       {Array.from({ length: 24 }, (_, h) => (
         <div
@@ -336,6 +407,11 @@ function DayBody({
         }
         const tzSubtitle = eventTzSubtitle(ev, viewerTz);
         const canMutate = ev.source === "self" && !ev.source_message_id;
+        const isArmed = armedEventId === ev.id;
+        const isActiveDrag = drag && drag.kind === "move" && drag.eventId === ev.id;
+        const dragHaloClass = (isArmed || isActiveDrag)
+          ? "ring-2 ring-[var(--color-brand)] shadow-lg"
+          : "";
         return (
           <button
             key={ev.id}
@@ -357,16 +433,67 @@ function DayBody({
                   startMin: evStartMin,
                   endMin: evEndMin,
                 });
-              } else {
-                setDrag({
-                  kind: "move",
+                if (columnRef.current) {
+                  try {
+                    columnRef.current.setPointerCapture(e.pointerId);
+                  } catch {
+                    // ok
+                  }
+                }
+                e.stopPropagation();
+                return;
+              }
+
+              if (e.pointerType === "touch") {
+                // Arm long-press timer; upgrade to a real move drag if the
+                // finger holds for LONG_PRESS_MS without drifting.
+                armedRef.current = {
+                  pointerId: e.pointerId,
                   eventId: ev.id,
+                  clientX: e.clientX,
+                  clientY: e.clientY,
                   startMin: evStartMin,
                   durationMin: evDurMin,
                   pointerStartMin: pointerMin,
-                  currentMin: pointerMin,
-                });
+                };
+                setArmedEventId(ev.id);
+                longPressTimerRef.current = window.setTimeout(() => {
+                  const armed = armedRef.current;
+                  if (!armed) return;
+                  try {
+                    navigator.vibrate?.(20);
+                  } catch {
+                    // ok
+                  }
+                  setDrag({
+                    kind: "move",
+                    eventId: armed.eventId,
+                    startMin: armed.startMin,
+                    durationMin: armed.durationMin,
+                    pointerStartMin: armed.pointerStartMin,
+                    currentMin: armed.pointerStartMin,
+                  });
+                  longPressTimerRef.current = null;
+                }, LONG_PRESS_MS);
+                if (columnRef.current) {
+                  try {
+                    columnRef.current.setPointerCapture(e.pointerId);
+                  } catch {
+                    // ok
+                  }
+                }
+                return;
               }
+
+              // Mouse / pen → drag immediately.
+              setDrag({
+                kind: "move",
+                eventId: ev.id,
+                startMin: evStartMin,
+                durationMin: evDurMin,
+                pointerStartMin: pointerMin,
+                currentMin: pointerMin,
+              });
               if (columnRef.current) {
                 try {
                   columnRef.current.setPointerCapture(e.pointerId);
@@ -375,6 +502,8 @@ function DayBody({
                 }
               }
               e.stopPropagation();
+              // evEndMin is informational — no further use needed here.
+              void evEndMin;
             }}
             onClick={e => {
               if (suppressClickRef.current) {
@@ -384,7 +513,7 @@ function DayBody({
               e.stopPropagation();
               onClick(ev);
             }}
-            className={`absolute left-2 right-2 rounded text-left text-[12px] px-2 py-0.5 truncate border ${eventTone(ev, override)} ${canMutate ? "cursor-grab" : ""}`}
+            className={`absolute left-2 right-2 rounded text-left text-[12px] px-2 py-0.5 truncate border ${eventTone(ev, override)} ${canMutate ? "cursor-grab" : ""} ${dragHaloClass}`}
             style={{ top: liveTop, height: Math.max(liveHeight, 18), ...(styleOverride ?? {}) }}
             title={ev.summary || "(no title)"}
           >
