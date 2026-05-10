@@ -398,6 +398,7 @@ export default function ThreadActions({
               onClick={toggleStar}
               disabled={isStarPending || anyPending}
               aria-pressed={starred}
+              aria-label={starred ? "Unstar" : "Star"}
               title={starred ? "Unstar" : "Star"}
               className={`rounded-md border px-2 py-1.5 text-sm disabled:opacity-50 ${
                 starred
@@ -405,22 +406,7 @@ export default function ThreadActions({
                   : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
               }`}
             >
-              {starred ? "★ Starred" : "☆ Star"}
-            </button>
-            <button
-              type="button"
-              data-action="pin"
-              onClick={togglePin}
-              disabled={isPinPending || anyPending}
-              aria-pressed={pinned}
-              title={pinned ? "Unpin thread" : "Pin thread — keep at top of inbox"}
-              className={`rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
-                pinned
-                  ? "border-amber-400 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-              }`}
-            >
-              {pinned ? "📌 Pinned" : "Pin"}
+              {starred ? "★" : "☆"}
             </button>
             <button
               type="button"
@@ -432,42 +418,85 @@ export default function ThreadActions({
             >
               {archived ? "Unarchive" : "Archive"}
             </button>
-            <button
-              type="button"
-              data-action="mute"
-              onClick={toggleMute}
-              disabled={isMutePending || anyPending}
-              aria-pressed={muted}
-              title={muted ? "Unmute thread" : "Mute thread — new replies stay archived"}
-              className={`rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
-                muted
-                  ? "border-neutral-400 bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-                  : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-              }`}
-            >
-              {muted ? "Unmute" : "Mute"}
-            </button>
-            <button
-              type="button"
-              data-action="mark-unread"
-              onClick={markUnread}
-              disabled={isUnreadPending || anyPending}
-              title="Mark unread — bring this back to your inbox as unread"
-              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
-            >
-              Mark unread
-            </button>
-            <button
-              type="button"
-              data-action="delete"
-              onClick={deleteThread}
-              disabled={anyPending}
-              title="Delete"
-              className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50"
-            >
-              Delete
-            </button>
             <RemindButton threadId={threadId} initialRemindAt={initialRemindAt} />
+            <div ref={moreMenuRef} className="relative">
+              <button
+                type="button"
+                data-action="more"
+                onClick={() => setMoreMenuOpen(o => !o)}
+                disabled={anyPending}
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                aria-label="More thread actions"
+                title="More"
+                className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+                  <path d="M8 4a1.25 1.25 0 1 0 0-2.5A1.25 1.25 0 0 0 8 4Zm0 5.25A1.25 1.25 0 1 0 8 6.75a1.25 1.25 0 0 0 0 2.5Zm0 5.25A1.25 1.25 0 1 0 8 12a1.25 1.25 0 0 0 0 2.5Z" />
+                </svg>
+              </button>
+              {moreMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label="Thread actions"
+                  className="absolute right-0 top-full mt-1 z-30 w-48 rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-action="pin"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      togglePin();
+                    }}
+                    disabled={isPinPending || anyPending}
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 focus:bg-neutral-100 dark:focus:bg-neutral-900 focus:outline-none disabled:opacity-50"
+                  >
+                    {pinned ? "📌 Unpin" : "Pin to top"}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-action="mute"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      toggleMute();
+                    }}
+                    disabled={isMutePending || anyPending}
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 focus:bg-neutral-100 dark:focus:bg-neutral-900 focus:outline-none disabled:opacity-50"
+                  >
+                    {muted ? "Unmute" : "Mute thread"}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-action="mark-unread"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      markUnread();
+                    }}
+                    disabled={isUnreadPending || anyPending}
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 focus:bg-neutral-100 dark:focus:bg-neutral-900 focus:outline-none disabled:opacity-50"
+                  >
+                    Mark unread
+                  </button>
+                  <div className="border-t border-neutral-200 dark:border-neutral-800" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-action="delete"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      deleteThread();
+                    }}
+                    disabled={anyPending}
+                    className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 focus:bg-red-50 dark:focus:bg-red-950/30 focus:outline-none disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         )}
       </div>
