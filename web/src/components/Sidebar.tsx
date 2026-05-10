@@ -137,24 +137,10 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
-          href="/inbox/calendar"
-          label="Calendar"
-          active={scope === "calendar"}
-          icon={<CalendarIcon />}
-          collapsed={collapsed}
-        />
-        <SpecialLink
           href="/inbox/drafts"
           label="Drafts"
           active={scope === "drafts"}
           icon={<DraftIcon />}
-          collapsed={collapsed}
-        />
-        <SpecialLink
-          href="/inbox/contacts"
-          label="Contacts"
-          active={scope === "contacts"}
-          icon={<ContactsIcon />}
           collapsed={collapsed}
         />
         <SpecialLink
