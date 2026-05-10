@@ -7,15 +7,22 @@ interface Props {
   threadId: string;
   initialStarred: boolean;
   initialArchived: boolean;
+  initialMuted: boolean;
 }
 
-// Header actions: star toggle, archive toggle, and hard delete. All three
-// hit /api/threads/{id}; archive and delete navigate away on success since
-// the thread vanishes from the list view.
-export default function ThreadActions({ threadId, initialStarred, initialArchived }: Props) {
+// Header actions: star toggle, archive toggle, mute toggle, and hard
+// delete. Star/mute/archive hit /api/threads/{id}; archive and delete
+// navigate away on success since the thread vanishes from the list view.
+export default function ThreadActions({
+  threadId,
+  initialStarred,
+  initialArchived,
+  initialMuted,
+}: Props) {
   const router = useRouter();
   const [starred, setStarred] = useState(initialStarred);
   const [archived, setArchived] = useState(initialArchived);
+  const [muted, setMuted] = useState(initialMuted);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -52,6 +59,12 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
       // user can re-find it; we still navigate away for symmetry.
       router.push("/inbox/all");
     });
+  }
+
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    patch({ muted: next });
   }
 
   function deleteThread() {
@@ -96,6 +109,20 @@ export default function ThreadActions({ threadId, initialStarred, initialArchive
         className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-50"
       >
         {archived ? "Unarchive" : "Archive"}
+      </button>
+      <button
+        type="button"
+        onClick={toggleMute}
+        disabled={isPending}
+        aria-pressed={muted}
+        title={muted ? "Unmute thread" : "Mute thread — new replies stay archived"}
+        className={`rounded-md border px-3 py-1.5 text-sm disabled:opacity-50 ${
+          muted
+            ? "border-neutral-400 bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+            : "border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+        }`}
+      >
+        {muted ? "Unmute" : "Mute"}
       </button>
       <button
         type="button"

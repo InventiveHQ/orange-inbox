@@ -1,6 +1,7 @@
 import {
   getMailDbForNewThread,
   getMailDbForThread,
+  isThreadMuted,
   registerThreadLocation,
   upsertThreadIndex,
 } from "./mail-db";
@@ -43,6 +44,26 @@ export async function storeMessage(
     mailDb = await getMailDbForThread(env, thread.threadId);
     mailDbId = ""; // not needed for upsertThreadIndex on UPDATE branch
   }
+
+  // If the user has muted this thread, new replies stay archived and
+  // don't increment unread_count. New threads can't be muted.
+  const muted = thread.isNew ? false : await isThreadMuted(env, thread.threadId);
+
+  // Blocked-sender check (#74). We still store the message — the user can
+  // unblock and recover from "All mail" — but force the thread into
+  // archived state and skip the unread bump and push fan-out so it never
+  // reaches the inbox or the user's device. Lowercased to match the
+  // case-insensitive insert at the API site.
+  const fromAddrLower = parsed.from.addr.toLowerCase();
+  const blockedRow = await env.DB
+    .prepare("SELECT 1 AS hit FROM blocked_senders WHERE mailbox_id = ? AND addr = ?")
+    .bind(recipient.mailboxId, fromAddrLower)
+    .first<{ hit: number }>();
+  const blocked = blockedRow !== null;
+
+  // Either signal suppresses the inbox surface; behaviourally identical
+  // downstream so we collapse them.
+  const suppress = muted || blocked;
 
   // Idempotency: if this Message-ID is already stored for this mailbox in
   // the target mail DB, bail. (We're past the threading step, so the right
@@ -150,11 +171,11 @@ export async function storeMessage(
       .prepare(
         `UPDATE threads
            SET message_count = message_count + 1,
-               unread_count  = unread_count  + 1,
+               unread_count  = unread_count  + ?,
                last_message_at = MAX(last_message_at, ?)
          WHERE id = ?`,
       )
-      .bind(dateSeconds, thread.threadId),
+      .bind(suppress ? 0 : 1, dateSeconds, thread.threadId),
   );
 
   await mailDb.batch(stmts);
@@ -177,7 +198,11 @@ export async function storeMessage(
       mailDbId: mailDbId || "primary",
       subjectNormalized: thread.subjectNormalized,
       lastMessageAt: dateSeconds,
-      unreadDelta: 1, // inbound is always unread
+      // Muted threads and mail from blocked senders don't bump unread and
+      // stay archived — they shouldn't re-surface in the inbox just because
+      // a new message arrived.
+      unreadDelta: suppress ? 0 : 1,
+      forceArchived: suppress,
       lastMessageId: messageId,
       lastSubject: parsed.subject || null,
       lastFromAddr: parsed.from.addr,
@@ -191,8 +216,11 @@ export async function storeMessage(
 
   // Fire-and-forget Web Push fan-out via the web worker. Wrapped in
   // ctx.waitUntil so the email handler returns fast; failures here never
-  // affect mail ingestion.
-  ctx.waitUntil(notifyWebOfNewMessage(env, recipient.mailboxId, thread.threadId, messageId, parsed));
+  // affect mail ingestion. Muted threads and blocked senders suppress
+  // push too — same reason we keep them archived.
+  if (!suppress) {
+    ctx.waitUntil(notifyWebOfNewMessage(env, recipient.mailboxId, thread.threadId, messageId, parsed));
+  }
 
   return { messageId, threadId: thread.threadId, duplicate: false };
 }

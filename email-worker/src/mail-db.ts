@@ -84,10 +84,16 @@ export interface ThreadIndexUpsert {
   lastFromName: string | null;
   lastSnippet: string | null;
   createdAt?: number;
+  // When set, both INSERT and UPDATE branches force archived=1 — used for
+  // muted threads (and blocked senders) so a new inbound doesn't surface
+  // the thread in the inbox listing.
+  forceArchived?: boolean;
 }
 
 export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise<void> {
   const created = p.createdAt ?? Math.floor(Date.now() / 1000);
+  const archivedClause = p.forceArchived ? ", archived = 1" : "";
+  const insertArchived = p.forceArchived ? 1 : 0;
   await env.DB
     .prepare(
       `INSERT INTO threads_index
@@ -96,7 +102,7 @@ export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise
           archived, starred, snoozed_until,
           last_message_id, last_subject, last_from_addr, last_from_name, last_snippet,
           created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, 0, 0, NULL, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (thread_id) DO UPDATE SET
          last_message_at  = MAX(threads_index.last_message_at, excluded.last_message_at),
          message_count    = threads_index.message_count + 1,
@@ -105,16 +111,30 @@ export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise
          last_subject     = excluded.last_subject,
          last_from_addr   = excluded.last_from_addr,
          last_from_name   = excluded.last_from_name,
-         last_snippet     = excluded.last_snippet`,
+         last_snippet     = excluded.last_snippet${archivedClause}`,
     )
     .bind(
       p.threadId, p.mailboxId, p.mailDbId, p.subjectNormalized,
-      p.lastMessageAt, p.unreadDelta,
+      p.lastMessageAt, p.unreadDelta, insertArchived,
       p.lastMessageId, p.lastSubject, p.lastFromAddr, p.lastFromName, p.lastSnippet,
       created,
       p.unreadDelta,
     )
     .run();
+}
+
+// Read the muted flag for a thread from threads_index. Returns false for
+// new threads (no row yet) and on lookup failure.
+export async function isThreadMuted(env: Env, threadId: string): Promise<boolean> {
+  try {
+    const row = await env.DB
+      .prepare("SELECT muted FROM threads_index WHERE thread_id = ?")
+      .bind(threadId)
+      .first<{ muted: number }>();
+    return row?.muted === 1;
+  } catch {
+    return false;
+  }
 }
 
 function resolveById(env: Env, id: string): D1Database {

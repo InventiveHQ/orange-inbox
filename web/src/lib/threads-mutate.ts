@@ -39,3 +39,18 @@ export async function markThreadRead(userId: string, threadId: string): Promise<
       .run(),
   ]);
 }
+
+// Toggle the muted flag on a thread. Muted threads are hidden from the
+// per-mailbox inbox and stay archived when new replies arrive — handled
+// in email-worker/store.ts on inbound by reading threads_index.muted.
+export async function muteThread(
+  userId: string,
+  threadId: string,
+  muted: boolean,
+): Promise<void> {
+  if (!(await userCanAccessThread(userId, threadId))) return;
+  await getDb()
+    .prepare("UPDATE threads_index SET muted = ? WHERE thread_id = ?")
+    .bind(muted ? 1 : 0, threadId)
+    .run();
+}

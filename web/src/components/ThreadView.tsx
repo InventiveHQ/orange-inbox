@@ -38,6 +38,7 @@ export default function ThreadView({ detail, mailboxId }: Props) {
             threadId={thread.id}
             initialStarred={thread.starred === 1}
             initialArchived={thread.archived === 1}
+            initialMuted={thread.muted === 1}
           />
           <ApplyLabelButton threadId={thread.id} />
           <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />
@@ -60,6 +61,12 @@ export default function ThreadView({ detail, mailboxId }: Props) {
           )}
         </div>
       </header>
+
+      {thread.muted === 1 && (
+        <div className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 px-4 py-2 sm:px-6 text-xs text-neutral-600 dark:text-neutral-400">
+          Muted — new replies stay archived and won&apos;t show in your inbox.
+        </div>
+      )}
 
       <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
         {messages.map(m => (
@@ -115,7 +122,7 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <span className="text-xs text-neutral-500">{formatFullDate(m.date)}</span>
-          <MessageMenu messageId={m.id} />
+          <MessageMenu messageId={m.id} fromAddr={m.from_addr} direction={m.direction} />
         </div>
       </div>
 

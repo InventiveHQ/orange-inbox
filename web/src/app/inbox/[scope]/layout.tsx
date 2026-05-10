@@ -49,7 +49,15 @@ export default async function InboxLayout({
     effectiveScope === "all" || isDrafts || isFullPage ? undefined : effectiveScope;
 
   const [threads, drafts] = await Promise.all([
-    isDrafts || isFullPage ? Promise.resolve([]) : listThreads(user.id, { mailboxId }),
+    isDrafts || isFullPage
+      ? Promise.resolve([])
+      : listThreads(user.id, {
+          mailboxId,
+          // Per-mailbox views hide muted threads; the unified "all" view
+          // shows them so muted mail is still findable without leaving the
+          // inbox UI.
+          includeMuted: mailboxId === undefined,
+        }),
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
 
