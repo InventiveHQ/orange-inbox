@@ -8,6 +8,7 @@ import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
 import HelpManager from "@/components/HelpManager";
+import StorageManager from "@/components/StorageManager";
 
 export default async function InboxIndex({
   params,
@@ -22,6 +23,7 @@ export default async function InboxIndex({
   if (scope === "templates") return <TemplatesRoute />;
   if (scope === "settings") return <SettingsRoute />;
   if (scope === "help") return <HelpManager />;
+  if (scope === "storage") return <StorageRoute />;
 
   const message =
     scope === "drafts" ? "Select a draft to edit it." : "Select a thread to read it.";
@@ -79,4 +81,26 @@ async function SettingsRoute() {
       initialUndoSendSeconds={user.undo_send_seconds}
     />
   );
+}
+
+async function StorageRoute() {
+  // Admin-only — non-admins get a friendly message rather than a 403, since
+  // the link is hidden from them in the sidebar but the URL is still
+  // reachable.
+  const user = await getCurrentUser();
+  if (!user) return null;
+  if (!user.is_admin) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-center px-6">
+        <div className="max-w-md">
+          <h1 className="text-base font-semibold mb-2">Admin only</h1>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            Storage Explorer is only available to admins. If you need it, ask
+            an existing admin to add you in Settings.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return <StorageManager />;
 }

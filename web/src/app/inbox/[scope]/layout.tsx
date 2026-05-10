@@ -37,7 +37,7 @@ export default async function InboxLayout({
   // Validate the scope: "all", "drafts", "contacts", "templates", "settings",
   // "help", or a mailbox the user has access to. Anything else falls back to
   // "all" rather than 404'ing the layout.
-  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates", "settings", "help"]);
+  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates", "settings", "help", "storage"]);
   const isValidScope = SPECIAL_SCOPES.has(scope) || mailboxes.some(mb => mb.id === scope);
   const effectiveScope = isValidScope ? scope : "all";
 
@@ -47,7 +47,8 @@ export default async function InboxLayout({
     effectiveScope === "contacts" ||
     effectiveScope === "templates" ||
     effectiveScope === "settings" ||
-    effectiveScope === "help";
+    effectiveScope === "help" ||
+    effectiveScope === "storage";
   const mailboxId =
     effectiveScope === "all" || isDrafts || isFullPage ? undefined : effectiveScope;
 
@@ -73,7 +74,12 @@ export default async function InboxLayout({
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
 
-  if (domains.length === 0 && effectiveScope !== "settings" && effectiveScope !== "help") {
+  if (
+    domains.length === 0 &&
+    effectiveScope !== "settings" &&
+    effectiveScope !== "help" &&
+    effectiveScope !== "storage"
+  ) {
     return (
       <ToastProvider>
         <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>

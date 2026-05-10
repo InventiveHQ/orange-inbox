@@ -155,6 +155,15 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
         instructions).
       */}
       <div className="border-t border-neutral-200 dark:border-neutral-800 p-2 space-y-0.5">
+        {isAdmin && (
+          <BottomLink
+            href="/inbox/storage"
+            label="Storage"
+            active={scope === "storage"}
+            icon={<StorageIcon />}
+            collapsed={collapsed}
+          />
+        )}
         <BottomLink
           href="/inbox/settings"
           label="Settings"
@@ -491,6 +500,18 @@ function KeyboardIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7Zm2 1.25a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H4Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Zm2.75 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5ZM4 8.5a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H4Zm2 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5H6Zm5.5 0a.5.5 0 0 0-.5.5v.5a.5.5 0 0 0 .5.5h.5a.5.5 0 0 0 .5-.5v-.5a.5.5 0 0 0-.5-.5h-.5Z" />
+    </svg>
+  );
+}
+
+function StorageIcon() {
+  // Stacked-disks glyph — universal "storage" iconography. Three flat ovals
+  // with two thin connector lines, sized to match the other 16x16 icons.
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <ellipse cx="8" cy="3" rx="6" ry="1.75" />
+      <path d="M2 5.25c1.06.94 3.36 1.5 6 1.5s4.94-.56 6-1.5V7.5c0 .97-2.69 1.75-6 1.75S2 8.47 2 7.5V5.25Z" />
+      <path d="M2 9.5c1.06.94 3.36 1.5 6 1.5s4.94-.56 6-1.5v2.25c0 .97-2.69 1.75-6 1.75S2 12.72 2 11.75V9.5Z" />
     </svg>
   );
 }
