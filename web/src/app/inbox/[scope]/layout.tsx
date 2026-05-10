@@ -55,11 +55,19 @@ export default async function InboxLayout({
     "help",
     "storage",
   ]);
-  const isValidScope = SPECIAL_SCOPES.has(scope) || mailboxes.some(mb => mb.id === scope);
+  // `domain:<id>` is a unified view across every mailbox the user can read on
+  // a given domain — picked up below in the listThreads filter.
+  const domainScopeId = scope.startsWith("domain:") ? scope.slice("domain:".length) : null;
+  const matchedDomain = domainScopeId ? domains.find(d => d.id === domainScopeId) ?? null : null;
+  const isValidScope =
+    SPECIAL_SCOPES.has(scope) ||
+    mailboxes.some(mb => mb.id === scope) ||
+    matchedDomain !== null;
   const effectiveScope = isValidScope ? scope : "all";
 
   const isDrafts = effectiveScope === "drafts";
   const isVips = effectiveScope === "vips";
+  const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
   const isFullPage =
     effectiveScope === "contacts" ||
@@ -69,7 +77,9 @@ export default async function InboxLayout({
     effectiveScope === "help" ||
     effectiveScope === "storage";
   const mailboxId =
-    effectiveScope === "all" || isDrafts || isVips || isFullPage ? undefined : effectiveScope;
+    effectiveScope === "all" || isDrafts || isVips || isFullPage || isDomainScope
+      ? undefined
+      : effectiveScope;
 
   const [threads, drafts] = await Promise.all([
     isDrafts || isFullPage
@@ -90,9 +100,10 @@ export default async function InboxLayout({
             })
           : listThreads(user.id, {
               mailboxId,
-              // Per-mailbox views hide muted threads; the unified "all" view
-              // shows them so muted mail is still findable without leaving the
-              // inbox UI.
+              domainId: isDomainScope ? matchedDomain!.id : undefined,
+              // Per-mailbox views hide muted threads; the unified "all" / domain
+              // views show them so muted mail is still findable without leaving
+              // the inbox UI.
               includeMuted: mailboxId === undefined,
             }),
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
@@ -137,10 +148,12 @@ export default async function InboxLayout({
       ? "VIPs"
       : effectiveScope === "all"
         ? "All inboxes"
-        : (() => {
-            const mb = mailboxes.find(m => m.id === effectiveScope);
-            return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
-          })();
+        : isDomainScope
+          ? matchedDomain!.name
+          : (() => {
+              const mb = mailboxes.find(m => m.id === effectiveScope);
+              return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
+            })();
 
   const searchMailboxes = mailboxes.map(mb => ({
     id: mb.id,

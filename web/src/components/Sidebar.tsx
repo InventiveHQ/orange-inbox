@@ -1,17 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
 import type { SavedSearchRow } from "@/lib/saved-searches";
-import AddMailboxButton from "./AddMailboxButton";
-import Avatar from "./Avatar";
-import CapacityIndicator from "./CapacityIndicator";
 import ComposeButton from "./ComposeButton";
-import ManageMailboxButton from "./ManageMailboxButton";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
 const SMART_MAILBOXES_COOKIE = "smart-mailboxes-open";
+const DOMAIN_EXPANDED_PREFIX = "sidebar-domain-expanded:";
 
 interface Props {
   domains: DomainRow[];
@@ -47,9 +44,9 @@ export default function Sidebar({
     document.cookie = `${COLLAPSED_COOKIE}=${next ? "1" : "0"};path=/;max-age=31536000;samesite=lax`;
   }
 
-  // Group mailboxes by domain. Iterating `domains` (not the mailbox map) so a
-  // domain with no accessible mailboxes still appears (admins use the "+" to
-  // create one).
+  // Group mailboxes by domain so we can render single-mailbox domains as a flat
+  // row and multi-mailbox domains as expandable groups. Domains with no
+  // accessible mailboxes are dropped — admins should add a mailbox via Settings.
   const byDomain = new Map<string, MailboxRow[]>();
   for (const mb of mailboxes) {
     const list = byDomain.get(mb.domain_name) ?? [];
@@ -62,10 +59,14 @@ export default function Sidebar({
   // for the unified view.
   const totalUnread = mailboxes.reduce((sum, mb) => sum + (mb.unread_count ?? 0), 0);
 
+  const domainEntries = domains
+    .map(d => ({ domain: d, list: byDomain.get(d.name) ?? [] }))
+    .filter(e => e.list.length > 0);
+
   return (
     <aside
       className={`shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col transition-[width] duration-150 ${
-        collapsed ? "w-14" : "w-64"
+        collapsed ? "w-16" : "w-64"
       }`}
     >
       <div className={`p-3 flex items-center ${collapsed ? "justify-center" : "gap-2"}`}>
@@ -94,7 +95,15 @@ export default function Sidebar({
         <ComposeButton scope={scope} collapsed={collapsed} />
       </div>
 
-      <nav id="orange-sidebar-nav" aria-label="Mailboxes" className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-2" : "px-2"}`}>
+      {/*
+        Extra right-padding so the WebKit scrollbar doesn't overlap row content
+        in the collapsed rail (the icons are nearly the column's full width).
+      */}
+      <nav
+        id="orange-sidebar-nav"
+        aria-label="Mailboxes"
+        className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-1.5 pr-2.5" : "px-2"}`}
+      >
         <SpecialLink
           href="/inbox/all"
           label="All inboxes"
@@ -146,35 +155,21 @@ export default function Sidebar({
           collapsed={collapsed}
         />
 
-        {domains.map(d => {
-          const list = byDomain.get(d.name) ?? [];
-          return (
-            <div key={d.id} className="mt-4">
-              {collapsed ? (
-                <div
-                  className="mx-2 mb-1 h-px bg-neutral-200 dark:bg-neutral-800"
-                  aria-hidden
-                />
-              ) : (
-                <div className="flex items-center justify-between gap-1 px-3 pb-1 text-xs uppercase tracking-wider text-neutral-500">
-                  <span className="truncate">{d.name}</span>
-                  {isAdmin && (
-                    <AddMailboxButton domainId={d.id} domainName={d.name} />
-                  )}
-                </div>
-              )}
-              {list.map(mb => (
-                <SidebarMailbox
-                  key={mb.id}
-                  mb={mb}
-                  active={scope === mb.id}
-                  collapsed={collapsed}
-                  isAdmin={isAdmin}
-                />
-              ))}
-            </div>
-          );
-        })}
+        {!collapsed && domainEntries.length > 0 && (
+          <div className="mt-5 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+            Mailboxes
+          </div>
+        )}
+
+        {domainEntries.map(({ domain, list }) => (
+          <DomainEntry
+            key={domain.id}
+            domain={domain}
+            mailboxes={list}
+            scope={scope}
+            collapsed={collapsed}
+          />
+        ))}
 
         <SmartMailboxes
           collapsed={collapsed}
@@ -184,87 +179,88 @@ export default function Sidebar({
         />
       </nav>
 
-      <div className="border-t border-neutral-200 dark:border-neutral-800">
-        <CapacityIndicator collapsed={collapsed} />
-      </div>
-
       {/*
         Settings + Help sit at the bottom of the drawer — common Gmail/Slack
         pattern, and an out-of-the-way home for things you only touch
         occasionally (mailbox access, signatures, labels, domains, install
-        instructions).
+        instructions, storage usage).
       */}
-      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2 space-y-0.5">
-        {isAdmin && (
-          <BottomLink
-            href="/inbox/storage"
-            label="Storage"
-            active={scope === "storage"}
-            icon={<StorageIcon />}
-            collapsed={collapsed}
+      <div className="border-t border-neutral-200 dark:border-neutral-800 p-2">
+        <div
+          className={
+            collapsed
+              ? "flex flex-col items-center gap-1"
+              : "flex items-center justify-around"
+          }
+        >
+          {isAdmin && (
+            <UtilityIcon
+              href="/inbox/storage"
+              label="Storage"
+              active={scope === "storage"}
+              icon={<StorageIcon />}
+            />
+          )}
+          <UtilityIcon
+            href="/inbox/settings"
+            label="Settings"
+            active={scope === "settings"}
+            icon={<SettingsIcon />}
           />
-        )}
-        <BottomLink
-          href="/inbox/settings"
-          label="Settings"
-          active={scope === "settings"}
-          icon={<SettingsIcon />}
-          collapsed={collapsed}
-        />
-        <BottomLink
-          href="/inbox/help"
-          label="Help"
-          active={scope === "help"}
-          icon={<HelpIcon />}
-          collapsed={collapsed}
-        />
-        <ShortcutsButton collapsed={collapsed} />
+          <UtilityIcon
+            href="/inbox/help"
+            label="Help"
+            active={scope === "help"}
+            icon={<HelpIcon />}
+          />
+          <ShortcutsIconButton />
+        </div>
       </div>
     </aside>
   );
 }
 
-function BottomLink({
+function UtilityIcon({
   href,
   label,
   active,
   icon,
-  collapsed,
 }: {
   href: string;
   label: string;
   active: boolean;
   icon: React.ReactNode;
-  collapsed: boolean;
 }) {
-  if (collapsed) {
-    return (
-      <Link
-        href={href}
-        title={label}
-        aria-label={label}
-        className={`flex items-center justify-center w-10 h-10 mx-auto rounded-md ${
-          active
-            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
-            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-        }`}
-      >
-        {icon}
-      </Link>
-    );
-  }
   return (
     <Link
       href={href}
-      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm ${
+      title={label}
+      aria-label={label}
+      className={`flex items-center justify-center w-9 h-9 rounded-md ${
         active
-          ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
-          : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+          ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
+          : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-neutral-100"
       }`}
     >
       {icon}
-      <span className="truncate">{label}</span>
     </Link>
+  );
+}
+
+function ShortcutsIconButton() {
+  function show() {
+    document.dispatchEvent(new CustomEvent("orange:show-shortcuts"));
+  }
+  return (
+    <button
+      type="button"
+      onClick={show}
+      title="Keyboard shortcuts (?)"
+      aria-label="Keyboard shortcuts"
+      className="flex items-center justify-center w-9 h-9 rounded-md text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-neutral-100"
+    >
+      <KeyboardIcon />
+    </button>
   );
 }
 
@@ -323,19 +319,194 @@ function SpecialLink({
   );
 }
 
+// Renders one domain's worth of sidebar entries.
+//
+// Single mailbox → render the mailbox row directly (no domain wrapper).
+//
+// Multiple mailboxes → render an expandable group: the header itself links to
+// `/inbox/domain:<id>` (a unified view across the domain's mailboxes) and a
+// chevron toggles the children. Expansion is persisted per domain in
+// localStorage, and auto-opens when the active scope is one of its children.
+function DomainEntry({
+  domain,
+  mailboxes,
+  scope,
+  collapsed,
+}: {
+  domain: DomainRow;
+  mailboxes: MailboxRow[];
+  scope: string;
+  collapsed: boolean;
+}) {
+  const domainScope = `domain:${domain.id}`;
+  const domainActive = scope === domainScope;
+  const childActive = mailboxes.some(mb => mb.id === scope);
+  const totalUnread = mailboxes.reduce((s, mb) => s + (mb.unread_count ?? 0), 0);
+
+  if (mailboxes.length === 1) {
+    return (
+      <SidebarMailbox
+        mb={mailboxes[0]}
+        active={scope === mailboxes[0].id}
+        collapsed={collapsed}
+      />
+    );
+  }
+
+  if (collapsed) {
+    // Collapsed sidebar: one icon per multi-mailbox domain (clickable to the
+    // unified view). Drilling into individual mailboxes requires expanding.
+    return (
+      <Link
+        href={`/inbox/${domainScope}`}
+        title={domain.name}
+        aria-label={domain.name}
+        aria-current={domainActive ? "page" : undefined}
+        className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
+          domainActive || childActive
+            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
+            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+        }`}
+      >
+        <DomainIcon />
+        {totalUnread > 0 && (
+          <span
+            aria-hidden
+            className="absolute top-1 right-1 inline-block h-2 w-2 rounded-full bg-[var(--color-brand)]"
+          />
+        )}
+      </Link>
+    );
+  }
+
+  return (
+    <ExpandableDomainGroup
+      domain={domain}
+      mailboxes={mailboxes}
+      scope={scope}
+      domainScope={domainScope}
+      domainActive={domainActive}
+      childActive={childActive}
+      totalUnread={totalUnread}
+    />
+  );
+}
+
+function ExpandableDomainGroup({
+  domain,
+  mailboxes,
+  scope,
+  domainScope,
+  domainActive,
+  childActive,
+  totalUnread,
+}: {
+  domain: DomainRow;
+  mailboxes: MailboxRow[];
+  scope: string;
+  domainScope: string;
+  domainActive: boolean;
+  childActive: boolean;
+  totalUnread: number;
+}) {
+  const storageKey = `${DOMAIN_EXPANDED_PREFIX}${domain.id}`;
+  // Default expanded if a child is active (so users can see where they are).
+  // Otherwise, defer to the persisted preference (read after mount).
+  const [expanded, setExpanded] = useState(() => childActive);
+  useEffect(() => {
+    if (childActive) {
+      setExpanded(true);
+      return;
+    }
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved === "1") setExpanded(true);
+      else if (saved === "0") setExpanded(false);
+    } catch {
+      // localStorage may be unavailable (private mode / quota); keep default.
+    }
+  }, [storageKey, childActive]);
+
+  function toggle(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpanded(prev => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(storageKey, next ? "1" : "0");
+      } catch {
+        // best-effort
+      }
+      return next;
+    });
+  }
+
+  return (
+    <div className="mt-1">
+      <div className="group flex items-stretch">
+        <Link
+          href={`/inbox/${domainScope}`}
+          aria-current={domainActive ? "page" : undefined}
+          className={`flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm min-w-0 ${
+            domainActive
+              ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
+              : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+          }`}
+        >
+          <DomainIcon />
+          <span className="truncate flex-1">{domain.name}</span>
+          {totalUnread > 0 && <UnreadBadge count={totalUnread} active={domainActive} />}
+        </Link>
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${domain.name}` : `Expand ${domain.name}`}
+          className="ml-0.5 px-1 rounded text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+        >
+          <ChevronToggle expanded={expanded} />
+        </button>
+      </div>
+      {expanded && (
+        <ul className="mt-0.5 space-y-0.5">
+          {mailboxes.map(mb => (
+            <li key={mb.id}>
+              <SidebarMailbox
+                mb={mb}
+                active={scope === mb.id}
+                collapsed={false}
+                indent
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SidebarMailbox({
   mb,
   active,
   collapsed,
-  isAdmin,
+  indent = false,
 }: {
   mb: MailboxRow;
   active: boolean;
   collapsed: boolean;
-  isAdmin: boolean;
+  indent?: boolean;
 }) {
   const fullAddress = `${mb.local_part}@${mb.domain_name}`;
-  const label = mb.is_catch_all ? `${mb.local_part}@ (catch-all)` : fullAddress;
+  // Indented under a multi-mailbox domain header → the domain is right above,
+  // so showing it again is noise. Top-level (single-mailbox domain) shows the
+  // full address so the domain is still visible.
+  const label = indent
+    ? mb.is_catch_all
+      ? `${mb.local_part}@ (catch-all)`
+      : `${mb.local_part}@`
+    : mb.is_catch_all
+      ? `${fullAddress} (catch-all)`
+      : fullAddress;
   const tooltip = mb.is_catch_all ? `${fullAddress} (catch-all)` : fullAddress;
   const hasUnread = mb.unread_count > 0;
   const ariaLabel = hasUnread ? `${label}, ${mb.unread_count} unread` : label;
@@ -347,19 +518,18 @@ function SidebarMailbox({
         href={`/inbox/${mb.id}`}
         title={collapsedTitle}
         aria-label={ariaLabel}
+        aria-current={active ? "page" : undefined}
         className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
-          active ? "bg-[var(--color-brand)]/15" : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
+          active
+            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
+            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
         }`}
       >
-        <MailboxAvatar
-          localPart={mb.local_part}
-          domainName={mb.domain_name}
-          active={active}
-        />
+        <MailboxIcon />
         {hasUnread && (
           <span
             aria-hidden
-            className="absolute top-1 right-1 inline-block h-2 w-2 rounded-full bg-[var(--color-brand)] ring-2 ring-white dark:ring-neutral-950"
+            className="absolute top-1 right-1 inline-block h-2 w-2 rounded-full bg-[var(--color-brand)]"
           />
         )}
       </Link>
@@ -367,40 +537,36 @@ function SidebarMailbox({
   }
 
   return (
-    <div className="group flex items-center gap-1">
-      <Link
-        href={`/inbox/${mb.id}`}
-        aria-label={ariaLabel}
-        className={`flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm min-w-0 ${
-          active
-            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
-            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+    <Link
+      href={`/inbox/${mb.id}`}
+      aria-label={ariaLabel}
+      aria-current={active ? "page" : undefined}
+      title={tooltip}
+      className={`flex items-center gap-2 rounded-md py-1.5 text-sm min-w-0 ${
+        indent ? "pl-7 pr-2" : "px-2"
+      } ${
+        active
+          ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
+          : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+      }`}
+    >
+      <span
+        className={`truncate flex-1 ${
+          hasUnread && !active ? "font-semibold text-neutral-900 dark:text-neutral-100" : ""
         }`}
       >
-        <MailboxAvatar
-          localPart={mb.local_part}
-          domainName={mb.domain_name}
-          active={active}
-        />
+        {label}
+      </span>
+      {mb.is_shared === 1 && (
         <span
-          className={`truncate flex-1 ${
-            hasUnread && !active ? "font-semibold text-neutral-900 dark:text-neutral-100" : ""
-          }`}
+          title={`${mb.member_count} members`}
+          className="ml-1 shrink-0 text-[10px] uppercase tracking-wider text-neutral-500"
         >
-          {label}
+          shared
         </span>
-        {mb.is_shared === 1 && (
-          <span
-            title={`${mb.member_count} members`}
-            className="ml-1 shrink-0 text-[10px] uppercase tracking-wider text-neutral-500"
-          >
-            shared
-          </span>
-        )}
-        {hasUnread && <UnreadBadge count={mb.unread_count} active={active} />}
-      </Link>
-      {isAdmin && <ManageMailboxButton mailbox={mb} />}
-    </div>
+      )}
+      {hasUnread && <UnreadBadge count={mb.unread_count} active={active} />}
+    </Link>
   );
 }
 
@@ -420,21 +586,6 @@ function UnreadBadge({ count, active }: { count: number; active: boolean }) {
       {display}
     </span>
   );
-}
-
-function MailboxAvatar({
-  localPart,
-  domainName,
-  active,
-}: {
-  localPart: string;
-  domainName: string;
-  active: boolean;
-}) {
-  // Domain seeds the color (so all mailboxes on the same domain share a tint),
-  // initials show local+domain letters.
-  const initials = ((localPart[0] ?? "?") + (domainName[0] ?? "?")).toUpperCase();
-  return <Avatar seed={domainName} label={initials} size="sm" ringed={active} />;
 }
 
 // Smart Mailboxes — saved-search shortcuts. Collapsible header (state cookied
@@ -472,9 +623,7 @@ function SmartMailboxes({
             Save a search to see it here
           </p>
         ) : (
-          savedSearches.map(s => (
-            <SmartMailboxLink key={s.id} saved={s} />
-          ))
+          savedSearches.map(s => <SmartMailboxLink key={s.id} saved={s} />)
         )
       )}
     </div>
@@ -504,6 +653,21 @@ function ChevronTwistyIcon({ open }: { open: boolean }) {
       fill="currentColor"
       aria-hidden
       className={`transition-transform ${open ? "rotate-90" : ""}`}
+    >
+      <path d="M5.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L8.94 8 5.22 4.28a.75.75 0 0 1 0-1.06Z" />
+    </svg>
+  );
+}
+
+function ChevronToggle({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+      className={`transition-transform ${expanded ? "rotate-90" : ""}`}
     >
       <path d="M5.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L8.94 8 5.22 4.28a.75.75 0 0 1 0-1.06Z" />
     </svg>
@@ -606,41 +770,6 @@ function HelpIcon() {
   );
 }
 
-// Footer button that opens the keyboard cheat-sheet via a custom event the
-// inbox-layout-mounted KeyboardShortcuts component listens for. Avoids
-// hoisting the modal state up to the layout.
-function ShortcutsButton({ collapsed }: { collapsed: boolean }) {
-  function show() {
-    document.dispatchEvent(new CustomEvent("orange:show-shortcuts"));
-  }
-  if (collapsed) {
-    return (
-      <button
-        type="button"
-        onClick={show}
-        title="Keyboard shortcuts (?)"
-        aria-label="Keyboard shortcuts"
-        className="flex items-center justify-center w-10 h-10 mx-auto rounded-md text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-      >
-        <KeyboardIcon />
-      </button>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={show}
-      className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-    >
-      <KeyboardIcon />
-      <span className="truncate">Keyboard shortcuts</span>
-      <kbd className="ml-auto rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-1.5 py-0.5 text-[10px] font-mono">
-        ?
-      </kbd>
-    </button>
-  );
-}
-
 function KeyboardIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
@@ -650,8 +779,6 @@ function KeyboardIcon() {
 }
 
 function StorageIcon() {
-  // Stacked-disks glyph — universal "storage" iconography. Three flat ovals
-  // with two thin connector lines, sized to match the other 16x16 icons.
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <ellipse cx="8" cy="3" rx="6" ry="1.75" />
@@ -665,6 +792,22 @@ function SettingsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M9.405 1.05a.75.75 0 0 0-.81 0l-.97.583a.75.75 0 0 1-.69.045l-1.05-.45a.75.75 0 0 0-.79.146l-.834.835a.75.75 0 0 1-.598.218l-1.13-.084a.75.75 0 0 0-.79.554l-.314 1.087a.75.75 0 0 1-.45.5l-1.04.42a.75.75 0 0 0-.45.79l.187 1.115a.75.75 0 0 1-.146.62l-.69.89a.75.75 0 0 0 0 .91l.69.89a.75.75 0 0 1 .146.62l-.187 1.115a.75.75 0 0 0 .45.79l1.04.42a.75.75 0 0 1 .45.5l.314 1.087a.75.75 0 0 0 .79.554l1.13-.084a.75.75 0 0 1 .598.218l.834.835a.75.75 0 0 0 .79.146l1.05-.45a.75.75 0 0 1 .69.045l.97.583a.75.75 0 0 0 .81 0l.97-.583a.75.75 0 0 1 .69-.045l1.05.45a.75.75 0 0 0 .79-.146l.834-.835a.75.75 0 0 1 .598-.218l1.13.084a.75.75 0 0 0 .79-.554l.314-1.087a.75.75 0 0 1 .45-.5l1.04-.42a.75.75 0 0 0 .45-.79l-.187-1.115a.75.75 0 0 1 .146-.62l.69-.89a.75.75 0 0 0 0-.91l-.69-.89a.75.75 0 0 1-.146-.62l.187-1.115a.75.75 0 0 0-.45-.79l-1.04-.42a.75.75 0 0 1-.45-.5l-.314-1.087a.75.75 0 0 0-.79-.554l-1.13.084a.75.75 0 0 1-.598-.218l-.834-.835a.75.75 0 0 0-.79-.146l-1.05.45a.75.75 0 0 1-.69-.045l-.97-.583ZM8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" />
+    </svg>
+  );
+}
+
+function DomainIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm-.5 1.55v2.95H4.94c.43-1.43 1.4-2.55 2.56-2.95Zm1 0c1.16.4 2.13 1.52 2.56 2.95H8.5V2.55ZM4.6 6.5h2.9V9H4.21A6.04 6.04 0 0 1 4 7.5c0-.34.04-.68.1-1Zm3.9 0h2.9c.06.32.1.66.1 1 0 .52-.07 1.02-.21 1.5H8.5V6.5ZM4.94 10H7.5v2.95C6.34 12.55 5.37 11.43 4.94 10Zm3.56 0h2.56c-.43 1.43-1.4 2.55-2.56 2.95V10Zm3.62-1c.14-.48.21-.98.21-1.5 0-.34-.04-.68-.1-1h-2.13a8.43 8.43 0 0 1 0 2.5h2.02Z" />
+    </svg>
+  );
+}
+
+function MailboxIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M2.5 3A1.5 1.5 0 0 0 1 4.5v7A1.5 1.5 0 0 0 2.5 13h11a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 3h-11Zm0 1.5L8 8l5.5-3.5h.01L8 8.94 2.49 4.5h.01Z" />
     </svg>
   );
 }
