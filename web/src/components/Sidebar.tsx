@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
 import AddMailboxButton from "./AddMailboxButton";
+import Avatar from "./Avatar";
 import CapacityIndicator from "./CapacityIndicator";
 import ComposeButton from "./ComposeButton";
 import ManageMailboxButton from "./ManageMailboxButton";
@@ -325,35 +326,10 @@ function MailboxAvatar({
   domainName: string;
   active: boolean;
 }) {
+  // Domain seeds the color (so all mailboxes on the same domain share a tint),
+  // initials show local+domain letters.
   const initials = ((localPart[0] ?? "?") + (domainName[0] ?? "?")).toUpperCase();
-  const palette = colorForDomain(domainName);
-  return (
-    <span
-      aria-hidden
-      className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-semibold ${palette} ${
-        active ? "ring-1 ring-[var(--color-brand)]" : ""
-      }`}
-    >
-      {initials}
-    </span>
-  );
-}
-
-const AVATAR_PALETTE = [
-  "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-200",
-  "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
-  "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
-  "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-200",
-  "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200",
-  "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-200",
-  "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200",
-  "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-200",
-];
-
-function colorForDomain(name: string): string {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
+  return <Avatar seed={domainName} label={initials} size="sm" ringed={active} />;
 }
 
 function ChevronLeftIcon() {

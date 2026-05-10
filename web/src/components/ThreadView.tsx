@@ -1,6 +1,7 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
-import { formatFullDate } from "@/lib/format";
+import { formatFullDate, senderLabel } from "@/lib/format";
 import ApplyLabelButton from "./ApplyLabelButton";
+import Avatar from "./Avatar";
 import BackToListButton from "./BackToListButton";
 import ReplyButton from "./ReplyButton";
 import SnoozeButton from "./SnoozeButton";
@@ -83,35 +84,43 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
   const inlineAtts = m.attachments.filter(a => a.inline_cid != null);
   const fileAtts = m.attachments.filter(a => a.inline_cid == null);
 
+  // Address seeds the color (stable across display-name variants); label is
+  // the first letter of whatever name we actually render.
+  const senderText = senderLabel(m.from_addr, m.from_name);
+  const avatarSeed = m.from_addr || senderText;
+
   return (
     <section className="px-4 py-4 sm:px-6 sm:py-5">
       <div className="flex items-baseline justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium break-words">
-            {m.from_name && m.from_name.trim() ? (
-              <>
-                {m.from_name.trim()}{" "}
-                <span className="font-normal text-neutral-500 break-all">
-                  &lt;{m.from_addr}&gt;
-                </span>
-              </>
-            ) : (
-              m.from_addr || "Unknown"
+        <div className="flex items-start gap-3 min-w-0">
+          <Avatar seed={avatarSeed} label={senderText} size="lg" title={m.from_addr} />
+          <div className="min-w-0">
+            <div className="text-sm font-medium break-words">
+              {m.from_name && m.from_name.trim() ? (
+                <>
+                  {m.from_name.trim()}{" "}
+                  <span className="font-normal text-neutral-500 break-all">
+                    &lt;{m.from_addr}&gt;
+                  </span>
+                </>
+              ) : (
+                m.from_addr || "Unknown"
+              )}
+            </div>
+            {to.length > 0 && (
+              <div className="text-xs text-neutral-500 break-all">
+                to {to.map(a => a.name || a.addr).join(", ")}
+              </div>
+            )}
+            {sentByLabel && (
+              <div
+                className="text-xs text-neutral-500 italic mt-0.5"
+                title="Internal attribution — recipients see only the mailbox address"
+              >
+                sent by {sentByLabel}
+              </div>
             )}
           </div>
-          {to.length > 0 && (
-            <div className="text-xs text-neutral-500 break-all">
-              to {to.map(a => a.name || a.addr).join(", ")}
-            </div>
-          )}
-          {sentByLabel && (
-            <div
-              className="text-xs text-neutral-500 italic mt-0.5"
-              title="Internal attribution — recipients see only the mailbox address"
-            >
-              sent by {sentByLabel}
-            </div>
-          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <span className="text-xs text-neutral-500">{formatFullDate(m.date)}</span>
