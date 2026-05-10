@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
+import type { SavedSearchRow } from "@/lib/saved-searches";
 import AddMailboxButton from "./AddMailboxButton";
 import Avatar from "./Avatar";
 import CapacityIndicator from "./CapacityIndicator";
@@ -10,6 +11,7 @@ import ComposeButton from "./ComposeButton";
 import ManageMailboxButton from "./ManageMailboxButton";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
+const SMART_MAILBOXES_COOKIE = "smart-mailboxes-open";
 
 interface Props {
   domains: DomainRow[];
@@ -17,10 +19,27 @@ interface Props {
   scope: string;
   initialCollapsed?: boolean;
   isAdmin: boolean;
+  savedSearches?: SavedSearchRow[];
+  initialSmartOpen?: boolean;
 }
 
-export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = false, isAdmin }: Props) {
+export default function Sidebar({
+  domains,
+  mailboxes,
+  scope,
+  initialCollapsed = false,
+  isAdmin,
+  savedSearches = [],
+  initialSmartOpen = true,
+}: Props) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const [smartOpen, setSmartOpen] = useState(initialSmartOpen);
+
+  function toggleSmart() {
+    const next = !smartOpen;
+    setSmartOpen(next);
+    document.cookie = `${SMART_MAILBOXES_COOKIE}=${next ? "1" : "0"};path=/;max-age=31536000;samesite=lax`;
+  }
 
   function toggle() {
     const next = !collapsed;
@@ -142,6 +161,13 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
             </div>
           );
         })}
+
+        <SmartMailboxes
+          collapsed={collapsed}
+          open={smartOpen}
+          onToggle={toggleSmart}
+          savedSearches={savedSearches}
+        />
       </nav>
 
       <div className="border-t border-neutral-200 dark:border-neutral-800">
@@ -386,6 +412,94 @@ function MailboxAvatar({
   // initials show local+domain letters.
   const initials = ((localPart[0] ?? "?") + (domainName[0] ?? "?")).toUpperCase();
   return <Avatar seed={domainName} label={initials} size="sm" ringed={active} />;
+}
+
+// Smart Mailboxes — saved-search shortcuts. Collapsible header (state cookied
+// so the open/closed pref survives reloads) with each entry linking back to
+// /search?q=<encoded>. Hidden from the collapsed-rail layout because there's
+// nothing meaningful to render in a 14px column for free-form names; users
+// who rely on saved searches will keep the sidebar expanded.
+function SmartMailboxes({
+  collapsed,
+  open,
+  onToggle,
+  savedSearches,
+}: {
+  collapsed: boolean;
+  open: boolean;
+  onToggle: () => void;
+  savedSearches: SavedSearchRow[];
+}) {
+  if (collapsed) return null;
+
+  return (
+    <div className="mt-4">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1 px-3 pb-1 text-xs uppercase tracking-wider text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+      >
+        <ChevronTwistyIcon open={open} />
+        <span className="truncate">Smart Mailboxes</span>
+      </button>
+      {open && (
+        savedSearches.length === 0 ? (
+          <p className="px-3 py-1 text-xs text-neutral-500">
+            Save a search to see it here
+          </p>
+        ) : (
+          savedSearches.map(s => (
+            <SmartMailboxLink key={s.id} saved={s} />
+          ))
+        )
+      )}
+    </div>
+  );
+}
+
+function SmartMailboxLink({ saved }: { saved: SavedSearchRow }) {
+  const href = `/search?q=${encodeURIComponent(saved.query)}`;
+  return (
+    <Link
+      href={href}
+      title={saved.query}
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+    >
+      <SearchPinIcon />
+      <span className="truncate flex-1">{saved.name}</span>
+    </Link>
+  );
+}
+
+function ChevronTwistyIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+      className={`transition-transform ${open ? "rotate-90" : ""}`}
+    >
+      <path d="M5.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L8.94 8 5.22 4.28a.75.75 0 0 1 0-1.06Z" />
+    </svg>
+  );
+}
+
+function SearchPinIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+      className="text-neutral-500"
+    >
+      <path d="M11 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-.5 3.5 3 3a.75.75 0 1 1-1.06 1.06l-3-3a.75.75 0 0 1 1.06-1.06Z" />
+    </svg>
+  );
 }
 
 function ChevronLeftIcon() {

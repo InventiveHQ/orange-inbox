@@ -4,6 +4,7 @@ import { listMailboxesForUser } from "@/lib/queries";
 import { searchThreads, type SearchResult } from "@/lib/search";
 import { formatThreadDate, senderLabel } from "@/lib/format";
 import SearchBar from "@/components/SearchBar";
+import SaveSearchButton from "@/components/SaveSearchButton";
 
 interface Props {
   searchParams: Promise<{ q?: string | string[]; scope?: string | string[] }>;
@@ -42,6 +43,7 @@ export default async function SearchPage(props: Props) {
         <div className="flex-1 max-w-2xl">
           <SearchBar defaultQuery={q} defaultScope={scope} mailboxes={searchMailboxes} />
         </div>
+        {q.trim() && <SaveSearchButton query={q} />}
       </header>
 
       {!q.trim() ? (
