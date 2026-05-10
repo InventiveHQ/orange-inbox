@@ -216,6 +216,44 @@ function ComposeModal({
     [identities, fromId],
   );
 
+  // Always-current handlers for the document-level keyboard shortcuts.
+  // Using refs lets the listener (which captures over a single mount)
+  // call into the latest `submit`/`setMinimized` without re-binding on
+  // every state change.
+  const submitRef = useRef<() => void>(() => {});
+  const minimizeRef = useRef<() => void>(() => {});
+
+  // ⌘/Ctrl+Enter → Send, Esc → minimize. Declared up here (before the
+  // identities.length === 0 early return) so the hook count stays stable
+  // across both render branches. Skipped when focus is inside a <select>
+  // (the From picker) or while the schedule popover is open (Esc closes
+  // that instead).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const inSelect = target?.tagName === "SELECT";
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !inSelect && !scheduleOpen) {
+        e.preventDefault();
+        submitRef.current();
+        return;
+      }
+      if (e.key === "Escape" && !inSelect && !scheduleOpen) {
+        e.preventDefault();
+        minimizeRef.current();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [scheduleOpen]);
+
+  // Keep ref targets pointing at the latest closures so the keydown
+  // listener (registered once) calls into current state. No deps array →
+  // runs after every render.
+  useEffect(() => {
+    submitRef.current = submit;
+    minimizeRef.current = () => setMinimized(true);
+  });
+
   if (identities.length === 0) {
     return (
       <ModalShell onBackdrop={onClose}>

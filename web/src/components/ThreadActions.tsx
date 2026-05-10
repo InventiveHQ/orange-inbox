@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useToast } from "./ToastProvider";
 import UndoToast from "./UndoToast";
 
 interface Props {
@@ -39,6 +40,7 @@ export default function ThreadActions({
   initialMuted,
 }: Props) {
   const router = useRouter();
+  const { toast } = useToast();
   const [starred, setStarred] = useState(initialStarred);
   const [archived, setArchived] = useState(initialArchived);
   const [muted, setMuted] = useState(initialMuted);
@@ -84,6 +86,21 @@ export default function ThreadActions({
         setError(b.error ?? `Failed (${res.status})`);
         return;
       }
+      toast({
+        message: next ? "Conversation muted" : "Conversation unmuted",
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            setMuted(!next);
+            await fetch(`/api/threads/${threadId}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ muted: !next }),
+            });
+            router.refresh();
+          },
+        },
+      });
       router.refresh();
     });
   }

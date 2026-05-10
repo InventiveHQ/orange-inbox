@@ -33,3 +33,15 @@ export function htmlToText(html: string): string {
 export function looksLikeHtml(s: string): boolean {
   return /<\/?[a-z][\s\S]*?>/i.test(s);
 }
+
+// HTML → plain text optimised for use as the body of a Gmail-style quoted
+// reply. Drops any pre-existing `<blockquote type="cite">` chains (the
+// previous reply chain) so we don't snowball the quote each round-trip,
+// then strips the rest with `htmlToText`. We also clamp length so a 5MB
+// marketing email doesn't blow up the compose draft.
+export function htmlToQuotedText(html: string, maxChars = 64_000): string {
+  if (!html) return "";
+  const trimmed = html.replace(/<blockquote[^>]*type=["']cite["'][^>]*>[\s\S]*?<\/blockquote>/gi, "");
+  const text = htmlToText(trimmed);
+  return text.length > maxChars ? `${text.slice(0, maxChars)}\n…` : text;
+}
