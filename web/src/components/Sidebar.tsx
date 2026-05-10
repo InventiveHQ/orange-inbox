@@ -104,6 +104,13 @@ export default function Sidebar({
           unreadCount={totalUnread}
         />
         <SpecialLink
+          href="/inbox/vips"
+          label="VIPs"
+          active={scope === "vips"}
+          icon={<VipIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/inbox/drafts"
           label="Drafts"
           active={scope === "drafts"}
@@ -571,6 +578,14 @@ function SubscriptionsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M2.5 1.5A1.5 1.5 0 0 0 1 3v5.586a1.5 1.5 0 0 0 .44 1.06l4.914 4.915a1.5 1.5 0 0 0 2.121 0l5.586-5.586a1.5 1.5 0 0 0 0-2.121L9.146 1.94A1.5 1.5 0 0 0 8.086 1.5H2.5Zm2 4.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" />
+    </svg>
+  );
+}
+
+function VipIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1.25 9.86 5l4.14.6-3 2.93.71 4.13L8 10.71l-3.71 1.95.71-4.13-3-2.93L6.14 5 8 1.25Z" />
     </svg>
   );
 }

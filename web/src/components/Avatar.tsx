@@ -61,20 +61,40 @@ interface Props {
   ringed?: boolean;
   className?: string;
   title?: string;
+  // VIP sender (issue #73). Renders a small star overlay in the
+  // top-right of the avatar plus a soft halo ring, so VIPs are visually
+  // distinct in the thread reader and inbox row.
+  vip?: boolean;
 }
 
-export default function Avatar({ seed, label, size = "md", ringed = false, className = "", title }: Props) {
+export default function Avatar({ seed, label, size = "md", ringed = false, className = "", title, vip = false }: Props) {
   const palette = colorForSeed(seed || "?");
   const text = (label && initialsFromLabel(label)) || defaultLabel(seed || "?");
-  return (
+  // The VIP star is positioned absolutely over the avatar, so we wrap in a
+  // relative container only when `vip` is true. Keeps the non-VIP markup
+  // unchanged (a plain <span> with the same className contract).
+  const inner = (
     <span
       aria-hidden
       title={title}
       className={`shrink-0 rounded-full flex items-center justify-center font-semibold ${SIZE_CLASSES[size]} ${palette} ${
         ringed ? "ring-1 ring-[var(--color-brand)]" : ""
-      } ${className}`}
+      } ${vip ? "ring-2 ring-amber-400" : ""} ${className}`}
     >
       {text}
+    </span>
+  );
+  if (!vip) return inner;
+  return (
+    <span className="relative inline-flex" title={title}>
+      {inner}
+      <span
+        aria-hidden
+        title="VIP sender"
+        className="absolute -top-0.5 -right-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-400 text-[8px] leading-none text-white shadow ring-1 ring-white dark:ring-neutral-950"
+      >
+        ★
+      </span>
     </span>
   );
 }

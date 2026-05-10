@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "./ToastProvider";
+import RemindButton from "./RemindButton";
 import UndoToast from "./UndoToast";
 
 interface Props {
@@ -11,6 +12,10 @@ interface Props {
   initialArchived: boolean;
   initialMuted: boolean;
   initialPinned: boolean;
+  // Reminder timestamp on the thread (issue #75). Drives the Remind button
+  // sibling-rendered below. Snooze stays in its own component — remind is
+  // intentionally a separate concept and a separate mutation endpoint.
+  initialRemindAt: number | null;
 }
 
 // Window during which the user can hit Undo. Mirrors Gmail's "Conversation
@@ -40,6 +45,7 @@ export default function ThreadActions({
   initialArchived,
   initialMuted,
   initialPinned,
+  initialRemindAt,
 }: Props) {
   const router = useRouter();
   const { toast } = useToast();
@@ -287,6 +293,7 @@ export default function ThreadActions({
             >
               Delete
             </button>
+            <RemindButton threadId={threadId} initialRemindAt={initialRemindAt} />
           </>
         )}
       </div>

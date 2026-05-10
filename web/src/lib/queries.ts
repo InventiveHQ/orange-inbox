@@ -95,6 +95,10 @@ export interface ThreadListItem {
   archived: number;
   muted: number;
   pinned: number;
+  // Reminder (issue #75) is unrelated to snooze: snooze HIDES a thread
+  // until the time elapses, remind keeps the thread visible and pops a
+  // "Reminder due" banner at the chosen time. NULL when no reminder set.
+  remind_at: number | null;
   domain_id: string;
   domain_name: string;
   mailbox_id: string;
@@ -162,6 +166,7 @@ export async function listThreads(
       ti.archived,
       ti.muted,
       ti.pinned,
+      ti.remind_at,
       d.id   AS domain_id,
       d.name AS domain_name,
       mb.id  AS mailbox_id,
@@ -229,6 +234,10 @@ export interface ThreadDetail {
     // appear" and similar gates in the reader UI.
     user_role: "owner" | "member" | "reader";
     snoozed_until: number | null;
+    // Reminder timestamp (issue #75). NULL means no reminder. When set and
+    // <= now() the reader shows a "Reminder due" banner; the thread itself
+    // stays visible regardless of the timestamp (unlike snooze).
+    remind_at: number | null;
   };
   messages: ThreadMessage[];
 }
@@ -297,7 +306,7 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
     .prepare(
       `SELECT ti.thread_id AS id, ti.subject_normalized, ti.last_message_at,
               ti.message_count, ti.unread_count, ti.starred, ti.archived,
-              ti.muted, ti.pinned, ti.snoozed_until,
+              ti.muted, ti.pinned, ti.snoozed_until, ti.remind_at,
               d.name AS domain_name,
               mb.id AS mailbox_id, mb.local_part AS mailbox_local_part,
               uma.role AS user_role
@@ -528,4 +537,80 @@ export async function listSubscriptionsForUser(
   // Most-recent senders first — typical "manage your subscriptions" sort.
   out.sort((a, b) => b.last_message_at - a.last_message_at);
   return out;
+}
+
+// VIP sender list for a user (issue #73). Stored lowercase on insert so this
+// is just a direct read — callers compare with the same normalisation.
+export async function listVipAddresses(userId: string): Promise<string[]> {
+  const { results } = await getDb()
+    .prepare("SELECT addr FROM vip_senders WHERE user_id = ? ORDER BY added_at DESC")
+    .bind(userId)
+    .all<{ addr: string }>();
+  return (results ?? []).map(r => r.addr);
+}
+
+// Threads where any message's last_from_addr is in the user's VIP list.
+// Cross-mailbox by design: VIPs are a per-user concept, not per-mailbox, so
+// this view spans every mailbox the user has access to. The thread's
+// `last_from_addr` is what the inbox row already shows — matching on that
+// keeps the listing consistent with what the user sees in other views.
+//
+// We currently match on the most recent inbound sender only (via
+// threads_index.last_from_addr). A thread where a VIP appeared earlier in the
+// chain but isn't the most recent sender won't surface here — acceptable
+// trade-off for keeping this an indexed equality lookup.
+export async function listVipThreads(
+  userId: string,
+  opts: { limit?: number } = {},
+): Promise<ThreadListItem[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const sql = `
+    SELECT
+      ti.thread_id AS id,
+      ti.subject_normalized,
+      ti.last_message_at,
+      ti.message_count,
+      ti.unread_count,
+      ti.starred,
+      ti.archived,
+      ti.muted,
+      ti.pinned,
+      ti.remind_at,
+      d.id   AS domain_id,
+      d.name AS domain_name,
+      mb.id  AS mailbox_id,
+      mb.local_part AS mailbox_local_part,
+      ti.last_subject   AS last_subject,
+      ti.last_from_addr AS last_from_addr,
+      ti.last_from_name AS last_from_name,
+      ti.last_snippet   AS last_snippet,
+      (
+        SELECT JSON_GROUP_ARRAY(
+                 JSON_OBJECT('id', l.id, 'name', l.name, 'color', l.color)
+               )
+          FROM (
+            SELECT l.id, l.name, l.color
+              FROM thread_labels tl
+              INNER JOIN labels l ON l.id = tl.label_id
+             WHERE tl.thread_id = ti.thread_id
+             ORDER BY l.name
+          ) AS l
+      ) AS labels_json
+    FROM threads_index ti
+    INNER JOIN mailboxes mb ON mb.id = ti.mailbox_id
+    INNER JOIN domains d   ON d.id = mb.domain_id
+    INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
+    INNER JOIN vip_senders v
+            ON v.user_id = uma.user_id
+           AND v.addr = LOWER(ti.last_from_addr)
+    WHERE uma.user_id = ?
+      AND ti.archived = 0
+    ORDER BY ti.last_message_at DESC
+    LIMIT ?
+  `;
+  const { results } = await getDb()
+    .prepare(sql)
+    .bind(userId, limit)
+    .all<ThreadListRow>();
+  return (results ?? []).map(parseThreadListRow);
 }

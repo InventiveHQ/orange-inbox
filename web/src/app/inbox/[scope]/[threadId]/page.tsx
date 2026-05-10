@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { getThreadDetail } from "@/lib/queries";
+import { getThreadDetail, listVipAddresses } from "@/lib/queries";
 import { markThreadRead } from "@/lib/threads-mutate";
 import {
   getContactForUser,
@@ -30,10 +30,19 @@ export default async function ScopedDetailPage({
     return <ContactDetail contact={contact} threads={threads} identities={identities} />;
   }
 
-  const detail = await getThreadDetail(user.id, threadId);
+  const [detail, vipAddrs] = await Promise.all([
+    getThreadDetail(user.id, threadId),
+    listVipAddresses(user.id),
+  ]);
   if (!detail) notFound();
   // Side-effect during render is fine here: this page is dynamic, the
   // mutation is idempotent, and it's auth-gated inside markThreadRead.
   await markThreadRead(user.id, threadId);
-  return <ThreadView detail={detail} mailboxId={detail.thread.mailbox_id} />;
+  return (
+    <ThreadView
+      detail={detail}
+      mailboxId={detail.thread.mailbox_id}
+      vipAddrs={new Set(vipAddrs)}
+    />
+  );
 }

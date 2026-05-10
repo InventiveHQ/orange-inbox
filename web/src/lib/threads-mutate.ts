@@ -70,3 +70,19 @@ export async function pinThread(
     .bind(pinned ? 1 : 0, threadId)
     .run();
 }
+
+// Set or clear the reminder timestamp on a thread (issue #75). Pass a
+// future unix-seconds value to set, or null to clear. Different from
+// snooze: the thread stays visible in current views while reminded, and
+// the reader pops a "Reminder due" banner once `remind_at <= now()`.
+export async function remindThread(
+  userId: string,
+  threadId: string,
+  remindAt: number | null,
+): Promise<void> {
+  if (!(await userCanAccessThread(userId, threadId))) return;
+  await getDb()
+    .prepare("UPDATE threads_index SET remind_at = ? WHERE thread_id = ?")
+    .bind(remindAt, threadId)
+    .run();
+}

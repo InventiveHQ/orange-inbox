@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
-import { listDomainsForUser, listMailboxesForUser, listThreads } from "@/lib/queries";
+import { listDomainsForUser, listMailboxesForUser, listThreads, listVipThreads } from "@/lib/queries";
 import { DEFAULT_QUADRANT, listThreadsForTriage } from "@/lib/triage";
 import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
@@ -40,12 +40,13 @@ export default async function InboxLayout({
   // discoverability hint. Toggling writes a cookie that flips the default.
   const smartMailboxesOpen = cookieStore.get("smart-mailboxes-open")?.value !== "0";
 
-  // Validate the scope: "all", "drafts", "contacts", "templates",
+  // Validate the scope: "all", "vips", "drafts", "contacts", "templates",
   // "subscriptions", "settings", "help", "storage", or a mailbox the user
   // has access to. Anything else falls back to "all" rather than 404'ing
   // the layout.
   const SPECIAL_SCOPES = new Set([
     "all",
+    "vips",
     "drafts",
     "contacts",
     "templates",
@@ -58,6 +59,7 @@ export default async function InboxLayout({
   const effectiveScope = isValidScope ? scope : "all";
 
   const isDrafts = effectiveScope === "drafts";
+  const isVips = effectiveScope === "vips";
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
   const isFullPage =
     effectiveScope === "contacts" ||
@@ -67,27 +69,32 @@ export default async function InboxLayout({
     effectiveScope === "help" ||
     effectiveScope === "storage";
   const mailboxId =
-    effectiveScope === "all" || isDrafts || isFullPage ? undefined : effectiveScope;
+    effectiveScope === "all" || isDrafts || isVips || isFullPage ? undefined : effectiveScope;
 
   const [threads, drafts] = await Promise.all([
     isDrafts || isFullPage
       ? Promise.resolve([])
-      : effectiveScope === "all"
-        ? // Layouts can't read searchParams in this Next, so the SSR'd payload
-          // is always the default quadrant. The client toggle re-navigates,
-          // which re-renders the page; once a classifier exists this should
-          // pick up the ?view= param via a wrapping page-level fetch.
-          listThreadsForTriage(user.id, {
-            quadrant: DEFAULT_QUADRANT,
-            includeMuted: true,
-          })
-        : listThreads(user.id, {
-            mailboxId,
-            // Per-mailbox views hide muted threads; the unified "all" view
-            // shows them so muted mail is still findable without leaving the
-            // inbox UI.
-            includeMuted: mailboxId === undefined,
-          }),
+      : isVips
+        ? // VIPs view spans every mailbox the user can read — see
+          // listVipThreads. Cross-mailbox by design: VIPs are a per-user
+          // concept, not per-mailbox.
+          listVipThreads(user.id)
+        : effectiveScope === "all"
+          ? // Layouts can't read searchParams in this Next, so the SSR'd payload
+            // is always the default quadrant. The client toggle re-navigates,
+            // which re-renders the page; once a classifier exists this should
+            // pick up the ?view= param via a wrapping page-level fetch.
+            listThreadsForTriage(user.id, {
+              quadrant: DEFAULT_QUADRANT,
+              includeMuted: true,
+            })
+          : listThreads(user.id, {
+              mailboxId,
+              // Per-mailbox views hide muted threads; the unified "all" view
+              // shows them so muted mail is still findable without leaving the
+              // inbox UI.
+              includeMuted: mailboxId === undefined,
+            }),
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
 
@@ -126,12 +133,14 @@ export default async function InboxLayout({
 
   const scopeLabel = isDrafts
     ? "Drafts"
-    : effectiveScope === "all"
-      ? "All inboxes"
-      : (() => {
-          const mb = mailboxes.find(m => m.id === effectiveScope);
-          return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
-        })();
+    : isVips
+      ? "VIPs"
+      : effectiveScope === "all"
+        ? "All inboxes"
+        : (() => {
+            const mb = mailboxes.find(m => m.id === effectiveScope);
+            return mb ? `${mb.local_part}@${mb.domain_name}` : "Inbox";
+          })();
 
   const searchMailboxes = mailboxes.map(mb => ({
     id: mb.id,
