@@ -416,6 +416,43 @@ self.addEventListener('push', (e) => {
   const body = p.body || '';
   const url = p.url || '/inbox/all';
   const threadId = p.threadId || null;
+
+  // Calendar reminder branch (#85, snooze in #96). Reminder payloads carry
+  // `reminder: true` plus eventId + minutesBefore (see lib/reminders.ts).
+  // They never have a threadId, so the mail-thread actions below are
+  // irrelevant — fork early and emit reminder-specific UI instead.
+  if (p.reminder === true && p.eventId) {
+    // One reminder per (event_id, minutes_before) — tag accordingly so a
+    // re-fired snoozed reminder *replaces* the original rather than stacks.
+    const minutesBefore = typeof p.minutesBefore === 'number' ? p.minutesBefore : 0;
+    const tag = `reminder-${p.eventId}-${minutesBefore}`;
+    // Snooze + open. iOS Safari ignores `actions` entirely on PWAs (the
+    // notification still opens the app on tap, which is the documented
+    // graceful-degrade in the design) — keeping the array short avoids
+    // the Android UI truncating something useful.
+    const actions = [
+      { action: 'snooze-reminder', title: 'Snooze 5 min' },
+      { action: 'open-reminder', title: 'Open' },
+    ];
+    e.waitUntil(
+      self.registration.showNotification(title, {
+        body,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        data: {
+          url,
+          reminder: true,
+          eventId: p.eventId,
+          minutesBefore,
+        },
+        tag,
+        renotify: true,
+        actions,
+      }),
+    );
+    return;
+  }
+
   // Use threadId as the tag so subsequent pushes from the same conversation
   // *replace* the previous one rather than stacking. Falls back to a per-
   // message tag when threadId is missing (e.g. legacy payloads).
@@ -466,6 +503,55 @@ self.addEventListener('notificationclick', (e) => {
   const data = e.notification.data || {};
   const url = data.url || '/inbox/all';
   const threadId = data.threadId || null;
+
+  // Calendar reminder branch (#96). The push handler stamps `reminder: true`
+  // + eventId/minutesBefore on the notification's data when the payload was
+  // a reminder; both action buttons land here.
+  if (data.reminder && data.eventId) {
+    if (e.action === 'snooze-reminder') {
+      // Fire-and-forget snooze. We deliberately do NOT re-show the
+      // notification on success — the dismissed notification + a
+      // follow-up push at the snooze target is the user's signal.
+      // On failure we surface a follow-up notification so they know
+      // their tap didn't take effect.
+      const eventId = String(data.eventId);
+      const minutesBefore = typeof data.minutesBefore === 'number' ? data.minutesBefore : 0;
+      e.waitUntil(
+        fetch(`/api/calendar/reminders/${encodeURIComponent(eventId)}/snooze`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ minutes_before: minutesBefore, snooze_for_minutes: 5 }),
+        })
+          .then(async (res) => {
+            if (!res.ok) {
+              const detail = await res.text().catch(() => '');
+              await self.registration.showNotification('Snooze failed', {
+                body: detail.slice(0, 140) || 'Tap to open the calendar.',
+                icon: '/icon-192.png',
+                badge: '/icon-192.png',
+                tag: `reminder-${eventId}-${minutesBefore}-snooze-failed`,
+                data: { url },
+              });
+            }
+          })
+          .catch(async () => {
+            await self.registration.showNotification('Snooze failed', {
+              body: 'No network. Tap to open the calendar.',
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+              tag: `reminder-${eventId}-${minutesBefore}-snooze-failed`,
+              data: { url },
+            });
+          }),
+      );
+      return;
+    }
+    // 'open-reminder' (explicit action) or no action (plain tap on iOS,
+    // where action buttons aren't rendered): focus/navigate the calendar.
+    e.waitUntil(openThread(url));
+    return;
+  }
 
   if (e.action === 'reply' && threadId) {
     // event.reply is the typed text on Android. If empty (user dismissed

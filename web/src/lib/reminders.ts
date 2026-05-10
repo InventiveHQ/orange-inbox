@@ -100,9 +100,25 @@ export interface DueReminderRow {
 
 // Pull every reminder whose effective fire time (`starts_at - minutes_before*60`)
 // lands inside [now - LOOKBACK_SECS, now + LOOKBACK_SECS], filtered to those
-// that haven't been stamped in calendar_reminders_sent. Cancelled events are
+// that haven't been stamped in calendar_reminders_sent — OR have been
+// snoozed and the snooze target has now elapsed (#96). Cancelled events are
 // excluded; past events (whose reminder window has already elapsed) are not
 // in the band by definition.
+//
+// Snooze interaction: rows in calendar_reminders_sent carry a nullable
+// `snoozed_until` column. When the user taps "Snooze 5 min" on a reminder
+// notification, the SW UPSERTs a row with sent_at = original fire time and
+// snoozed_until = now+5*60. Two cases the WHERE clause has to handle:
+//   1. Never sent — `s.sent_at IS NULL` (the original fire window).
+//   2. Sent then snoozed — `snoozed_until` is non-null and now > snoozed_until,
+//      and snoozed_until > sent_at (so we don't re-pick a row whose snooze
+//      target has long since been satisfied by a prior re-fire).
+// Once we fire the snoozed reminder we re-stamp `sent_at = now` and clear
+// `snoozed_until`, so case (2) flips back to "fully delivered" — see
+// markReminderSent below.
+//
+// The fire-time band check is also relaxed when snoozed: a snoozed row's
+// effective fire time is `snoozed_until`, not `starts_at - minutes_before*60`.
 //
 // Capped at `limit` rows per tick — a backlog (e.g. cron paused for an hour
 // then resumed) gets drained over multiple ticks rather than blowing the
@@ -126,13 +142,24 @@ export async function listDueReminders(
          LEFT JOIN calendar_reminders_sent s
                 ON s.event_id = r.event_id
                AND s.minutes_before = r.minutes_before
-        WHERE s.sent_at IS NULL
-          AND e.cancelled = 0
-          AND (e.starts_at - r.minutes_before * 60) BETWEEN ? AND ?
+        WHERE e.cancelled = 0
+          AND (
+                -- Original fire path: never sent, and we're inside the band
+                (s.sent_at IS NULL
+                  AND (e.starts_at - r.minutes_before * 60) BETWEEN ? AND ?)
+             OR -- Snoozed re-fire: snooze target has elapsed and is fresher
+                -- than the last send. Use a half-open lookahead window so
+                -- we catch the first tick after snoozed_until without also
+                -- firing on every subsequent tick (sent_at gets bumped
+                -- forward when we re-fire, see markReminderSent).
+                (s.snoozed_until IS NOT NULL
+                  AND s.snoozed_until > s.sent_at
+                  AND s.snoozed_until BETWEEN ? AND ?)
+              )
         ORDER BY (e.starts_at - r.minutes_before * 60) ASC
         LIMIT ?`,
     )
-    .bind(lo, hi, limit)
+    .bind(lo, hi, lo, hi, limit)
     .all<DueReminderRow>();
   return results ?? [];
 }
@@ -140,6 +167,12 @@ export async function listDueReminders(
 // Stamp a reminder as sent. The PK on (event_id, minutes_before) makes the
 // INSERT itself the dedupe — a concurrent duplicate dispatch (cron retry
 // after a partial failure) collides instead of double-firing.
+//
+// Snooze interaction (#96): on a re-fire after a snooze the row already
+// exists (the snooze UPSERT created it). We therefore need DO UPDATE — bump
+// sent_at to now AND clear snoozed_until, so listDueReminders' second arm
+// stops matching. Otherwise the row would re-fire on every cron tick from
+// here to the heat death of the universe.
 export async function markReminderSent(
   eventId: string,
   minutesBefore: number,
@@ -147,11 +180,46 @@ export async function markReminderSent(
 ): Promise<void> {
   await getDb()
     .prepare(
-      `INSERT INTO calendar_reminders_sent (event_id, minutes_before, sent_at)
-         VALUES (?, ?, ?)
-       ON CONFLICT (event_id, minutes_before) DO NOTHING`,
+      `INSERT INTO calendar_reminders_sent (event_id, minutes_before, sent_at, snoozed_until)
+         VALUES (?, ?, ?, NULL)
+       ON CONFLICT (event_id, minutes_before)
+         DO UPDATE SET sent_at = excluded.sent_at, snoozed_until = NULL
+         WHERE calendar_reminders_sent.snoozed_until IS NOT NULL`,
     )
     .bind(eventId, minutesBefore, nowSecs)
+    .run();
+}
+
+// Snooze an already-fired reminder for `snoozeForMinutes` minutes (#96).
+// Idempotent — repeated taps within the same window land on the same
+// snoozed_until (we always recompute relative to `nowSecs`, but the second
+// call just bumps the target forward, which is the obvious thing if a user
+// taps "snooze" twice in quick succession).
+//
+// Does NOT verify ownership — the route handler is responsible for that
+// (it has the user_id from the session). Keeping that check at the edge
+// keeps this helper reusable from a future cron-side path that wants to
+// auto-snooze (e.g. "snooze if device is asleep").
+//
+// We tolerate the row not existing yet — if a user taps snooze on a
+// notification that arrived before we'd written the dedupe row (essentially
+// impossible given dispatchForUser writes immediately, but defensive), we
+// INSERT with sent_at = nowSecs to anchor sent_at < snoozed_until.
+export async function snoozeReminder(
+  eventId: string,
+  minutesBefore: number,
+  snoozeForMinutes: number,
+  nowSecs: number,
+): Promise<void> {
+  const snoozedUntil = nowSecs + snoozeForMinutes * 60;
+  await getDb()
+    .prepare(
+      `INSERT INTO calendar_reminders_sent (event_id, minutes_before, sent_at, snoozed_until)
+         VALUES (?, ?, ?, ?)
+       ON CONFLICT (event_id, minutes_before) DO UPDATE
+         SET snoozed_until = excluded.snoozed_until`,
+    )
+    .bind(eventId, minutesBefore, nowSecs, snoozedUntil)
     .run();
 }
 
@@ -181,6 +249,10 @@ export async function listSubscriptionsForUser(
 // Build the payload for a single reminder. Single-event form ("Standup
 // starts in 10 minutes"). The aggregator below produces a different body
 // when multiple reminders for the same user land in the same tick.
+//
+// `minutesBefore` is included so the service worker can identify which
+// (event_id, minutes_before) row to snooze when the user taps the Snooze
+// action on the OS notification (#96).
 export function singleReminderPayload(row: DueReminderRow) {
   const summary = row.summary?.trim() || "Untitled event";
   const minutesText = humanMinutes(row.minutes_before);
@@ -190,8 +262,10 @@ export function singleReminderPayload(row: DueReminderRow) {
   return {
     title: `${summary} starts in ${humanRelative(row.minutes_before)}`,
     body,
-    url: `/inbox/calendar`,
+    url: `/inbox/calendar?event=${encodeURIComponent(row.event_id)}`,
     eventId: row.event_id,
+    minutesBefore: row.minutes_before,
+    reminder: true,
   };
 }
 

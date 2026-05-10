@@ -1,0 +1,13 @@
+-- Reminder snooze (#96). Follow-up to #85's reminder pushes — adds a
+-- `Snooze 5 min` action button to the OS notification.
+--
+-- Design: re-use the existing `(event_id, minutes_before)` dedupe ledger
+-- rather than insert a synthetic row into `calendar_event_reminders`. When
+-- the user taps Snooze the SW POSTs /api/calendar/reminders/<id>/snooze,
+-- which UPSERTs into `calendar_reminders_sent` with a forward-looking
+-- `snoozed_until`. The cron's WHERE clause treats a row as eligible again
+-- once `snoozed_until <= now AND snoozed_until > sent_at`, so the original
+-- reminder re-fires once at the snooze target and then stays sent.
+--
+-- Stored as unix seconds to match `sent_at`. NULL = never snoozed.
+ALTER TABLE calendar_reminders_sent ADD COLUMN snoozed_until INTEGER;
