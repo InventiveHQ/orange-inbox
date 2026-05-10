@@ -8,6 +8,7 @@ import Avatar from "./Avatar";
 import BackToListButton from "./BackToListButton";
 import CalendarEventCard from "./CalendarEventCard";
 import ExecutableAttachment from "./ExecutableAttachment";
+import MessageThread, { type MessageSummary } from "./MessageThread";
 import ReplyButton from "./ReplyButton";
 import ReplyAllButton from "./ReplyAllButton";
 import SnoozeButton from "./SnoozeButton";
@@ -145,19 +146,63 @@ export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Pr
         </div>
       )}
 
-      <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
-        {messages.map(m => (
-          <MessageBlock
-            key={m.id}
-            m={m}
-            threadId={thread.id}
-            isVip={vipAddrs.has(m.from_addr.trim().toLowerCase())}
-            contacts={contacts}
-          />
-        ))}
-      </div>
+      {/*
+        Collapsed-conversation view (#37). MessageThread is a client
+        component that owns per-message expand/collapse state. The actual
+        message bodies are still server-rendered here and passed through as
+        `full` so things like MessageHtmlFrame keep working without
+        re-fetching on the client. Default-expanded set:
+          - the last message in the thread (Gmail behaviour), plus
+          - any message matching `?focus=<id>` (handled client-side inside
+            MessageThread because layouts can't read searchParams in this
+            Next; see InboxLayout's `next-url` shim).
+        For 1- and 2-message threads MessageThread expands everything and
+        hides the toolbar so the reader looks identical to the old layout.
+      */}
+      <MessageThread
+        defaultExpandedIds={defaultExpandedIds(messages)}
+        messages={messages.map(m => ({
+          summary: summarizeMessage(m, vipAddrs),
+          full: (
+            <MessageBlock
+              m={m}
+              threadId={thread.id}
+              isVip={vipAddrs.has(m.from_addr.trim().toLowerCase())}
+              contacts={contacts}
+            />
+          ),
+        }))}
+      />
     </article>
   );
+}
+
+// Default-expanded heuristic: short threads (≤2 messages) start fully open
+// — collapsing one of two messages is more friction than value. For longer
+// threads only the most-recent inbound message expands by default (the
+// thing the user most likely wants to read / reply to), matching Gmail.
+// If there's no inbound (e.g. a sent-only thread) we fall back to the last
+// message overall so the user still sees *something* without clicking. The
+// `?focus=<id>` override is layered on inside MessageThread once the URL
+// is available on the client.
+function defaultExpandedIds(messages: ThreadMessage[]): string[] {
+  if (messages.length === 0) return [];
+  if (messages.length <= 2) return messages.map(m => m.id);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].direction === "inbound") return [messages[i].id];
+  }
+  return [messages[messages.length - 1].id];
+}
+
+function summarizeMessage(m: ThreadMessage, vipAddrs: Set<string>): MessageSummary {
+  return {
+    id: m.id,
+    senderText: senderLabel(m.from_addr, m.from_name),
+    senderAddr: m.from_addr || "",
+    snippet: (m.snippet || m.text_body || "").replace(/\s+/g, " ").trim(),
+    date: formatFullDate(m.date),
+    isVip: vipAddrs.has(m.from_addr.trim().toLowerCase()),
+  };
 }
 
 function MessageBlock({

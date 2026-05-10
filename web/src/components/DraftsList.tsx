@@ -3,6 +3,7 @@
 import type { DraftListItem } from "@/lib/drafts";
 import { htmlToText } from "@/lib/html-text";
 import { useCompose } from "./ComposeProvider";
+import EmptyState from "./EmptyState";
 
 interface Props {
   drafts: DraftListItem[];
@@ -15,11 +16,7 @@ export default function DraftsList({ drafts }: Props) {
   const compose = useCompose();
 
   if (drafts.length === 0) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-sm text-neutral-500 px-6 text-center">
-        No drafts. Saved drafts from the compose window will appear here.
-      </div>
-    );
+    return <EmptyState variant="drafts" />;
   }
 
   return (
