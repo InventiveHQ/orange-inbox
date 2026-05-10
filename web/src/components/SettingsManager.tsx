@@ -55,6 +55,7 @@ export default function SettingsManager({
       { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
+      { id: "export", label: "Import / Export" },
       { id: "about", label: "About" },
     ],
     [isAdmin, hasOwnedMailboxes],
@@ -99,6 +100,7 @@ export default function SettingsManager({
             <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
+            <ExportSection id="export" ownedIdentities={ownedIdentities} />
             <AboutSection id="about" />
           </div>
         </div>
@@ -1038,6 +1040,199 @@ function AboutSection({ id }: { id: string }) {
         {msg && <p className="text-xs text-center text-neutral-500">{msg}</p>}
       </div>
     </section>
+  );
+}
+
+// Bidirectional .mbox: download a backup, or upload one to migrate from
+// Gmail Takeout / Apple Mail / Thunderbird / a previous orange-inbox export.
+// Both share an `id` so the section nav lands on this single block.
+function ExportSection({
+  id,
+  ownedIdentities,
+}: {
+  id: string;
+  ownedIdentities: Identity[];
+}) {
+  const [exportScope, setExportScope] = useState<string>("all");
+  const exportHref =
+    exportScope === "all"
+      ? "/api/export/mbox"
+      : `/api/export/mbox?mailbox_id=${encodeURIComponent(exportScope)}`;
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Import / Export"
+        description="Move your mail in and out as standard .mbox files. Compatible with Apple Mail, Thunderbird, Gmail Takeout, mutt, and the orange-inbox round-trip."
+      />
+      <div className="space-y-4">
+        <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 text-sm space-y-3">
+          <h3 className="text-sm font-semibold">Download backup</h3>
+          {ownedIdentities.length > 1 && (
+            <label className="block">
+              <span className="text-xs uppercase tracking-wider text-neutral-500">Scope</span>
+              <select
+                value={exportScope}
+                onChange={e => setExportScope(e.target.value)}
+                className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+              >
+                <option value="all">All mail you can read</option>
+                {ownedIdentities.map(i => (
+                  <option key={i.mailbox_id} value={i.mailbox_id}>
+                    {i.local_part}@{i.domain_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <a
+            href={exportHref}
+            download
+            className="inline-flex items-center justify-center rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+          >
+            Download .mbox
+          </a>
+          <p className="text-xs text-neutral-500">
+            Outbound messages are reconstructed from the JSON archive; inbound is
+            verbatim. Attachments are inline.
+          </p>
+        </div>
+        {ownedIdentities.length > 0 && (
+          <ImportPanel ownedIdentities={ownedIdentities} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+// Upload a .mbox file and ingest it into a chosen mailbox. Hard cap is 25 MB
+// / 500 messages per request — keeps us under Workers' body and CPU limits.
+// Larger files need to be split before importing.
+function ImportPanel({ ownedIdentities }: { ownedIdentities: Identity[] }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [target, setTarget] = useState<string>(ownedIdentities[0]?.mailbox_id ?? "");
+  const [status, setStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "uploading" }
+    | { kind: "done"; imported: number; duplicates: number; errors: number; samples: { index: number; reason: string }[] }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  async function submit() {
+    if (!file || !target) return;
+    setStatus({ kind: "uploading" });
+    try {
+      const buf = await file.arrayBuffer();
+      const res = await fetch(
+        `/api/import/mbox?mailbox_id=${encodeURIComponent(target)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: buf,
+        },
+      );
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+        setStatus({
+          kind: "error",
+          message: b.message || b.error || `Upload failed (${res.status})`,
+        });
+        return;
+      }
+      const b = (await res.json()) as {
+        imported: number;
+        duplicates: number;
+        errors: number;
+        error_samples: { index: number; reason: string }[];
+      };
+      setStatus({
+        kind: "done",
+        imported: b.imported,
+        duplicates: b.duplicates,
+        errors: b.errors,
+        samples: b.error_samples,
+      });
+    } catch (err) {
+      setStatus({
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const sizeLabel = file
+    ? file.size > 1024 * 1024
+      ? `${(file.size / 1024 / 1024).toFixed(1)} MB`
+      : `${(file.size / 1024).toFixed(0)} KB`
+    : null;
+
+  return (
+    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 text-sm space-y-3">
+      <h3 className="text-sm font-semibold">Import .mbox</h3>
+      <label className="block">
+        <span className="text-xs uppercase tracking-wider text-neutral-500">Target mailbox</span>
+        <select
+          value={target}
+          onChange={e => setTarget(e.target.value)}
+          className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+        >
+          {ownedIdentities.map(i => (
+            <option key={i.mailbox_id} value={i.mailbox_id}>
+              {i.local_part}@{i.domain_name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className="text-xs uppercase tracking-wider text-neutral-500">File</span>
+        <input
+          type="file"
+          accept=".mbox,application/mbox,application/octet-stream,text/plain"
+          onChange={e => {
+            setFile(e.target.files?.[0] ?? null);
+            setStatus({ kind: "idle" });
+          }}
+          className="mt-1 block w-full text-xs"
+        />
+        {sizeLabel && (
+          <span className="text-xs text-neutral-500">{file?.name} · {sizeLabel}</span>
+        )}
+      </label>
+      <button
+        type="button"
+        onClick={submit}
+        disabled={!file || !target || status.kind === "uploading"}
+        className="inline-flex items-center justify-center rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 hover:opacity-90"
+      >
+        {status.kind === "uploading" ? "Importing…" : "Import"}
+      </button>
+      {status.kind === "done" && (
+        <div className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-2 text-xs">
+          <div className="font-medium text-emerald-800 dark:text-emerald-200">
+            Imported {status.imported} message{status.imported === 1 ? "" : "s"}
+            {status.duplicates > 0 && ` · skipped ${status.duplicates} duplicate${status.duplicates === 1 ? "" : "s"}`}
+            {status.errors > 0 && ` · ${status.errors} error${status.errors === 1 ? "" : "s"}`}
+          </div>
+          {status.samples.length > 0 && (
+            <ul className="mt-1 list-disc pl-4 text-emerald-700 dark:text-emerald-300">
+              {status.samples.map((s, i) => (
+                <li key={i}>#{s.index}: {s.reason}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {status.kind === "error" && (
+        <div className="rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 p-2 text-xs text-red-800 dark:text-red-200">
+          {status.message}
+        </div>
+      )}
+      <p className="text-xs text-neutral-500">
+        Capped at 25 MB / 500 messages per request. Larger files (e.g. multi-GB
+        Gmail Takeout) need to be split into chunks first. Imports are idempotent
+        — re-running on the same file skips messages already present.
+      </p>
+    </div>
   );
 }
 

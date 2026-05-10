@@ -5,6 +5,9 @@ export interface Env {
   // Service binding to the web Worker (dispatching scheduled sends).
   WEB?: { fetch: (request: Request) => Promise<Response> };
   INTERNAL_SECRET?: string;
+  // Optional Slack-compatible webhook for operational alerts. Set via
+  // `wrangler secret put ALERT_WEBHOOK_URL` to enable; unset = no-op.
+  ALERT_WEBHOOK_URL?: string;
 }
 
 export interface AddressInfo {

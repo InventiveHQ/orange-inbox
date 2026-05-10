@@ -975,6 +975,30 @@ function ModalShell({
   onBackdrop: () => void;
   children: React.ReactNode;
 }) {
+  // Mobile-only drag-to-minimize. Touch on the drag handle, pull down past
+  // the threshold, and the modal minimizes (same effect as backdrop tap)
+  // so the user can see the thread underneath. We track touches on the
+  // handle only — attaching to the whole modal would break body scrolling.
+  const [dragY, setDragY] = useState(0);
+  const startYRef = useRef<number | null>(null);
+  const dismissThreshold = 90;
+
+  function onTouchStart(e: React.TouchEvent) {
+    startYRef.current = e.touches[0].clientY;
+  }
+  function onTouchMove(e: React.TouchEvent) {
+    if (startYRef.current == null) return;
+    const dy = e.touches[0].clientY - startYRef.current;
+    setDragY(Math.max(0, dy));
+  }
+  function onTouchEnd() {
+    if (dragY > dismissThreshold) {
+      onBackdrop();
+    }
+    setDragY(0);
+    startYRef.current = null;
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-end bg-black/30 sm:p-6"
@@ -982,8 +1006,23 @@ function ModalShell({
     >
       <div
         onClick={e => e.stopPropagation()}
+        style={{
+          transform: dragY > 0 ? `translateY(${dragY}px)` : undefined,
+          transition: dragY > 0 ? "none" : "transform 0.2s ease-out",
+        }}
         className="w-full h-full sm:h-auto sm:w-[560px] sm:max-h-[85vh] flex flex-col bg-white dark:bg-neutral-950 shadow-xl overflow-hidden sm:rounded-lg sm:border sm:border-neutral-200 sm:dark:border-neutral-800"
       >
+        <div
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          onClick={onBackdrop}
+          role="button"
+          aria-label="Minimize compose — also drag down"
+          className="sm:hidden flex justify-center pt-2 pb-1 cursor-grab active:cursor-grabbing touch-none"
+        >
+          <div className="h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-700" />
+        </div>
         {children}
       </div>
     </div>
@@ -1007,7 +1046,7 @@ function MinimizedBar({
   // the bottom-right; clicking the title restores the full modal.
   return (
     <div
-      className="fixed right-4 z-50 w-72 rounded-lg bg-white dark:bg-neutral-950 shadow-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden"
+      className="fixed inset-x-4 sm:inset-x-auto sm:right-4 sm:w-72 z-50 rounded-lg bg-white dark:bg-neutral-950 shadow-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden"
       style={{ bottom: "calc(1rem + env(safe-area-inset-bottom))" }}
     >
       <div className="flex items-center">
