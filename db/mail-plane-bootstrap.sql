@@ -67,7 +67,14 @@ CREATE TABLE messages (
   --                    from_addr; NULL otherwise.
   auth_results       TEXT,
   first_contact      INTEGER NOT NULL DEFAULT 0,
-  reply_to_addr      TEXT
+  reply_to_addr      TEXT,
+  -- 0019_list_unsubscribe: List-Unsubscribe metadata (RFC 2369 / 8058)
+  -- extracted at ingest so the Subscriptions page can aggregate per-sender
+  -- without re-parsing.
+  list_unsub_url     TEXT,
+  list_unsub_mailto  TEXT,
+  list_unsub_one_click INTEGER NOT NULL DEFAULT 0,
+  unsubscribed_at    INTEGER
 );
 CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
 CREATE INDEX        messages_thread_date   ON messages(thread_id, date);
@@ -75,6 +82,9 @@ CREATE INDEX        messages_mailbox_date  ON messages(mailbox_id, date DESC);
 CREATE INDEX messages_sent_by ON messages(sent_by_user_id) WHERE sent_by_user_id IS NOT NULL;
 CREATE INDEX messages_spam_reported ON messages(spam_reported_by_user_id)
   WHERE spam_reported_by_user_id IS NOT NULL;
+CREATE INDEX messages_list_unsub
+  ON messages(mailbox_id, from_addr)
+  WHERE list_unsub_url IS NOT NULL OR list_unsub_mailto IS NOT NULL;
 
 CREATE TABLE attachments (
   id            TEXT PRIMARY KEY,

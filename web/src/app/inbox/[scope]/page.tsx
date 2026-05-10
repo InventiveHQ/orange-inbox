@@ -2,13 +2,18 @@ import { getCurrentUser } from "@/lib/auth";
 import { listContactsForUser } from "@/lib/contacts";
 import { listTemplatesForUser } from "@/lib/templates";
 import { listAllIdentities, listIdentities } from "@/lib/identities";
-import { listAllDomains, listDomainsForUser } from "@/lib/queries";
+import {
+  listAllDomains,
+  listDomainsForUser,
+  listSubscriptionsForUser,
+} from "@/lib/queries";
 import { listLabelsForUser } from "@/lib/labels";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
 import HelpManager from "@/components/HelpManager";
 import StorageManager from "@/components/StorageManager";
+import SubscriptionsList from "@/components/SubscriptionsList";
 
 export default async function InboxIndex({
   params,
@@ -21,6 +26,7 @@ export default async function InboxIndex({
 
   if (scope === "contacts") return <ContactsRoute searchParams={await searchParams} />;
   if (scope === "templates") return <TemplatesRoute />;
+  if (scope === "subscriptions") return <SubscriptionsRoute />;
   if (scope === "settings") return <SettingsRoute />;
   if (scope === "help") return <HelpManager />;
   if (scope === "storage") return <StorageRoute />;
@@ -55,6 +61,13 @@ async function TemplatesRoute() {
     listTemplatesForUser(user.id),
   ]);
   return <TemplatesManager templates={templates} identities={identities} />;
+}
+
+async function SubscriptionsRoute() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const subscriptions = await listSubscriptionsForUser(user.id);
+  return <SubscriptionsList subscriptions={subscriptions} />;
 }
 
 async function SettingsRoute() {

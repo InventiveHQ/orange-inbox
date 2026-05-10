@@ -125,6 +125,13 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
+          href="/inbox/subscriptions"
+          label="Subscriptions"
+          active={scope === "subscriptions"}
+          icon={<SubscriptionsIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/scheduled"
           label="Scheduled"
           active={false}
@@ -555,6 +562,15 @@ function TemplatesIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M5 1.5A1.5 1.5 0 0 1 6.5 0h6A1.5 1.5 0 0 1 14 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 5 9.5v-8Zm-2.5 3a.5.5 0 0 1 .5.5v9.5h7.5a.5.5 0 0 1 0 1H3a1 1 0 0 1-1-1V5a.5.5 0 0 1 .5-.5Z" />
+    </svg>
+  );
+}
+
+function SubscriptionsIcon() {
+  // Mailing-list / "tag" icon — distinguishes from inbox/drafts/templates.
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M2.5 1.5A1.5 1.5 0 0 0 1 3v5.586a1.5 1.5 0 0 0 .44 1.06l4.914 4.915a1.5 1.5 0 0 0 2.121 0l5.586-5.586a1.5 1.5 0 0 0 0-2.121L9.146 1.94A1.5 1.5 0 0 0 8.086 1.5H2.5Zm2 4.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" />
     </svg>
   );
 }

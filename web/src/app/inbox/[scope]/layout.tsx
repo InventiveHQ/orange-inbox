@@ -40,10 +40,20 @@ export default async function InboxLayout({
   // discoverability hint. Toggling writes a cookie that flips the default.
   const smartMailboxesOpen = cookieStore.get("smart-mailboxes-open")?.value !== "0";
 
-  // Validate the scope: "all", "drafts", "contacts", "templates", "settings",
-  // "help", or a mailbox the user has access to. Anything else falls back to
-  // "all" rather than 404'ing the layout.
-  const SPECIAL_SCOPES = new Set(["all", "drafts", "contacts", "templates", "settings", "help", "storage"]);
+  // Validate the scope: "all", "drafts", "contacts", "templates",
+  // "subscriptions", "settings", "help", "storage", or a mailbox the user
+  // has access to. Anything else falls back to "all" rather than 404'ing
+  // the layout.
+  const SPECIAL_SCOPES = new Set([
+    "all",
+    "drafts",
+    "contacts",
+    "templates",
+    "subscriptions",
+    "settings",
+    "help",
+    "storage",
+  ]);
   const isValidScope = SPECIAL_SCOPES.has(scope) || mailboxes.some(mb => mb.id === scope);
   const effectiveScope = isValidScope ? scope : "all";
 
@@ -52,6 +62,7 @@ export default async function InboxLayout({
   const isFullPage =
     effectiveScope === "contacts" ||
     effectiveScope === "templates" ||
+    effectiveScope === "subscriptions" ||
     effectiveScope === "settings" ||
     effectiveScope === "help" ||
     effectiveScope === "storage";
@@ -84,7 +95,8 @@ export default async function InboxLayout({
     domains.length === 0 &&
     effectiveScope !== "settings" &&
     effectiveScope !== "help" &&
-    effectiveScope !== "storage"
+    effectiveScope !== "storage" &&
+    effectiveScope !== "subscriptions"
   ) {
     return (
       <ToastProvider>

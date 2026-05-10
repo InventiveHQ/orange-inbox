@@ -150,8 +150,10 @@ export async function storeMessage(
          (id, thread_id, mailbox_id, message_id_header, in_reply_to, references_chain,
           direction, from_addr, from_name, to_json, cc_json, bcc_json,
           subject, date, snippet, raw_r2_key, html_r2_key, text_body, read, starred,
-          auth_results, first_contact, reply_to_addr)
+          auth_results, first_contact, reply_to_addr,
+          list_unsub_url, list_unsub_mailto, list_unsub_one_click)
          VALUES (?, ?, ?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0,
+                 ?, ?, ?,
                  ?, ?, ?)`,
       )
       .bind(
@@ -175,6 +177,9 @@ export async function storeMessage(
         authResultsJson,
         firstContact ? 1 : 0,
         parsed.replyToAddr,
+        parsed.listUnsubUrl,
+        parsed.listUnsubMailto,
+        parsed.listUnsubOneClick ? 1 : 0,
       ),
   );
 

@@ -43,6 +43,14 @@ export interface ParsedMessage {
   // Bare reply-to address (lowercased, no display name) ONLY when it
   // differs from from.addr; null otherwise. Caller stores verbatim.
   replyToAddr: string | null;
+  // RFC 2369 / 8058 newsletter unsubscribe metadata. Populated from
+  // List-Unsubscribe + List-Unsubscribe-Post when the inbound message is a
+  // mailing-list / newsletter; otherwise all three are empty/false. The
+  // store layer persists these on the messages row so listing + the
+  // Subscriptions aggregation can query them without re-parsing headers.
+  listUnsubUrl: string | null;
+  listUnsubMailto: string | null;
+  listUnsubOneClick: boolean;
 }
 
 // Parsed Authentication-Results, kept as a small JSON-friendly shape

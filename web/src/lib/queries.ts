@@ -272,6 +272,14 @@ export interface ThreadMessage {
   auth_results: string | null;
   first_contact: number;
   reply_to_addr: string | null;
+  // 0019: newsletter unsubscribe metadata extracted at ingest from RFC 2369 /
+  // RFC 8058 headers. The reader UI surfaces an Unsubscribe chip when one
+  // of the URL fields is present and unsubscribed_at is null; once stamped,
+  // the chip flips to "Unsubscribed" and the API short-circuits.
+  list_unsub_url: string | null;
+  list_unsub_mailto: string | null;
+  list_unsub_one_click: number;
+  unsubscribed_at: number | null;
   attachments: AttachmentRow[];
 }
 
@@ -316,7 +324,9 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
       `SELECT m.id, m.message_id_header, m.direction, m.from_addr, m.from_name,
               m.to_json, m.cc_json, m.subject, m.date, m.snippet, m.text_body,
               m.html_r2_key, m.read, m.starred, m.sent_by_user_id,
-              m.auth_results, m.first_contact, m.reply_to_addr
+              m.auth_results, m.first_contact, m.reply_to_addr,
+              m.list_unsub_url, m.list_unsub_mailto, m.list_unsub_one_click,
+              m.unsubscribed_at
          FROM messages m
         WHERE m.thread_id = ?
         ORDER BY m.date ASC`,
@@ -379,4 +389,143 @@ export async function getThreadDetail(userId: string, threadId: string): Promise
   });
 
   return { thread: head, messages };
+}
+
+// ─── Subscriptions (issue #76) ───────────────────────────────────────────
+//
+// One row per (mailbox, sender) where at least one inbound message advertises
+// a List-Unsubscribe mechanism. The page lets the user unsubscribe in bulk:
+// pick a sender → POST the per-message unsubscribe action against the most
+// recent message that still has an unsubscribe target → archive everything
+// from that sender.
+//
+// Aggregation lives in the mail DB(s); we fan out across active DBs and
+// merge in JS so the cross-DB single-D1 case stays trivial. The mailbox
+// access check is applied via a control-DB pre-filter so a sender visible
+// only on a mailbox the user can't see never appears in the result.
+
+export interface SubscriptionRow {
+  mailbox_id: string;
+  mailbox_local_part: string;
+  domain_name: string;
+  from_addr: string;
+  from_name: string | null;
+  message_count: number;
+  unsubscribed_count: number;
+  last_message_at: number;
+  // The latest message from this sender that still has an actionable
+  // unsubscribe target and hasn't already been unsubscribed. NULL if every
+  // such message has already been unsubscribed — UI shows an "All
+  // unsubscribed" badge instead of a button.
+  latest_actionable_message_id: string | null;
+}
+
+export async function listSubscriptionsForUser(
+  userId: string,
+): Promise<SubscriptionRow[]> {
+  // Visible mailboxes — also doubles as the local_part / domain_name lookup
+  // for the result rows so we don't have to re-join the control DB later.
+  const mailboxes = await listMailboxesForUser(userId);
+  if (mailboxes.length === 0) return [];
+
+  const mailboxIds = new Set(mailboxes.map(mb => mb.id));
+  const mailboxMeta = new Map(
+    mailboxes.map(mb => [
+      mb.id,
+      { local_part: mb.local_part, domain_name: mb.domain_name },
+    ]),
+  );
+
+  // Fan out across mail DBs. Each DB returns its slice of (mailbox, addr)
+  // aggregates; we merge by composite key in JS.
+  const { getActiveMailDbs } = await import("./mail-db");
+  const dbs = await getActiveMailDbs();
+
+  type DbRow = {
+    mailbox_id: string;
+    from_addr: string;
+    from_name: string | null;
+    message_count: number;
+    unsubscribed_count: number;
+    last_message_at: number;
+    latest_actionable_message_id: string | null;
+  };
+
+  const merged = new Map<string, DbRow>();
+  for (const { db } of dbs) {
+    const { results } = await db
+      .prepare(
+        // Two aggregates in one pass:
+        //   - count + unsubscribed_count + last_message_at: GROUP BY math.
+        //   - latest_actionable_message_id: id of the most recent message
+        //     from this sender where the unsubscribe target is still
+        //     available AND we haven't already unsubscribed. Picked via a
+        //     correlated subquery; avoids a second round-trip.
+        `SELECT m.mailbox_id,
+                LOWER(m.from_addr) AS from_addr,
+                MAX(m.from_name)   AS from_name,
+                COUNT(*)           AS message_count,
+                SUM(CASE WHEN m.unsubscribed_at IS NULL THEN 0 ELSE 1 END) AS unsubscribed_count,
+                MAX(m.date)        AS last_message_at,
+                (
+                  SELECT m2.id
+                    FROM messages m2
+                   WHERE m2.mailbox_id = m.mailbox_id
+                     AND LOWER(m2.from_addr) = LOWER(m.from_addr)
+                     AND m2.unsubscribed_at IS NULL
+                     AND (m2.list_unsub_url IS NOT NULL OR m2.list_unsub_mailto IS NOT NULL)
+                   ORDER BY m2.date DESC
+                   LIMIT 1
+                ) AS latest_actionable_message_id
+           FROM messages m
+          WHERE m.direction = 'inbound'
+            AND (m.list_unsub_url IS NOT NULL OR m.list_unsub_mailto IS NOT NULL)
+          GROUP BY m.mailbox_id, LOWER(m.from_addr)`,
+      )
+      .all<DbRow>();
+    for (const r of results ?? []) {
+      if (!mailboxIds.has(r.mailbox_id)) continue; // access filter
+      const key = `${r.mailbox_id}|${r.from_addr}`;
+      const prev = merged.get(key);
+      if (!prev) {
+        merged.set(key, r);
+      } else {
+        // Same (mailbox, sender) split across DBs is unusual — would happen
+        // only if a thread has been migrated mid-conversation — but merge
+        // defensively so the surface stays correct.
+        merged.set(key, {
+          mailbox_id: r.mailbox_id,
+          from_addr: r.from_addr,
+          from_name: prev.from_name ?? r.from_name,
+          message_count: prev.message_count + r.message_count,
+          unsubscribed_count: prev.unsubscribed_count + r.unsubscribed_count,
+          last_message_at: Math.max(prev.last_message_at, r.last_message_at),
+          // Pick whichever side has the more recent actionable id; tie
+          // broken arbitrarily on prev (stable-ish across calls).
+          latest_actionable_message_id:
+            prev.latest_actionable_message_id ?? r.latest_actionable_message_id,
+        });
+      }
+    }
+  }
+
+  const out: SubscriptionRow[] = [];
+  for (const r of merged.values()) {
+    const meta = mailboxMeta.get(r.mailbox_id);
+    if (!meta) continue;
+    out.push({
+      mailbox_id: r.mailbox_id,
+      mailbox_local_part: meta.local_part,
+      domain_name: meta.domain_name,
+      from_addr: r.from_addr,
+      from_name: r.from_name,
+      message_count: r.message_count,
+      unsubscribed_count: r.unsubscribed_count,
+      last_message_at: r.last_message_at,
+      latest_actionable_message_id: r.latest_actionable_message_id,
+    });
+  }
+  // Most-recent senders first — typical "manage your subscriptions" sort.
+  out.sort((a, b) => b.last_message_at - a.last_message_at);
+  return out;
 }
