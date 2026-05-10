@@ -5,6 +5,7 @@ import {
   registerThreadLocation,
   upsertThreadIndex,
 } from "./mail-db";
+import { evaluateRules } from "./rules";
 import type { Env, ParsedMessage } from "./types";
 import type { Recipient } from "./route";
 import type { ThreadMatch } from "./thread";
@@ -214,11 +215,65 @@ export async function storeMessage(
     console.error("upsertThreadIndex failed", err);
   }
 
+  // Run user-defined filter rules. Skipped for muted/blocked-sender mail
+  // (already suppressed; rules would only churn flags that don't matter)
+  // — actual evaluation is best-effort, so a rule failure can't block
+  // ingestion. Done synchronously before push fan-out so an "archive" or
+  // "delete" rule has a chance to suppress the notification.
+  let ruleApplied = false;
+  if (!suppress) {
+    try {
+      // recipient.mailboxId is the local-part owner; fetch it once for
+      // matching against `to_contains` rules. Lowercased so the matcher
+      // can do plain substring checks.
+      const mb = await env.DB
+        .prepare("SELECT local_part FROM mailboxes WHERE id = ?")
+        .bind(recipient.mailboxId)
+        .first<{ local_part: string }>();
+      const localPart = (mb?.local_part ?? "").toLowerCase();
+      const subjectLower = (parsed.subject ?? "").toLowerCase();
+
+      // Detect "real" attachments — postal-mime hands us inline images and
+      // signature parts in the same array, but for matching purposes the
+      // useful definition is "non-inline".
+      const hasAttachment = parsed.attachments.some(a => a.disposition !== "inline");
+
+      // Snapshot threads_index BEFORE rules so we can detect a terminal
+      // (archive/delete) action and suppress the push fan-out below.
+      await evaluateRules(env, {
+        mailboxId: recipient.mailboxId,
+        threadId: thread.threadId,
+        messageId,
+        mailDb,
+        mailDbId: mailDbId || "primary",
+        fromAddrLower,
+        subjectLower,
+        recipientLocalPartLower: localPart,
+        hasAttachment,
+      });
+      ruleApplied = true;
+    } catch (err) {
+      console.error("rule evaluation failed", err);
+    }
+  }
+
+  // If a terminal rule fired (archive/delete), the thread row is either
+  // archived or gone — neither case wants a push notification. Detect by
+  // re-reading threads_index; missing or archived = suppress.
+  let suppressPush = suppress;
+  if (ruleApplied && !suppressPush) {
+    const post = await env.DB
+      .prepare("SELECT archived FROM threads_index WHERE thread_id = ?")
+      .bind(thread.threadId)
+      .first<{ archived: number }>();
+    if (!post || post.archived === 1) suppressPush = true;
+  }
+
   // Fire-and-forget Web Push fan-out via the web worker. Wrapped in
   // ctx.waitUntil so the email handler returns fast; failures here never
-  // affect mail ingestion. Muted threads and blocked senders suppress
-  // push too — same reason we keep them archived.
-  if (!suppress) {
+  // affect mail ingestion. Muted threads, blocked senders, and rule-archived
+  // threads suppress push too — same reason we keep them archived.
+  if (!suppressPush) {
     ctx.waitUntil(notifyWebOfNewMessage(env, recipient.mailboxId, thread.threadId, messageId, parsed));
   }
 
