@@ -21,7 +21,7 @@ export default function ThreadView({ detail, mailboxId }: Props) {
   return (
     <article className="flex-1 overflow-y-auto">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 sm:px-6 sm:py-4">
-        <div className="flex items-start gap-1 min-w-0 flex-1">
+        <div className="flex items-start gap-1 min-w-0 w-full sm:w-auto sm:flex-1">
           <BackToListButton label="Back to list" />
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight break-words">
