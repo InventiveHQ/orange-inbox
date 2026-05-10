@@ -18,12 +18,17 @@ interface QuotedOriginal {
 export default function ReplyButton({
   replyToMessageId,
   preferredMailboxId,
+  threadId,
   toAddrs,
   subject,
   quoted,
 }: {
   replyToMessageId: string;
   preferredMailboxId: string;
+  // Forwarded to the composer so "Send and archive" knows which thread to
+  // PATCH. Optional — callers without thread context (currently none) get
+  // a normal reply with no archive option.
+  threadId?: string;
   toAddrs: string[];
   subject: string;
   // Original message metadata for the Gmail-style quoted reply block. When
@@ -39,6 +44,7 @@ export default function ReplyButton({
       compose.open({
         replyToMessageId,
         preferredMailboxId,
+        threadId,
         toAddrs,
         subject: subject.match(/^re:/i) ? subject : `Re: ${subject}`,
       });
@@ -70,6 +76,7 @@ export default function ReplyButton({
     compose.open({
       replyToMessageId,
       preferredMailboxId,
+      threadId,
       toAddrs,
       subject: subject.match(/^re:/i) ? subject : `Re: ${subject}`,
       quotedHtml: buildQuotedHtml({ ...quoted, text: quotedText }),

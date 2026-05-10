@@ -5,6 +5,7 @@ import AttachmentPreview from "./AttachmentPreview";
 import Avatar from "./Avatar";
 import BackToListButton from "./BackToListButton";
 import ReplyButton from "./ReplyButton";
+import ReplyAllButton from "./ReplyAllButton";
 import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
 import MessageHtmlFrame from "./MessageHtmlFrame";
@@ -53,23 +54,54 @@ export default function ThreadView({ detail, mailboxId }: Props) {
           />
           <ApplyLabelButton threadId={thread.id} />
           <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />
-          {lastInbound && thread.user_role !== "reader" && (
-            <ReplyButton
-              replyToMessageId={lastInbound.id}
-              preferredMailboxId={mailboxId}
-              toAddrs={[lastInbound.from_addr]}
-              subject={lastInbound.subject || ""}
-              quoted={{
-                fromAddr: lastInbound.from_addr,
-                fromName: lastInbound.from_name,
-                date: lastInbound.date,
-                // text_body is missing for HTML-only messages — fall back to
-                // the snippet so the user at least sees a preview of what
-                // they're replying to.
-                text: lastInbound.text_body || lastInbound.snippet || "",
-              }}
-            />
-          )}
+          {lastInbound && thread.user_role !== "reader" && (() => {
+            const originalTo = parseAddrs(lastInbound.to_json).map(a => a.addr);
+            const originalCc = lastInbound.cc_json
+              ? parseAddrs(lastInbound.cc_json).map(a => a.addr)
+              : [];
+            // Reply-all surfaces only when there's actually somebody else on
+            // the thread (i.e. >1 distinct address across the original
+            // sender + To + Cc). For a 1:1 message we just show Reply.
+            const distinct = new Set<string>(
+              [lastInbound.from_addr, ...originalTo, ...originalCc]
+                .map(a => a.trim().toLowerCase())
+                .filter(Boolean),
+            );
+            const showReplyAll = distinct.size > 1;
+            const quoted = {
+              fromAddr: lastInbound.from_addr,
+              fromName: lastInbound.from_name,
+              date: lastInbound.date,
+              // text_body is missing for HTML-only messages — fall back to
+              // the snippet so the user at least sees a preview of what
+              // they're replying to.
+              text: lastInbound.text_body || lastInbound.snippet || "",
+            };
+            return (
+              <>
+                <ReplyButton
+                  replyToMessageId={lastInbound.id}
+                  preferredMailboxId={mailboxId}
+                  threadId={thread.id}
+                  toAddrs={[lastInbound.from_addr]}
+                  subject={lastInbound.subject || ""}
+                  quoted={quoted}
+                />
+                {showReplyAll && (
+                  <ReplyAllButton
+                    replyToMessageId={lastInbound.id}
+                    preferredMailboxId={mailboxId}
+                    threadId={thread.id}
+                    fromAddr={lastInbound.from_addr}
+                    toAddrs={originalTo}
+                    ccAddrs={originalCc}
+                    subject={lastInbound.subject || ""}
+                    quoted={quoted}
+                  />
+                )}
+              </>
+            );
+          })()}
         </div>
       </header>
 
