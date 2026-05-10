@@ -1,7 +1,13 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 import PWAClient from "@/components/PWAClient";
+import {
+  DEFAULT_PREFERENCES,
+  PREFS_COOKIE,
+  decodePreferencesCookie,
+} from "@/lib/preferences";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -36,9 +42,23 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Read the appearance preferences cookie (synced from D1 on login + on
+  // every PATCH from Settings → Appearance). Falls back to defaults so the
+  // first paint is well-defined even pre-login or after the cookie expires.
+  // We deliberately *don't* hit D1 here — that would tax every request and
+  // delay first paint; the cookie is the canonical SSR source.
+  const cookieStore = await cookies();
+  const prefs =
+    decodePreferencesCookie(cookieStore.get(PREFS_COOKIE)?.value) ?? DEFAULT_PREFERENCES;
+
   return (
-    <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={`${geistSans.variable} h-full antialiased`}
+      data-theme={prefs.theme}
+      style={{ ["--brand" as string]: prefs.accent_hex }}
+    >
       <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
       <body className="min-h-full bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100 font-sans">
         {children}

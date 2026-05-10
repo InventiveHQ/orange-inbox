@@ -1,0 +1,124 @@
+import { getDb } from "./db";
+
+// Theme override the user has explicitly chosen. "system" defers to the OS
+// preference (the default), "light" / "dark" pin the UI regardless.
+export type Theme = "light" | "dark" | "system";
+
+export interface UserPreferences {
+  theme: Theme;
+  accent_hex: string;
+}
+
+export const DEFAULT_PREFERENCES: UserPreferences = {
+  theme: "system",
+  accent_hex: "#f97316",
+};
+
+interface PreferencesRow {
+  theme: string;
+  accent_hex: string;
+}
+
+// Returns defaults if no row exists for the user yet — the table is sparsely
+// populated (only users who've changed defaults get a row).
+export async function getUserPreferences(userId: string): Promise<UserPreferences> {
+  const row = await getDb()
+    .prepare("SELECT theme, accent_hex FROM user_preferences WHERE user_id = ?")
+    .bind(userId)
+    .first<PreferencesRow>();
+  if (!row) return DEFAULT_PREFERENCES;
+  return {
+    theme: normaliseTheme(row.theme),
+    accent_hex: normaliseHex(row.accent_hex) ?? DEFAULT_PREFERENCES.accent_hex,
+  };
+}
+
+export interface PreferencesPatch {
+  theme?: Theme;
+  accent_hex?: string;
+}
+
+// Upsert-shaped: merge the patch over current values, then INSERT or UPDATE.
+// Validation lives here too — callers can hand us untrusted input as long as
+// they care about the boolean return for "rejected".
+export async function updateUserPreferences(
+  userId: string,
+  patch: PreferencesPatch,
+): Promise<UserPreferences | null> {
+  const next: UserPreferences = { ...(await getUserPreferences(userId)) };
+  if (patch.theme !== undefined) {
+    if (!isTheme(patch.theme)) return null;
+    next.theme = patch.theme;
+  }
+  if (patch.accent_hex !== undefined) {
+    const hex = normaliseHex(patch.accent_hex);
+    if (!hex) return null;
+    next.accent_hex = hex;
+  }
+
+  await getDb()
+    .prepare(
+      `INSERT INTO user_preferences (user_id, theme, accent_hex, updated_at)
+       VALUES (?, ?, ?, unixepoch())
+       ON CONFLICT(user_id) DO UPDATE SET
+         theme = excluded.theme,
+         accent_hex = excluded.accent_hex,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, next.theme, next.accent_hex)
+    .run();
+  return next;
+}
+
+function isTheme(v: unknown): v is Theme {
+  return v === "light" || v === "dark" || v === "system";
+}
+
+function normaliseTheme(v: string): Theme {
+  return isTheme(v) ? v : "system";
+}
+
+// Accept #rgb or #rrggbb (case-insensitive); always store the lowercase
+// 6-digit form so cookies and inline styles compare cleanly.
+function normaliseHex(v: string): string | null {
+  if (typeof v !== "string") return null;
+  const trimmed = v.trim().toLowerCase();
+  const m3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(trimmed);
+  if (m3) {
+    return `#${m3[1]}${m3[1]}${m3[2]}${m3[2]}${m3[3]}${m3[3]}`;
+  }
+  if (/^#[0-9a-f]{6}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+// Cookie consumed by the root layout for SSR no-flash. Stored as JSON so we
+// can extend the prefs payload (e.g. density) without revving the cookie name.
+export const PREFS_COOKIE = "orange-prefs";
+
+export function encodePreferencesCookie(p: UserPreferences): string {
+  return JSON.stringify({ theme: p.theme, accent_hex: p.accent_hex });
+}
+
+export function decodePreferencesCookie(raw: string | undefined): UserPreferences | null {
+  if (!raw) return null;
+  try {
+    // The client writes the cookie URL-encoded so JSON quotes survive
+    // round-tripping through `Set-Cookie`. Tolerate both forms — Next's
+    // `cookies().get()` may or may not have decoded depending on the runtime.
+    let decoded = raw;
+    if (raw.includes("%")) {
+      try {
+        decoded = decodeURIComponent(raw);
+      } catch {
+        decoded = raw;
+      }
+    }
+    const j = JSON.parse(decoded) as Partial<UserPreferences>;
+    const theme = isTheme(j.theme) ? j.theme : null;
+    const accent = typeof j.accent_hex === "string" ? normaliseHex(j.accent_hex) : null;
+    if (!theme || !accent) return null;
+    return { theme, accent_hex: accent };
+  } catch {
+    return null;
+  }
+}
