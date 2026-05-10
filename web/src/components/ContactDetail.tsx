@@ -12,7 +12,54 @@ import type { Identity } from "@/lib/identities";
 import { ContactDialog, stageLabel } from "./ContactsManager";
 import ContactStageBadge from "./ContactStageBadge";
 import ContactTagPills from "./ContactTagPills";
+import RelativeTime from "./RelativeTime";
 import { CONTACT_STAGES } from "@/lib/contacts";
+
+// Common IANA zones offered as suggestions in the manual-override datalist.
+// Not exhaustive — the input still accepts any string and we validate
+// server-side via Intl.DateTimeFormat.
+const COMMON_TIMEZONES: string[] = [
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "America/Toronto",
+  "America/Sao_Paulo",
+  "America/Mexico_City",
+  "Europe/London",
+  "Europe/Dublin",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Europe/Madrid",
+  "Europe/Amsterdam",
+  "Europe/Stockholm",
+  "Europe/Athens",
+  "Europe/Moscow",
+  "Africa/Cairo",
+  "Africa/Johannesburg",
+  "Asia/Dubai",
+  "Asia/Kolkata",
+  "Asia/Bangkok",
+  "Asia/Singapore",
+  "Asia/Hong_Kong",
+  "Asia/Shanghai",
+  "Asia/Tokyo",
+  "Asia/Seoul",
+  "Australia/Perth",
+  "Australia/Sydney",
+  "Pacific/Auckland",
+  "Pacific/Honolulu",
+  "Etc/UTC",
+];
+
+function tzSourceLabel(source: ContactWithMailbox["tz_source"]): string | null {
+  switch (source) {
+    case "manual":    return "set manually";
+    case "signature": return "inferred from signature";
+    case "domain":    return "inferred from email domain";
+    default:          return null;
+  }
+}
 
 interface Props {
   contact: ContactWithMailbox;
@@ -34,6 +81,17 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ stage: next }),
+      });
+      if (res.ok) router.refresh();
+    });
+  }
+
+  function patchTz(next: string | null) {
+    startTransition(async () => {
+      const res = await fetch(`/api/contacts/${contact.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tz: next }),
       });
       if (res.ok) router.refresh();
     });
@@ -132,6 +190,14 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
               <ContactTagPills tags={contact.tags} />
             </Field>
           )}
+          <Field label="Time zone">
+            <TimeZoneEditor
+              tz={contact.tz}
+              source={contact.tz_source}
+              disabled={isPending}
+              onChange={patchTz}
+            />
+          </Field>
           {contact.company && <Field label="Company">{contact.company}</Field>}
           {contact.title && <Field label="Title">{contact.title}</Field>}
           {contact.phone && (
@@ -233,6 +299,114 @@ export default function ContactDetail({ contact, threads, identities }: Props) {
           onClose={() => setEditing(false)}
         />
       )}
+    </div>
+  );
+}
+
+// Inline tz editor (#88). Default state is read-only with the current value
+// + source annotation + RelativeTime preview. Clicking "Edit" expands a
+// text input with a datalist of common IANA zones; saving routes through
+// PATCH /api/contacts/<id> with `tz` set, which marks the row as
+// `tz_source='manual'` so future heuristic re-scans don't overwrite it.
+// Clearing the field unsets the manual override and lets inference re-run.
+function TimeZoneEditor({
+  tz,
+  source,
+  disabled,
+  onChange,
+}: {
+  tz: string | null;
+  source: ContactWithMailbox["tz_source"];
+  disabled: boolean;
+  onChange: (next: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(tz ?? "");
+  const sourceLabel = tzSourceLabel(source);
+
+  if (!editing) {
+    return (
+      <div className="flex items-center gap-2 flex-wrap">
+        {tz ? (
+          <>
+            <span className="font-mono text-xs">{tz}</span>
+            <RelativeTime tz={tz} prefix={false} source={source} />
+            {sourceLabel && (
+              <span className="text-[10px] text-neutral-500">
+                ({sourceLabel})
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-neutral-500 italic">Not set</span>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(tz ?? "");
+            setEditing(true);
+          }}
+          className="text-xs text-[var(--color-brand)] hover:underline"
+        >
+          Edit
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <input
+        type="text"
+        list="contact-tz-suggestions"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        placeholder="e.g. Europe/Berlin"
+        className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-1 text-sm font-mono"
+      />
+      <datalist id="contact-tz-suggestions">
+        {COMMON_TIMEZONES.map(z => (
+          <option key={z} value={z} />
+        ))}
+      </datalist>
+      <div className="flex items-center gap-2 text-xs">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            const next = draft.trim();
+            onChange(next === "" ? null : next);
+            setEditing(false);
+          }}
+          className="rounded-md bg-[var(--color-brand)] px-2 py-1 text-white disabled:opacity-50"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(tz ?? "");
+            setEditing(false);
+          }}
+          className="rounded-md px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+        >
+          Cancel
+        </button>
+        {tz && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              onChange(null);
+              setEditing(false);
+            }}
+            className="rounded-md px-2 py-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+            title="Clear the manual override and re-run inference"
+          >
+            Clear
+          </button>
+        )}
+      </div>
     </div>
   );
 }

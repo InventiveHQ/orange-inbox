@@ -17,6 +17,7 @@ import type { TemplateRow } from "@/lib/templates";
 import { substituteVariables, type TemplateContext } from "@/lib/templates";
 import { looksLikeHtml } from "@/lib/html-text";
 import RichTextEditor, { type SlashCommandState, type SlashNavigationHandlers } from "./RichTextEditor";
+import RelativeTime from "./RelativeTime";
 import UndoSendToast from "./UndoSendToast";
 
 export interface ComposeOpenArgs {
@@ -814,11 +815,13 @@ function ComposeModal({
             </button>
           )}
         </Field>
+        <RecipientTzPills value={to} mailboxId={fromMailboxId} />
         {showCc && (
           <Field label="Cc">
             <RecipientInput value={cc} onChange={setCc} mailboxId={fromMailboxId} />
           </Field>
         )}
+        {showCc && <RecipientTzPills value={cc} mailboxId={fromMailboxId} />}
         <Field label="Subject">
           <input
             type="text"
@@ -1198,11 +1201,14 @@ function RecipientInput({
                       c.email
                     )}
                   </span>
-                  {c.scope === "personal" && (
-                    <span className="text-[10px] uppercase tracking-wider text-neutral-500">
-                      personal
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {c.tz && <RelativeTime tz={c.tz} source={c.tz_source} />}
+                    {c.scope === "personal" && (
+                      <span className="text-[10px] uppercase tracking-wider text-neutral-500">
+                        personal
+                      </span>
+                    )}
+                  </div>
                 </div>
               </button>
             </li>
@@ -1211,6 +1217,116 @@ function RecipientInput({
       )}
     </div>
   );
+}
+
+// ─── Recipient tz pills (#88) ───────────────────────────────────────────────
+//
+// Resolves each finalised address in the To: / Cc: list to its address-book
+// contact and renders a tiny "their local time" pill underneath the input.
+// "Finalised" means terminated by a comma — we don't pill the address the
+// user is currently typing. Lookups go through the same /api/contacts/search
+// endpoint as the dropdown, batched to one fetch per unique address.
+//
+// Empty / no-tz addresses are skipped silently — the row collapses to
+// nothing, no layout jitter.
+
+function RecipientTzPills({
+  value,
+  mailboxId,
+}: {
+  value: string;
+  mailboxId: string;
+}) {
+  const finalised = useMemo(() => parseFinalisedRecipients(value), [value]);
+  const [contactsByAddr, setContactsByAddr] = useState<
+    Map<string, { tz: string | null; tz_source: ContactRow["tz_source"]; name: string | null }>
+  >(new Map());
+
+  useEffect(() => {
+    if (!mailboxId || finalised.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setContactsByAddr(new Map());
+      return;
+    }
+    let cancelled = false;
+    // Debounce-ish: only fetch addresses we haven't already resolved.
+    const missing = finalised.filter(a => !contactsByAddr.has(a));
+    if (missing.length === 0) return;
+    void (async () => {
+      const next = new Map(contactsByAddr);
+      // One search per address. The typeahead endpoint already does
+      // prefix-match scoped to the chosen mailbox; an exact-match query
+      // collapses to a single row when the contact exists.
+      await Promise.all(
+        missing.map(async addr => {
+          try {
+            const url = new URL("/api/contacts/search", window.location.origin);
+            url.searchParams.set("mailbox_id", mailboxId);
+            url.searchParams.set("q", addr);
+            const res = await fetch(url.toString());
+            if (!res.ok) return;
+            const j = (await res.json()) as { contacts?: ContactRow[] };
+            const hit = (j.contacts ?? []).find(
+              c => c.email.toLowerCase() === addr,
+            );
+            if (hit) {
+              next.set(addr, { tz: hit.tz, tz_source: hit.tz_source, name: hit.name });
+            } else {
+              next.set(addr, { tz: null, tz_source: null, name: null });
+            }
+          } catch {
+            // Best-effort — leave the address unresolved; pill will simply
+            // not render.
+          }
+        }),
+      );
+      if (!cancelled) setContactsByAddr(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // contactsByAddr intentionally omitted — adding it would re-fire the
+    // effect on every state update (since the Map identity changes), which
+    // is exactly the loop we want to avoid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finalised.join("|"), mailboxId]);
+// removed dead garbage" "), mailboxId]);
+
+  // Build the visible pills. We only render addresses that resolved to a
+  // contact with a known tz — otherwise the row would be a long list of
+  // "no info" placeholders.
+  const pills = finalised
+    .map(addr => ({ addr, info: contactsByAddr.get(addr) }))
+    .filter((p): p is { addr: string; info: { tz: string; tz_source: ContactRow["tz_source"]; name: string | null } } =>
+      !!p.info && !!p.info.tz,
+    );
+  if (pills.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 pl-[5.5rem] -mt-1 mb-1 text-xs text-neutral-500">
+      {pills.map(p => (
+        <span key={p.addr} className="inline-flex items-center gap-1">
+          <span className="truncate max-w-[12rem]">
+            {p.info.name ?? p.addr}
+          </span>
+          <RelativeTime tz={p.info.tz} source={p.info.tz_source} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function parseFinalisedRecipients(raw: string): string[] {
+  // Only addresses followed by a comma count as "finalised" — the trailing
+  // partial token might still be in flight.
+  const lastComma = raw.lastIndexOf(",");
+  const finalisedSlice = lastComma === -1 ? "" : raw.slice(0, lastComma);
+  const out: string[] = [];
+  for (const part of finalisedSlice.split(",")) {
+    const t = part.trim().toLowerCase();
+    if (t && t.includes("@")) out.push(t);
+  }
+  // De-dup while preserving order.
+  return Array.from(new Set(out));
 }
 
 // ─── Template picker ────────────────────────────────────────────────────────
