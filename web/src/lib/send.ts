@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { getDb, getEnv } from "./db";
 import { htmlToText, looksLikeHtml } from "./html-text";
 import { findIdentity, fullAddress, type Identity } from "./identities";
@@ -9,6 +10,14 @@ import {
   registerThreadLocation,
   upsertThreadIndex,
 } from "./mail-db";
+import { createShareLink, DEFAULT_SHARE_TTL_SECONDS } from "./share-links";
+
+// Mail Drop threshold (issue #71). Anything strictly larger than this gets
+// uploaded as a share link instead of inlined into the MIME body. Picked at
+// 10 MB to stay safely under common MX size caps (Gmail/Microsoft accept
+// 25 MB total message size, but headers + base64 overhead chew up a chunk
+// of that). Single constant so it's trivial to tune later.
+const MAIL_DROP_THRESHOLD_BYTES = 10 * 1024 * 1024;
 
 // Cloudflare's send_email binding has a structured-builder overload, so we
 // don't need the `cloudflare:email` runtime module or mimetext at all — the
@@ -78,11 +87,20 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     headers["References"] = [...parentReferences, parentMessage.message_id_header].join(" ");
   }
 
-  // Resolve attachment uploads: validate ownership, pull bytes from R2, build
-  // the EmailAttachment array. Done here (not in a helper) so a missing /
+  // Resolve attachment uploads: validate ownership, decide inline-vs-Mail-Drop
+  // per attachment, pull bytes from R2 for the inline ones, mint share-link
+  // tokens for the oversized ones. Done here (not in a helper) so a missing /
   // not-owned id surfaces a precise SendError before we touch the binding.
   // temp_uploads lives in the control DB.
+  //
+  // Mail Drop policy: any single attachment > MAIL_DROP_THRESHOLD_BYTES is
+  // replaced in the body with a tokenised /d/<token> link instead of being
+  // inlined. We deliberately don't sum sizes — common MX caps are per-message
+  // but we'd rather always-inline a 9 MB file alongside a 9 MB file (= 18 MB,
+  // bouncy) than over-engineer the threshold. Bounce-on-aggregate is a
+  // future tweak; v1 favours predictability.
   const attachments: EmailAttachment[] = [];
+  const droppedLinks: DroppedAttachmentLink[] = [];
   if (input.attachmentIds?.length) {
     for (const uploadId of input.attachmentIds) {
       const upload = await controlDb
@@ -94,6 +112,31 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
       if (!upload) {
         throw new SendError("attachment_not_found", `Attachment ${uploadId} not found or not owned by you.`);
       }
+
+      if (upload.size > MAIL_DROP_THRESHOLD_BYTES) {
+        // Mail-Drop path: don't pull bytes here, don't pass to the binding.
+        // The temp_uploads R2 object becomes the share-link's R2 object — we
+        // simply mint a token that references the same key. (Skipping the
+        // temp_uploads cleanup below for these IDs would also work, but
+        // keeping the row deletion symmetrical is simpler — the share link
+        // owns the lifecycle of the bytes from this point on.)
+        const link = await createShareLink(userId, {
+          r2Key: upload.r2_key,
+          filename: upload.filename,
+          contentType: upload.content_type,
+          size: upload.size,
+          ttlSeconds: DEFAULT_SHARE_TTL_SECONDS,
+          maxDownloads: null,
+        });
+        droppedLinks.push({
+          token: link.token,
+          expiresAt: link.expiresAt,
+          filename: upload.filename || "attachment",
+          size: upload.size,
+        });
+        continue;
+      }
+
       const obj = await env.ATTACHMENTS.get(upload.r2_key);
       if (!obj) {
         throw new SendError("attachment_missing", `Attachment ${upload.filename ?? uploadId} bytes are missing.`);
@@ -114,9 +157,23 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   //     wrap fragment in a minimal <html><body> shell for client rendering.
   //   - Plain-text body → escape + linkify + paragraph-wrap into HTML.
   // Either way the recipient sees something reasonable in any client.
+  //
+  // Mail Drop additions: when there are dropped (oversized) attachments, we
+  // synthesise an HTML block + plain-text block listing the download links
+  // and append it to both renderings. Using the request host so the link
+  // matches whatever vanity/host domain the user has configured.
   const isHtml = looksLikeHtml(input.body);
-  const textBody = isHtml ? htmlToText(input.body) : input.body;
-  const html = isHtml ? wrapHtmlFragment(input.body) : buildHtmlFromText(input.body);
+  let bodySource = input.body;
+  if (droppedLinks.length > 0) {
+    const host = await resolveHost();
+    if (isHtml) {
+      bodySource = `${input.body}${renderDroppedLinksHtml(droppedLinks, host)}`;
+    } else {
+      bodySource = `${input.body}\n\n${renderDroppedLinksText(droppedLinks, host)}`;
+    }
+  }
+  const textBody = isHtml ? htmlToText(bodySource) : bodySource;
+  const html = isHtml ? wrapHtmlFragment(bodySource) : buildHtmlFromText(bodySource);
 
   const sendBuilder = {
     from: fromName ? { name: fromName, email: fromAddr } : fromAddr,
@@ -425,6 +482,90 @@ export class SendError extends Error {
   constructor(public code: string, message: string) {
     super(message);
   }
+}
+
+interface DroppedAttachmentLink {
+  token: string;
+  expiresAt: number;
+  filename: string;
+  size: number;
+}
+
+// Resolve the host the request came in on so the share-link URL matches the
+// hostname the user actually uses (vanity domain vs *.workers.dev). We use
+// `Host` (set by Cloudflare on every request) as the source of truth — both
+// sendMessage call sites (the public /api/messages route and the internal
+// dispatch-scheduled route) live inside an HTTP handler so headers() works.
+// On the off chance it doesn't (no incoming request, or proxied without a
+// host), fall back to the literal string "localhost" — sends still go out,
+// the link is just less polished.
+async function resolveHost(): Promise<string> {
+  try {
+    const h = await headers();
+    const host =
+      h.get("x-forwarded-host") ??
+      h.get("host") ??
+      null;
+    if (host && host.length > 0) return host;
+  } catch {
+    // Outside a request scope — fall through.
+  }
+  return "localhost";
+}
+
+function formatBytesShort(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Render the "📎 file (size) — Download (expires date)" block for HTML
+// recipients. Wrapped in a styled box so it visually reads as an attachment
+// region rather than an arbitrary link list. Deliberately inline-styled
+// (most mail clients strip <style> blocks).
+function renderDroppedLinksHtml(links: DroppedAttachmentLink[], host: string): string {
+  const items = links
+    .map(l => {
+      const url = `https://${host}/d/${l.token}`;
+      const expires = new Date(l.expiresAt * 1000).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+      const safeName = escapeHtml(l.filename);
+      const safeUrl = escapeHtml(url);
+      const safeExpires = escapeHtml(expires);
+      const sizeLabel = escapeHtml(formatBytesShort(l.size));
+      return `<div style="margin:0 0 6px 0;">📎 <strong>${safeName}</strong> (${sizeLabel}) — <a href="${safeUrl}" style="color:#2563eb;">Download</a> <span style="color:#666;">(expires ${safeExpires})</span></div>`;
+    })
+    .join("\n");
+  return `\n<div style="margin-top:18px;padding:12px 14px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:13px;">
+<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#666;margin-bottom:8px;">Attachments via download link</div>
+${items}
+</div>`;
+}
+
+function renderDroppedLinksText(links: DroppedAttachmentLink[], host: string): string {
+  const lines = links.map(l => {
+    const url = `https://${host}/d/${l.token}`;
+    const expires = new Date(l.expiresAt * 1000).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    return `📎 ${l.filename} (${formatBytesShort(l.size)}) — ${url} (expires ${expires})`;
+  });
+  return `--\nAttachments via download link:\n${lines.join("\n")}`;
 }
 
 function serializeError(e: unknown): Record<string, unknown> {

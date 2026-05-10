@@ -81,6 +81,11 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+// Mirror the threshold in web/src/lib/send.ts (kept in sync by hand — the
+// composer needs it client-side for the "✨ Will be sent as a download link"
+// indicator, but the actual send-time decision is enforced server-side).
+const MAIL_DROP_THRESHOLD_BYTES = 10 * 1024 * 1024;
+
 const Ctx = createContext<ComposeCtx | null>(null);
 
 export function useCompose(): ComposeCtx {
@@ -631,25 +636,36 @@ function ComposeModal({
         <div className="px-4 py-2 border-t border-neutral-200 dark:border-neutral-800 space-y-2">
           {attachments.length > 0 && (
             <ul className="flex flex-wrap gap-2">
-              {attachments.map(a => (
-                <li
-                  key={a.id}
-                  className="inline-flex items-center gap-2 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-2 py-1 text-xs"
-                >
-                  <span className="font-medium truncate max-w-[16rem]">
-                    {a.filename || "attachment"}
-                  </span>
-                  <span className="text-neutral-500">{formatBytes(a.size)}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(a.id)}
-                    aria-label={`Remove ${a.filename ?? "attachment"}`}
-                    className="text-neutral-500 hover:text-red-600"
+              {attachments.map(a => {
+                const willMailDrop = a.size > MAIL_DROP_THRESHOLD_BYTES;
+                return (
+                  <li
+                    key={a.id}
+                    className="inline-flex items-center gap-2 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-2 py-1 text-xs"
                   >
-                    ×
-                  </button>
-                </li>
-              ))}
+                    <span className="font-medium truncate max-w-[16rem]">
+                      {a.filename || "attachment"}
+                    </span>
+                    <span className="text-neutral-500">{formatBytes(a.size)}</span>
+                    {willMailDrop && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 px-1.5 py-0.5 text-[10px] font-medium"
+                        title="Files larger than 10 MB are sent as a secure download link instead of being inlined into the message — keeps you under common mailbox size limits."
+                      >
+                        ✨ Sent as download link
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.id)}
+                      aria-label={`Remove ${a.filename ?? "attachment"}`}
+                      className="text-neutral-500 hover:text-red-600"
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
           {uploadError && <div className="text-xs text-red-600">{uploadError}</div>}
