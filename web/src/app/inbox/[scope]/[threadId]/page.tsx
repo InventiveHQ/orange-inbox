@@ -9,6 +9,7 @@ import {
 import { listIdentities } from "@/lib/identities";
 import ThreadView from "@/components/ThreadView";
 import ContactDetail from "@/components/ContactDetail";
+import MarkReadRefresh from "@/components/MarkReadRefresh";
 
 export default async function ScopedDetailPage({
   params,
@@ -35,14 +36,21 @@ export default async function ScopedDetailPage({
     listVipAddresses(user.id),
   ]);
   if (!detail) notFound();
+  // Capture the pre-mutation unread state — used below to trigger a
+  // router.refresh() in the client so the inbox layout (sidebar badges,
+  // thread-list row weight) re-fetches with fresh counts.
+  const wasUnread = detail.thread.unread_count > 0;
   // Side-effect during render is fine here: this page is dynamic, the
   // mutation is idempotent, and it's auth-gated inside markThreadRead.
   await markThreadRead(user.id, threadId);
   return (
-    <ThreadView
-      detail={detail}
-      mailboxId={detail.thread.mailbox_id}
-      vipAddrs={new Set(vipAddrs)}
-    />
+    <>
+      {wasUnread && <MarkReadRefresh />}
+      <ThreadView
+        detail={detail}
+        mailboxId={detail.thread.mailbox_id}
+        vipAddrs={new Set(vipAddrs)}
+      />
+    </>
   );
 }
