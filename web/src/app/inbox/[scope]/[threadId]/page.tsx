@@ -4,6 +4,7 @@ import { getThreadDetail, listVipAddresses } from "@/lib/queries";
 import { markThreadRead } from "@/lib/threads-mutate";
 import {
   getContactForUser,
+  getContactsLookup,
   listThreadsForContactEmail,
 } from "@/lib/contacts";
 import { listIdentities } from "@/lib/identities";
@@ -37,9 +38,10 @@ export default async function ScopedDetailPage({
     );
   }
 
-  const [detail, vipAddrs] = await Promise.all([
+  const [detail, vipAddrs, contacts] = await Promise.all([
     getThreadDetail(user.id, threadId),
     listVipAddresses(user.id),
+    getContactsLookup(user.id),
   ]);
   if (!detail) notFound();
   // Capture the pre-mutation unread state — used below to trigger a
@@ -56,6 +58,7 @@ export default async function ScopedDetailPage({
         detail={detail}
         mailboxId={detail.thread.mailbox_id}
         vipAddrs={new Set(vipAddrs)}
+        contacts={contacts}
       />
     </>
   );

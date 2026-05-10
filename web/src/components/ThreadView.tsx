@@ -1,5 +1,7 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
+import type { ContactsLookup } from "@/lib/contacts";
 import { formatFullDate, senderLabel } from "@/lib/format";
+import { checkLookalike, type LookalikeFinding } from "@/lib/lookalike";
 import ApplyLabelButton from "./ApplyLabelButton";
 import AttachmentPreview from "./AttachmentPreview";
 import Avatar from "./Avatar";
@@ -22,9 +24,13 @@ interface Props {
   // Empty set when the user has no VIPs. Drives the avatar halo and the
   // "Add to / Remove from VIPs" item in MessageMenu.
   vipAddrs: Set<string>;
+  // Address-book lookup. Drives the "In contacts" sender badge and the
+  // contact-domain comparison inside checkLookalike (warns when a sender's
+  // domain is a typo of a domain you actually correspond with).
+  contacts: ContactsLookup;
 }
 
-export default function ThreadView({ detail, mailboxId, vipAddrs }: Props) {
+export default function ThreadView({ detail, mailboxId, vipAddrs, contacts }: Props) {
   const { thread, messages } = detail;
   const subject = messages[0]?.subject || thread.subject_normalized;
   const lastInbound = [...messages].reverse().find(m => m.direction === "inbound");
@@ -146,6 +152,7 @@ export default function ThreadView({ detail, mailboxId, vipAddrs }: Props) {
             m={m}
             threadId={thread.id}
             isVip={vipAddrs.has(m.from_addr.trim().toLowerCase())}
+            contacts={contacts}
           />
         ))}
       </div>
@@ -157,10 +164,12 @@ function MessageBlock({
   m,
   threadId,
   isVip,
+  contacts,
 }: {
   m: ThreadMessage;
   threadId: string;
   isVip: boolean;
+  contacts: ContactsLookup;
 }) {
   const to = parseAddrs(m.to_json);
   const isOutbound = m.direction === "outbound";
@@ -187,6 +196,20 @@ function MessageBlock({
   const showFirstContact = isInbound && m.first_contact === 1;
   const showReplyToWarn =
     isInbound && !!m.reply_to_addr && m.reply_to_addr !== m.from_addr;
+  // Lookalike-domain check: punycode / mixed-script / brand-spoof. Runs
+  // independently of auth-results — DKIM/DMARC can pass on the attacker's
+  // own lookalike domain, so a green "Verified" chip alone isn't enough.
+  // Prefer the auth-aligned from_domain (DMARC d=) when available; fall
+  // back to the visible From header's domain.
+  const senderDomain = auth?.from_domain || domainOf(m.from_addr) || "";
+  const lookalike = isInbound && senderDomain
+    ? checkLookalike(senderDomain, contacts.domains)
+    : null;
+  // "In contacts" badge — rendered only for inbound, only when the sender's
+  // exact email is in the user's address book. Domain match alone isn't
+  // enough since the whole point is to verify the *person*, not a coworker.
+  const inAddressBook =
+    isInbound && contacts.emails.has(m.from_addr.trim().toLowerCase());
   // RFC 2369/8058 unsubscribe chip — appears for inbound newsletters when
   // we extracted at least one unsubscribe target at ingest. Outbound
   // messages don't carry unsubscribe metadata so the chip never renders.
@@ -213,6 +236,7 @@ function MessageBlock({
                 <span>{m.from_addr || "Unknown"}</span>
               )}
               {auth && <AuthChip auth={auth} fromAddr={m.from_addr} />}
+              {inAddressBook && <InContactsChip />}
             </div>
             {to.length > 0 && (
               <div className="text-xs text-neutral-500 break-all">
@@ -241,10 +265,12 @@ function MessageBlock({
         </div>
       </div>
 
-      {(showFirstContact || showReplyToWarn) && (
+      {(showFirstContact || showReplyToWarn || lookalike) && (
         <TrustBanner
           firstContact={showFirstContact}
           replyToAddr={showReplyToWarn ? m.reply_to_addr : null}
+          lookalike={lookalike}
+          senderDomain={senderDomain}
         />
       )}
 
@@ -361,21 +387,70 @@ function domainOf(addr: string): string | null {
   return addr.slice(at + 1).toLowerCase() || null;
 }
 
+function InContactsChip() {
+  return (
+    <span
+      className="inline-flex items-center rounded-full font-medium bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300 px-1.5 py-px text-[10px]"
+      title="Sender is in your address book"
+    >
+      <span aria-hidden className="mr-0.5">{"👤"}</span>
+      In contacts
+    </span>
+  );
+}
+
 function TrustBanner({
   firstContact,
   replyToAddr,
+  lookalike,
+  senderDomain,
 }: {
   firstContact: boolean;
   replyToAddr: string | null;
+  lookalike: LookalikeFinding | null;
+  senderDomain: string;
 }) {
-  // Single yellow box — both signals collapse into one banner so the
-  // reader doesn't get two stacked warnings about the same message.
+  // A skeleton-match (e.g. paypa1.com posing as paypal.com, or a domain that
+  // resembles one in your address book) is the highest-confidence phishing
+  // signal we have — escalate the whole banner to red so the user can't miss
+  // it. Other signals (first-contact, reply-to mismatch, punycode,
+  // mixed-script) stay amber.
+  const severe = lookalike?.kind === "skeleton_match";
+  const tone = severe
+    ? "border-rose-300 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-900/20 text-rose-900 dark:text-rose-200"
+    : "border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200";
   return (
     <div
-      className="mt-3 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
-      role="note"
+      className={`mt-3 rounded-md border px-3 py-2 text-xs ${tone}`}
+      role={severe ? "alert" : "note"}
     >
       <ul className="space-y-1">
+        {lookalike?.kind === "skeleton_match" && (
+          <li>
+            <span aria-hidden className="mr-1">{"⚠"}</span>
+            <strong>Possible impersonation:</strong>{" "}
+            <span className="font-mono break-all">{senderDomain}</span> looks
+            like{" "}
+            <span className="font-mono break-all">{lookalike.resembles}</span>
+            {" "}but isn&apos;t.
+          </li>
+        )}
+        {lookalike?.kind === "punycode" && (
+          <li>
+            <span aria-hidden className="mr-1">{"⚠"}</span>
+            Sender domain uses non-ASCII characters{" "}
+            <span className="font-mono break-all">({senderDomain})</span> —
+            could disguise a lookalike.
+          </li>
+        )}
+        {lookalike?.kind === "mixed_script" && (
+          <li>
+            <span aria-hidden className="mr-1">{"⚠"}</span>
+            Sender domain mixes scripts{" "}
+            <span className="font-mono break-all">({senderDomain})</span> —
+            classic homograph attack.
+          </li>
+        )}
         {firstContact && (
           <li>
             <span aria-hidden className="mr-1">{"⚠"}</span>

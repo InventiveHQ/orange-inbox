@@ -75,6 +75,41 @@ export interface ContactPatch {
   tags?: string[];
 }
 
+// Lightweight set of (a) emails the user has in their address book and (b)
+// the unique domains that appear there. Used by the thread reader for the
+// "In contacts" sender badge and to feed the lookalike-domain check
+// (warn when a sender resembles a contact's domain). Single SELECT; cheap
+// enough to call on every thread render.
+export interface ContactsLookup {
+  emails: Set<string>;
+  domains: Set<string>;
+}
+
+export async function getContactsLookup(userId: string): Promise<ContactsLookup> {
+  const { results } = await getDb()
+    .prepare(
+      `SELECT DISTINCT c.email_lc
+         FROM contacts c
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = c.mailbox_id
+        WHERE uma.user_id = ?1
+          AND (c.user_id IS NULL OR c.user_id = ?1)`,
+    )
+    .bind(userId)
+    .all<{ email_lc: string }>();
+  const emails = new Set<string>();
+  const domains = new Set<string>();
+  for (const r of results ?? []) {
+    if (!r.email_lc) continue;
+    emails.add(r.email_lc);
+    const at = r.email_lc.lastIndexOf("@");
+    if (at !== -1) {
+      const dom = r.email_lc.slice(at + 1);
+      if (dom) domains.add(dom);
+    }
+  }
+  return { emails, domains };
+}
+
 // Lists everything the user can see in a mailbox (or across all their
 // mailboxes if mailboxId is omitted): shared rows on accessible mailboxes
 // plus this user's personal rows.
