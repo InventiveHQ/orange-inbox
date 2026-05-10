@@ -15,6 +15,7 @@ interface PatchBody {
   address?: string | null;
   stage?: string | null;
   tags?: unknown;
+  tz?: string | null;
 }
 
 export async function PATCH(
@@ -38,6 +39,7 @@ export async function PATCH(
     if ("address" in b) patch.address = b.address ?? null;
     if ("stage" in b) patch.stage = parseStage(b.stage);
     if ("tags" in b) patch.tags = parseTags(b.tags);
+    if ("tz" in b) patch.tz = typeof b.tz === "string" ? b.tz : null;
     const ok = await updateContact(user.id, id, patch);
     if (!ok) return NextResponse.json({ error: "not_found" }, { status: 404 });
     return NextResponse.json({ ok: true });

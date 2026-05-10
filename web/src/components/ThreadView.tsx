@@ -13,6 +13,7 @@ import ExecutableAttachment from "./ExecutableAttachment";
 import MessageThread, { type MessageSummary } from "./MessageThread";
 import ReplyButton from "./ReplyButton";
 import ReplyAllButton from "./ReplyAllButton";
+import RelativeTime from "./RelativeTime";
 import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
 import ThreadNotes from "./ThreadNotes";
@@ -323,8 +324,13 @@ function MessageBlock({
   // "In contacts" badge — rendered only for inbound, only when the sender's
   // exact email is in the user's address book. Domain match alone isn't
   // enough since the whole point is to verify the *person*, not a coworker.
-  const inAddressBook =
-    isInbound && contacts.emails.has(m.from_addr.trim().toLowerCase());
+  const fromAddrLc = m.from_addr.trim().toLowerCase();
+  const inAddressBook = isInbound && contacts.emails.has(fromAddrLc);
+  // "Their local time" pill (#88) — same gating as the In-contacts badge:
+  // only inbound senders, and only when we have a resolved tz on the
+  // matching contact row. Outbound from the user themselves never gets a
+  // pill (that's *your* time).
+  const senderTz = isInbound ? contacts.tzByEmail.get(fromAddrLc) : undefined;
   // RFC 2369/8058 unsubscribe chip — appears for inbound newsletters when
   // we extracted at least one unsubscribe target at ingest. Outbound
   // messages don't carry unsubscribe metadata so the chip never renders.
@@ -352,6 +358,9 @@ function MessageBlock({
               )}
               {auth && <AuthChip auth={auth} fromAddr={m.from_addr} />}
               {inAddressBook && <InContactsChip />}
+              {senderTz && (
+                <RelativeTime tz={senderTz.tz} source={senderTz.source} />
+              )}
             </div>
             {to.length > 0 && (
               <div className="text-xs text-neutral-500 break-all">
