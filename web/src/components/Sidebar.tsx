@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { DomainRow, MailboxRow } from "@/lib/queries";
 import type { SavedSearchRow } from "@/lib/saved-searches";
+import Avatar from "./Avatar";
 import ComposeButton from "./ComposeButton";
 
 const COLLAPSED_COOKIE = "sidebar-collapsed";
@@ -364,11 +365,11 @@ function DomainEntry({
         aria-current={domainActive ? "page" : undefined}
         className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
           domainActive || childActive
-            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
-            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            ? "bg-[var(--color-brand)]/15"
+            : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
         }`}
       >
-        <DomainIcon />
+        <DomainAvatar domain={domain} active={domainActive || childActive} />
         {totalUnread > 0 && (
           <span
             aria-hidden
@@ -453,7 +454,7 @@ function ExpandableDomainGroup({
               : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
           }`}
         >
-          <DomainIcon />
+          <DomainAvatar domain={domain} active={domainActive} />
           <span className="truncate flex-1">{domain.name}</span>
           {totalUnread > 0 && <UnreadBadge count={totalUnread} active={domainActive} />}
         </Link>
@@ -521,11 +522,11 @@ function SidebarMailbox({
         aria-current={active ? "page" : undefined}
         className={`relative flex items-center justify-center w-10 h-10 mx-auto my-0.5 rounded-md ${
           active
-            ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)]"
-            : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+            ? "bg-[var(--color-brand)]/15"
+            : "hover:bg-neutral-100 dark:hover:bg-neutral-900"
         }`}
       >
-        <MailboxIcon />
+        <MailboxAvatar mb={mb} active={active} />
         {hasUnread && (
           <span
             aria-hidden
@@ -543,13 +544,14 @@ function SidebarMailbox({
       aria-current={active ? "page" : undefined}
       title={tooltip}
       className={`flex items-center gap-2 rounded-md py-1.5 text-sm min-w-0 ${
-        indent ? "pl-7 pr-2" : "px-2"
+        indent ? "pl-4 pr-2" : "px-2"
       } ${
         active
           ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
           : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
       }`}
     >
+      <MailboxAvatar mb={mb} active={active} />
       <span
         className={`truncate flex-1 ${
           hasUnread && !active ? "font-semibold text-neutral-900 dark:text-neutral-100" : ""
@@ -586,6 +588,21 @@ function UnreadBadge({ count, active }: { count: number; active: boolean }) {
       {display}
     </span>
   );
+}
+
+// Mailbox avatar: 2-letter chip seeded by domain so all mailboxes on the same
+// domain share a tint, with the local-part initial in front to differentiate
+// siblings (e.g. hello@example.com → "HE", support@example.com → "SE").
+function MailboxAvatar({ mb, active = false }: { mb: MailboxRow; active?: boolean }) {
+  const initials = ((mb.local_part[0] ?? "?") + (mb.domain_name[0] ?? "?")).toUpperCase();
+  return <Avatar seed={mb.domain_name} label={initials} size="sm" ringed={active} />;
+}
+
+// Domain avatar (used for multi-mailbox domain headers): 2-letter chip seeded
+// by domain so its colour matches its child mailboxes.
+function DomainAvatar({ domain, active = false }: { domain: DomainRow; active?: boolean }) {
+  const initials = domain.name.slice(0, 2).toUpperCase();
+  return <Avatar seed={domain.name} label={initials} size="sm" ringed={active} />;
 }
 
 // Smart Mailboxes — saved-search shortcuts. Collapsible header (state cookied
@@ -796,18 +813,3 @@ function SettingsIcon() {
   );
 }
 
-function DomainIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm-.5 1.55v2.95H4.94c.43-1.43 1.4-2.55 2.56-2.95Zm1 0c1.16.4 2.13 1.52 2.56 2.95H8.5V2.55ZM4.6 6.5h2.9V9H4.21A6.04 6.04 0 0 1 4 7.5c0-.34.04-.68.1-1Zm3.9 0h2.9c.06.32.1.66.1 1 0 .52-.07 1.02-.21 1.5H8.5V6.5ZM4.94 10H7.5v2.95C6.34 12.55 5.37 11.43 4.94 10Zm3.56 0h2.56c-.43 1.43-1.4 2.55-2.56 2.95V10Zm3.62-1c.14-.48.21-.98.21-1.5 0-.34-.04-.68-.1-1h-2.13a8.43 8.43 0 0 1 0 2.5h2.02Z" />
-    </svg>
-  );
-}
-
-function MailboxIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M2.5 3A1.5 1.5 0 0 0 1 4.5v7A1.5 1.5 0 0 0 2.5 13h11a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 3h-11Zm0 1.5L8 8l5.5-3.5h.01L8 8.94 2.49 4.5h.01Z" />
-    </svg>
-  );
-}
