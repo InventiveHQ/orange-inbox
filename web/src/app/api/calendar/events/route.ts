@@ -5,6 +5,7 @@ import {
   type CalendarFilter,
   createSelfEvent,
   listCalendarEvents,
+  searchCalendarEvents,
   userHasMailboxAccess,
   type CalendarEventRow,
 } from "@/lib/calendar";
@@ -36,6 +37,53 @@ export async function GET(req: NextRequest) {
   try {
     const user = await requireUser();
     const url = new URL(req.url);
+    const q = (url.searchParams.get("q") ?? "").trim();
+
+    // Mailbox filter: "personal" maps onto the NULL-mailbox path; any
+    // other value is treated as a mailbox id. We don't 403 on mismatch —
+    // listCalendarEvents will simply return the empty set, which matches
+    // the "no rows" UX of an unhidden mailbox the user happens to have
+    // never received an invite to. Saves an extra round trip here.
+    const mailboxParam = url.searchParams.get("mailbox");
+    const filter: CalendarFilter | undefined =
+      mailboxParam == null
+        ? undefined
+        : mailboxParam === PERSONAL_CALENDAR
+          ? PERSONAL_CALENDAR
+          : mailboxParam;
+
+    // Server-side search path (#84). When ?q= is set, the from/to window
+    // is *optional* — search runs across the user's full history, capped
+    // and ordered by recency (most recent first). If from/to are also
+    // supplied we still respect them so a caller can scope a search to
+    // "this year" if they want.
+    if (q) {
+      const fromRaw = url.searchParams.get("from");
+      const toRaw = url.searchParams.get("to");
+      let from: number | undefined;
+      let to: number | undefined;
+      if (fromRaw && toRaw) {
+        from = Number(fromRaw);
+        to = Number(toRaw);
+        if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
+          return NextResponse.json({ error: "invalid_range" }, { status: 400 });
+        }
+        if (to - from > MAX_RANGE_SECONDS) {
+          return NextResponse.json(
+            { error: "range_too_wide", message: "window must be <= ~2 years" },
+            { status: 400 },
+          );
+        }
+      }
+      const events = await searchCalendarEvents(user.id, q, {
+        from,
+        to,
+        filter,
+        limit: 100,
+      });
+      return NextResponse.json({ events });
+    }
+
     const fromRaw = url.searchParams.get("from");
     const toRaw = url.searchParams.get("to");
     if (!fromRaw || !toRaw) {
@@ -55,19 +103,6 @@ export async function GET(req: NextRequest) {
         { status: 400 },
       );
     }
-
-    // Mailbox filter: "personal" maps onto the NULL-mailbox path; any
-    // other value is treated as a mailbox id. We don't 403 on mismatch —
-    // listCalendarEvents will simply return the empty set, which matches
-    // the "no rows" UX of an unhidden mailbox the user happens to have
-    // never received an invite to. Saves an extra round trip here.
-    const mailboxParam = url.searchParams.get("mailbox");
-    const filter: CalendarFilter | undefined =
-      mailboxParam == null
-        ? undefined
-        : mailboxParam === PERSONAL_CALENDAR
-          ? PERSONAL_CALENDAR
-          : mailboxParam;
 
     const events = await listCalendarEvents(user.id, from, to, filter);
     return NextResponse.json({ events });

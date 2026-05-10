@@ -139,6 +139,92 @@ export async function listCalendarEvents(
   return results ?? [];
 }
 
+// Server-side calendar search (#84). Substring match on
+// summary/location/description, capped + ordered by recency so the panel
+// is bounded and the most-relevant hits sort first.
+//
+// `from`/`to` are optional — when supplied they bound the search window;
+// otherwise we scan the user's full history (capped by `limit`). The
+// `filter` arg mirrors listCalendarEvents — undefined = consolidated
+// (minus hidden calendars), "personal" = NULL mailbox, mailbox id = that
+// calendar only.
+//
+// "Recency" here means "starts_at closest to now first" — for a user who
+// just typed a name into the search bar, the upcoming meeting they're
+// thinking about is more useful than something five years ago. We sort
+// by absolute distance from now in seconds.
+export interface SearchCalendarOpts {
+  from?: number;
+  to?: number;
+  filter?: CalendarFilter;
+  limit?: number;
+}
+export async function searchCalendarEvents(
+  userId: string,
+  query: string,
+  opts: SearchCalendarOpts = {},
+): Promise<CalendarEventRow[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
+  // LIKE-escape the query: any literal %, _, or \ in the user's input
+  // would otherwise turn into a wildcard.
+  const escaped = trimmed.replace(/[\\%_]/g, m => `\\${m}`);
+  const like = `%${escaped}%`;
+
+  // Build the WHERE incrementally so the bind list lines up with the SQL.
+  const where: string[] = ["ce.user_id = ?"];
+  const binds: unknown[] = [userId];
+  where.push(
+    "(COALESCE(ce.summary, '') LIKE ? ESCAPE '\\' OR COALESCE(ce.location, '') LIKE ? ESCAPE '\\' OR COALESCE(ce.description, '') LIKE ? ESCAPE '\\')",
+  );
+  binds.push(like, like, like);
+  if (typeof opts.from === "number") {
+    where.push("ce.starts_at >= ?");
+    binds.push(opts.from);
+  }
+  if (typeof opts.to === "number") {
+    where.push("ce.starts_at < ?");
+    binds.push(opts.to);
+  }
+
+  if (opts.filter === PERSONAL_CALENDAR) {
+    where.push("ce.mailbox_id IS NULL");
+  } else if (typeof opts.filter === "string") {
+    where.push("ce.mailbox_id = ?");
+    binds.push(opts.filter);
+  }
+  // Hidden filter only applies to the consolidated path — picking a
+  // specific calendar means "show me this calendar regardless".
+  const useHiddenFilter = opts.filter == null;
+
+  // Order by recency: absolute distance from now in seconds. Cheap arith
+  // expression; D1's planner handles the sort fine for a capped result.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const order = "ABS(ce.starts_at - ?) ASC";
+  binds.push(nowSec);
+
+  const sql = useHiddenFilter
+    ? `SELECT ce.* FROM calendar_events ce
+         LEFT JOIN user_calendar_prefs ucp
+                ON ucp.user_id = ce.user_id
+               AND ucp.mailbox_id IS ce.mailbox_id
+        WHERE ${where.join(" AND ")}
+          AND COALESCE(ucp.hidden, 0) = 0
+        ORDER BY ${order}
+        LIMIT ?`
+    : `SELECT ce.* FROM calendar_events ce
+        WHERE ${where.join(" AND ")}
+        ORDER BY ${order}
+        LIMIT ?`;
+  binds.push(limit);
+  const { results } = await getDb()
+    .prepare(sql)
+    .bind(...binds)
+    .all<CalendarEventRow>();
+  return results ?? [];
+}
+
 interface UpsertInviteInput {
   userId: string;
   // Mailbox the invite was delivered to (#78). NULL is allowed for

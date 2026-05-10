@@ -127,6 +127,20 @@ function KeyboardShortcutsSection() {
             <ShortcutRow keys={["?"]} desc="Show this section" />
           </ul>
         </div>
+        <div className="sm:col-span-2">
+          <h3 className="mt-2 mb-1 text-xs uppercase tracking-wider text-neutral-500">
+            Calendar
+          </h3>
+          <ul className="space-y-1">
+            <ShortcutRow keys={["d"]} desc="Day view" />
+            <ShortcutRow keys={["w"]} desc="Week view" />
+            <ShortcutRow keys={["m"]} desc="Month view" />
+            <ShortcutRow keys={["t"]} desc="Jump to today" />
+            <ShortcutRow keys={["j"]} desc="Next day / week / month" />
+            <ShortcutRow keys={["k"]} desc="Previous day / week / month" />
+            <ShortcutRow keys={["c"]} desc="New event" />
+          </ul>
+        </div>
       </div>
     </Section>
   );

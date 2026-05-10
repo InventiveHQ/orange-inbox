@@ -116,6 +116,25 @@ function normaliseDensity(v: string | null | undefined): Density {
   return isDensity(v) ? v : "comfortable";
 }
 
+// Update the week-start preference (#87). Lives on `users` rather than
+// `user_preferences` because the migration that added it (0046) is on the
+// users table — that keeps the column queryable alongside the identity row
+// in `getCurrentUser`, which the calendar grids already get on first paint.
+//
+// Only 0 (Sunday) and 1 (Monday) are accepted today; other ints are
+// reserved for Saturday-first locales but unused.
+export async function updateWeekStartDay(
+  userId: string,
+  value: number,
+): Promise<boolean> {
+  if (value !== 0 && value !== 1) return false;
+  await getDb()
+    .prepare("UPDATE users SET week_start_day = ? WHERE id = ?")
+    .bind(value, userId)
+    .run();
+  return true;
+}
+
 // Accept #rgb or #rrggbb (case-insensitive); always store the lowercase
 // 6-digit form so cookies and inline styles compare cleanly.
 function normaliseHex(v: string): string | null {
