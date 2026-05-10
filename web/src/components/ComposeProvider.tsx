@@ -26,6 +26,10 @@ export interface ComposeOpenArgs {
   ccAddrs?: string[];
   subject?: string;
   bodyPrefill?: string;
+  // HTML for a quoted-original block appended below the signature on
+  // replies, so the user can see what they're replying to without leaving
+  // the compose view (matters most on mobile, where the modal is full-screen).
+  quotedHtml?: string;
   // If present, edits/sends update this draft and delete it on send.
   draftId?: string;
 }
@@ -160,15 +164,25 @@ function ComposeModal({
   const router = useRouter();
   const initial = useMemo(() => pickInitialIdentity(identities, args), [identities, args]);
   // Initial body (HTML) = prefill HTML + the chosen identity's signature
-  // separator + signature_html. Body state is only seeded once — switching
+  // separator + signature_html, with an optional quoted-original block
+  // appended on replies. Body state is only seeded once — switching
   // From mid-compose won't swap the signature (v1 limitation).
   const initialBodyHtml = useMemo(() => {
     const prefillHtml = toHtml(args.bodyPrefill ?? "");
     const sig = initial?.signature_html ?? "";
+    const quoted = args.quotedHtml ?? "";
+
+    if (quoted) {
+      // Reply layout: cursor para → signature → quoted original.
+      const head = prefillHtml || "<p><br></p>";
+      const sigBlock = sig ? `<p>-- </p>${sig}` : "";
+      return `${head}${sigBlock}<p><br></p>${quoted}`;
+    }
+
     if (!sig) return prefillHtml;
     const sepAndSig = `<p>-- </p>${sig}`;
     return prefillHtml ? `${prefillHtml}<p><br></p>${sepAndSig}` : `<p><br></p>${sepAndSig}`;
-  }, [args.bodyPrefill, initial]);
+  }, [args.bodyPrefill, args.quotedHtml, initial]);
 
   const [fromId, setFromId] = useState(initial?.mailbox_id ?? "");
   const [to, setTo] = useState((args.toAddrs ?? []).join(", "));

@@ -47,6 +47,15 @@ export default function ThreadView({ detail, mailboxId }: Props) {
               preferredMailboxId={mailboxId}
               toAddrs={[lastInbound.from_addr]}
               subject={lastInbound.subject || ""}
+              quoted={{
+                fromAddr: lastInbound.from_addr,
+                fromName: lastInbound.from_name,
+                date: lastInbound.date,
+                // text_body is missing for HTML-only messages — fall back to
+                // the snippet so the user at least sees a preview of what
+                // they're replying to.
+                text: lastInbound.text_body || lastInbound.snippet || "",
+              }}
             />
           )}
         </div>
