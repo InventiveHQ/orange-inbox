@@ -137,6 +137,13 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
+          href="/inbox/calendar"
+          label="Calendar"
+          active={scope === "calendar"}
+          icon={<CalendarIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/inbox/drafts"
           label="Drafts"
           active={scope === "drafts"}
@@ -946,6 +953,16 @@ function VipIcon() {
   );
 }
 
+// Calendar icon — month grid with a header strip, mirrors the geometry of
+// the other 16x16 sidebar glyphs (filled, currentColor).
+function CalendarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M4.5 1a.5.5 0 0 1 .5.5V2h6v-.5a.5.5 0 0 1 1 0V2h.5A2 2 0 0 1 14 4v8.5A2 2 0 0 1 12 14.5H4A2 2 0 0 1 2 12.5V4a2 2 0 0 1 2-2H4v-.5A.5.5 0 0 1 4.5 1ZM3 6v6.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6H3Z" />
+    </svg>
+  );
+}
+
 function ScheduledIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
@@ -975,14 +992,6 @@ function MailNavIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M2.5 3A1.5 1.5 0 0 0 1 4.5v7A1.5 1.5 0 0 0 2.5 13h11a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 13.5 3h-11Zm.5 1.94 5 3.06 5-3.06v.41L8.4 8.39a.8.8 0 0 1-.8 0L3 5.35v-.41Z" />
-    </svg>
-  );
-}
-
-function CalendarIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M4 1.5a.75.75 0 0 1 1.5 0V2h5v-.5a.75.75 0 0 1 1.5 0V2h.5A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H4v-.5ZM3.5 5.5v7h9v-7h-9Z" />
     </svg>
   );
 }

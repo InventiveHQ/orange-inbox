@@ -14,10 +14,10 @@ import { listLabelsForUser } from "@/lib/labels";
 import { getInboxLayout, listInboxLayouts } from "@/lib/inbox-layouts";
 import { listSavedSearches } from "@/lib/saved-searches";
 import AliasesManager from "@/components/AliasesManager";
+import CalendarManager from "@/components/CalendarManager";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
-import CalendarManager from "@/components/CalendarManager";
 import HelpManager from "@/components/HelpManager";
 import StorageManager from "@/components/StorageManager";
 import SubscriptionsList from "@/components/SubscriptionsList";
@@ -42,6 +42,7 @@ export default async function InboxIndex({
   if (scope === "storage") return <StorageRoute />;
   if (scope === "vips") return <VipsRoute />;
   if (scope === "aliases") return <AliasesRoute />;
+  if (scope === "calendar") return <CalendarRoute />;
   if (scope.startsWith("layout:")) return <LayoutRoute scope={scope} />;
 
   const message =
@@ -98,6 +99,16 @@ async function VipsRoute() {
   if (!user) return null;
   const vips = await listVipAddresses(user.id);
   return <VipsManager initialVips={vips} />;
+}
+
+async function CalendarRoute() {
+  // CalendarManager fetches its events via /api/calendar/events as the user
+  // navigates between views — the server doesn't know what window to render
+  // until the client picks a date (and we want the current week, in the
+  // user's local timezone, rather than a server-decided UTC window).
+  const user = await getCurrentUser();
+  if (!user) return null;
+  return <CalendarManager />;
 }
 
 async function AliasesRoute() {
