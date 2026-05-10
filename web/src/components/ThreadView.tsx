@@ -1,5 +1,5 @@
 import type { AttachmentRow, ThreadDetail, ThreadMessage } from "@/lib/queries";
-import { formatFullDate, senderLabel } from "@/lib/format";
+import { formatFullDate } from "@/lib/format";
 import ApplyLabelButton from "./ApplyLabelButton";
 import BackToListButton from "./BackToListButton";
 import ReplyButton from "./ReplyButton";
@@ -78,10 +78,23 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
     <section className="px-4 py-4 sm:px-6 sm:py-5">
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-medium break-words">{senderLabel(m.from_addr, m.from_name)}</div>
-          <div className="text-xs text-neutral-500 break-all">
-            to {to.map(a => a.name || a.addr).join(", ")}
+          <div className="text-sm font-medium break-words">
+            {m.from_name && m.from_name.trim() ? (
+              <>
+                {m.from_name.trim()}{" "}
+                <span className="font-normal text-neutral-500 break-all">
+                  &lt;{m.from_addr}&gt;
+                </span>
+              </>
+            ) : (
+              m.from_addr || "Unknown"
+            )}
           </div>
+          {to.length > 0 && (
+            <div className="text-xs text-neutral-500 break-all">
+              to {to.map(a => a.name || a.addr).join(", ")}
+            </div>
+          )}
           {sentByLabel && (
             <div
               className="text-xs text-neutral-500 italic mt-0.5"
