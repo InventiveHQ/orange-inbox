@@ -55,6 +55,7 @@ export default function SettingsManager({
       { id: "blocked-senders", label: "Blocked senders" },
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
+      { id: "export", label: "Export" },
       { id: "about", label: "About" },
     ],
     [isAdmin, hasOwnedMailboxes],
@@ -99,6 +100,7 @@ export default function SettingsManager({
             <BlockedSendersSection id="blocked-senders" />
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
+            <ExportSection id="export" ownedIdentities={ownedIdentities} />
             <AboutSection id="about" />
           </div>
         </div>
@@ -1036,6 +1038,65 @@ function AboutSection({ id }: { id: string }) {
           </button>
         )}
         {msg && <p className="text-xs text-center text-neutral-500">{msg}</p>}
+      </div>
+    </section>
+  );
+}
+
+// Download all of the user's mail as an mbox file. The endpoint streams,
+// so for very large mailboxes the browser begins receiving bytes within
+// a couple of seconds even though the worker is still pulling from R2.
+// "All mail" is the default; per-mailbox export is a follow-up dropdown.
+function ExportSection({
+  id,
+  ownedIdentities,
+}: {
+  id: string;
+  ownedIdentities: Identity[];
+}) {
+  const [scope, setScope] = useState<string>("all");
+
+  const href =
+    scope === "all"
+      ? "/api/export/mbox"
+      : `/api/export/mbox?mailbox_id=${encodeURIComponent(scope)}`;
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Export"
+        description="Download a copy of your mail as a standard .mbox file. Importable into Apple Mail, Thunderbird, mutt, and most other clients."
+      />
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 text-sm space-y-3">
+        {ownedIdentities.length > 1 && (
+          <label className="block">
+            <span className="text-xs uppercase tracking-wider text-neutral-500">Scope</span>
+            <select
+              value={scope}
+              onChange={e => setScope(e.target.value)}
+              className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
+            >
+              <option value="all">All mail you can read</option>
+              {ownedIdentities.map(i => (
+                <option key={i.mailbox_id} value={i.mailbox_id}>
+                  {i.local_part}@{i.domain_name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <a
+          href={href}
+          download
+          className="inline-flex items-center justify-center rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+        >
+          Download .mbox
+        </a>
+        <p className="text-xs text-neutral-500">
+          Outbound messages are reconstructed from the JSON archive (the underlying
+          send-binding doesn&apos;t expose the bytes it built); inbound messages are
+          included verbatim. Attachments are inline in the file.
+        </p>
       </div>
     </section>
   );
