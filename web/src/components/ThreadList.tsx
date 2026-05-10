@@ -499,15 +499,11 @@ function TriageBar({
   current: TriageQuadrant;
   onChange: (q: TriageQuadrant) => void;
 }) {
-  // Tab order: Primary action (default) → Quiet (#7) → bulk-mail quadrants
-  // → escape hatch. Keeps the actionable lanes left-of-center.
-  const items: TriageQuadrant[] = [
-    "action_needed",
-    "quiet_humans",
-    "marketing_action",
-    "marketing_quiet",
-    "all",
-  ];
+  // Two-button triage: "Primary action" (default) and "Show all" (escape
+  // hatch). The other quadrants live in the sidebar's smart-mailbox section,
+  // not here — keeps the unified inbox header focused on "what do I act on
+  // now?" vs. "show me everything."
+  const items: TriageQuadrant[] = ["action_needed", "all"];
   return (
     <div
       role="tablist"
