@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { useCompose } from "./ComposeProvider";
+import { htmlToQuotedText } from "@/lib/html-text";
 
 interface QuotedOriginal {
   fromAddr: string;
@@ -8,7 +10,8 @@ interface QuotedOriginal {
   // Unix seconds (matches ThreadMessage.date).
   date: number;
   // Plain-text body to quote. Falls back to the snippet for HTML-only
-  // messages where text_body is null.
+  // messages where text_body is null — for those we lazily fetch the HTML
+  // body on click and strip it (see onClick handler).
   text: string;
 }
 
@@ -29,22 +32,59 @@ export default function ReplyButton({
   quoted?: QuotedOriginal;
 }) {
   const compose = useCompose();
+  const [loading, setLoading] = useState(false);
+
+  async function onClick() {
+    if (!quoted) {
+      compose.open({
+        replyToMessageId,
+        preferredMailboxId,
+        toAddrs,
+        subject: subject.match(/^re:/i) ? subject : `Re: ${subject}`,
+      });
+      return;
+    }
+
+    // Try the HTML body first — if it exists, the stripped version is more
+    // faithful than text_body (which can be Quoted-Printable munged) and
+    // certainly better than a 200-char snippet for HTML-only mail. The
+    // endpoint 404s when html_r2_key is null, in which case we just use
+    // the text we already had.
+    setLoading(true);
+    let quotedText = quoted.text;
+    try {
+      const res = await fetch(`/api/messages/${replyToMessageId}/html`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        const stripped = htmlToQuotedText(html);
+        if (stripped) quotedText = stripped;
+      }
+    } catch {
+      // Network hiccup — fall through with the snippet/text we already had.
+    } finally {
+      setLoading(false);
+    }
+
+    compose.open({
+      replyToMessageId,
+      preferredMailboxId,
+      toAddrs,
+      subject: subject.match(/^re:/i) ? subject : `Re: ${subject}`,
+      quotedHtml: buildQuotedHtml({ ...quoted, text: quotedText }),
+    });
+  }
+
   return (
     <button
       type="button"
       data-action="reply"
-      onClick={() =>
-        compose.open({
-          replyToMessageId,
-          preferredMailboxId,
-          toAddrs,
-          subject: subject.match(/^re:/i) ? subject : `Re: ${subject}`,
-          quotedHtml: quoted ? buildQuotedHtml(quoted) : undefined,
-        })
-      }
-      className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900"
+      onClick={onClick}
+      disabled={loading}
+      className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-60"
     >
-      Reply
+      {loading ? "Loading…" : "Reply"}
     </button>
   );
 }
