@@ -24,7 +24,9 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
   };
 }
 
-function splitReferences(refs: string | undefined): string[] {
+// Exported so tests can hit the helper directly without going through
+// postal-mime's parser.
+export function splitReferences(refs: string | undefined): string[] {
   if (!refs) return [];
   return refs.split(/\s+/).map(s => s.trim()).filter(Boolean);
 }
@@ -51,12 +53,12 @@ function flattenMany(addrs: Address[] | undefined): AddressInfo[] {
   return out;
 }
 
-function makeSnippet(text: string | undefined, html: string | undefined): string {
+export function makeSnippet(text: string | undefined, html: string | undefined): string {
   const source = text || (html ? stripHtml(html) : "");
   return source.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-function stripHtml(html: string): string {
+export function stripHtml(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
