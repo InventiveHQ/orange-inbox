@@ -11,6 +11,7 @@ interface ScheduleBody {
   kind?: "scheduled" | "undo_send";
   // Plus the same fields as /api/messages POST body.
   from_mailbox_id?: string;
+  send_as_alias_id?: string;
   to?: string[];
   cc?: string[];
   bcc?: string[];
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
     // will fail with attachment_not_found.)
     const payload = {
       from_mailbox_id: b.from_mailbox_id,
+      send_as_alias_id: b.send_as_alias_id,
       to: b.to,
       cc: b.cc,
       bcc: b.bcc,

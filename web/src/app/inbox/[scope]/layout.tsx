@@ -41,9 +41,9 @@ export default async function InboxLayout({
   const smartMailboxesOpen = cookieStore.get("smart-mailboxes-open")?.value !== "0";
 
   // Validate the scope: "all", "vips", "drafts", "contacts", "templates",
-  // "subscriptions", "settings", "help", "storage", or a mailbox the user
-  // has access to. Anything else falls back to "all" rather than 404'ing
-  // the layout.
+  // "subscriptions", "settings", "help", "storage", "aliases", or a mailbox
+  // the user has access to. Anything else falls back to "all" rather than
+  // 404'ing the layout.
   const SPECIAL_SCOPES = new Set([
     "all",
     "vips",
@@ -54,6 +54,7 @@ export default async function InboxLayout({
     "settings",
     "help",
     "storage",
+    "aliases",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
   // a given domain — picked up below in the listThreads filter.
@@ -75,7 +76,8 @@ export default async function InboxLayout({
     effectiveScope === "subscriptions" ||
     effectiveScope === "settings" ||
     effectiveScope === "help" ||
-    effectiveScope === "storage";
+    effectiveScope === "storage" ||
+    effectiveScope === "aliases";
   const mailboxId =
     effectiveScope === "all" || isDrafts || isVips || isFullPage || isDomainScope
       ? undefined
@@ -114,7 +116,8 @@ export default async function InboxLayout({
     effectiveScope !== "settings" &&
     effectiveScope !== "help" &&
     effectiveScope !== "storage" &&
-    effectiveScope !== "subscriptions"
+    effectiveScope !== "subscriptions" &&
+    effectiveScope !== "aliases"
   ) {
     return (
       <ToastProvider>

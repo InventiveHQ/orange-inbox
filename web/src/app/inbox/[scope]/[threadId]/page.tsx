@@ -27,7 +27,13 @@ export default async function ScopedDetailPage({
       listThreadsForContactEmail(user.id, contact.email),
       listIdentities(user.id),
     ]);
-    return <ContactDetail contact={contact} threads={threads} identities={identities} />;
+    // ContactDetail's mailbox picker only deals with mailbox-scoped contacts;
+    // alias identities share their parent mailbox so listing them would
+    // duplicate options.
+    const mailboxIdentities = identities.filter(i => i.kind === "mailbox");
+    return (
+      <ContactDetail contact={contact} threads={threads} identities={mailboxIdentities} />
+    );
   }
 
   const [detail, vipAddrs] = await Promise.all([

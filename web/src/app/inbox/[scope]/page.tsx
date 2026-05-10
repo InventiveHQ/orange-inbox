@@ -2,6 +2,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { listContactsForUser } from "@/lib/contacts";
 import { listTemplatesForUser } from "@/lib/templates";
 import { listAllIdentities, listIdentities } from "@/lib/identities";
+import { listAliases, listObservedAliases } from "@/lib/aliases";
 import {
   listAllDomains,
   listDomainsForUser,
@@ -9,6 +10,7 @@ import {
   listVipAddresses,
 } from "@/lib/queries";
 import { listLabelsForUser } from "@/lib/labels";
+import AliasesManager from "@/components/AliasesManager";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
@@ -33,6 +35,7 @@ export default async function InboxIndex({
   if (scope === "help") return <HelpManager />;
   if (scope === "storage") return <StorageRoute />;
   if (scope === "vips") return <VipsRoute />;
+  if (scope === "aliases") return <AliasesRoute />;
 
   const message =
     scope === "drafts" ? "Select a draft to edit it." : "Select a thread to read it.";
@@ -53,7 +56,10 @@ async function ContactsRoute({ searchParams }: { searchParams: { mailbox?: strin
     // a giant cross-mailbox list to the client just to throw most of it away.
     listContactsForUser(user.id, filter !== "all" ? filter : undefined),
   ]);
-  return <ContactsManager contacts={contacts} identities={identities} filter={filter} />;
+  // Contacts are per-mailbox; aliases ride on top of the mailbox so we don't
+  // surface them as separate scope choices here (they'd collide on mailbox_id).
+  const mailboxIdentities = identities.filter(i => i.kind === "mailbox");
+  return <ContactsManager contacts={contacts} identities={mailboxIdentities} filter={filter} />;
 }
 
 async function VipsRoute() {
@@ -63,6 +69,19 @@ async function VipsRoute() {
   return <VipsManager initialVips={vips} />;
 }
 
+async function AliasesRoute() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  // Both lists are scoped to mailboxes the user has owner/member access on,
+  // so non-admins still get a useful page (their own promoted aliases +
+  // observed candidates from their catch-alls).
+  const [promoted, observed] = await Promise.all([
+    listAliases(user.id),
+    listObservedAliases(user.id),
+  ]);
+  return <AliasesManager initialPromoted={promoted} initialObserved={observed} />;
+}
+
 async function TemplatesRoute() {
   const user = await getCurrentUser();
   if (!user) return null;
@@ -70,7 +89,10 @@ async function TemplatesRoute() {
     listIdentities(user.id),
     listTemplatesForUser(user.id),
   ]);
-  return <TemplatesManager templates={templates} identities={identities} />;
+  // Shared templates attach to a mailbox, not an alias — same reasoning as
+  // ContactsRoute: aliases inherit from the parent mailbox.
+  const mailboxIdentities = identities.filter(i => i.kind === "mailbox");
+  return <TemplatesManager templates={templates} identities={mailboxIdentities} />;
 }
 
 async function SubscriptionsRoute() {
@@ -92,8 +114,12 @@ async function SettingsRoute() {
     listIdentities(user.id),
   ]);
   // Signatures are personal-config: any user can edit signatures on mailboxes
-  // *they own*, regardless of admin status.
-  const ownedIdentities = myIdentities.filter(i => i.role === "owner");
+  // *they own*, regardless of admin status. Aliases are filtered out here
+  // because /api/mailboxes/<id>/signature is the per-mailbox endpoint;
+  // alias signatures are managed from /inbox/aliases instead.
+  const ownedIdentities = myIdentities.filter(
+    i => i.role === "owner" && i.kind === "mailbox",
+  );
   return (
     <SettingsManager
       domains={domains}

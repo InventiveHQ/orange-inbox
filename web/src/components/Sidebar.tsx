@@ -148,6 +148,13 @@ export default function Sidebar({
           collapsed={collapsed}
         />
         <SpecialLink
+          href="/inbox/aliases"
+          label="Aliases"
+          active={scope === "aliases"}
+          icon={<AliasesIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/scheduled"
           label="Scheduled"
           active={false}
@@ -742,6 +749,17 @@ function SubscriptionsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M2.5 1.5A1.5 1.5 0 0 0 1 3v5.586a1.5 1.5 0 0 0 .44 1.06l4.914 4.915a1.5 1.5 0 0 0 2.121 0l5.586-5.586a1.5 1.5 0 0 0 0-2.121L9.146 1.94A1.5 1.5 0 0 0 8.086 1.5H2.5Zm2 4.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" />
+    </svg>
+  );
+}
+
+function AliasesIcon() {
+  // Two overlapping name tags — visually distinct from Subscriptions / Vips
+  // / Mailbox so the row is recognisable at a glance.
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h5A1.5 1.5 0 0 1 11 3.5v.75H4.5A1.5 1.5 0 0 0 3 5.75V3.5Z" />
+      <path d="M5 5.75A1.5 1.5 0 0 1 6.5 4.25h5A1.5 1.5 0 0 1 13 5.75v6.75A1.5 1.5 0 0 1 11.5 14h-5A1.5 1.5 0 0 1 5 12.5V5.75Zm2.25 1.5a.75.75 0 1 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5Zm0 2.5a.75.75 0 1 0 0 1.5h2a.75.75 0 0 0 0-1.5h-2Z" />
     </svg>
   );
 }
