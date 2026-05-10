@@ -6,26 +6,24 @@ import { getDb, getEnv } from "./db";
 // History: the original implementation routed recipients through a Worker
 // route at /d/<token> which checked our own r2_share_links table, then
 // streamed from R2. That route sits behind Cloudflare Access for our host
-// Worker, so external recipients (who have no Access account) couldn't reach
-// it. The fix is to link recipients directly to R2 via S3-style presigned
-// URLs — no Worker in the loop, no Access wall, and the URL itself carries
-// the auth signature.
+// Worker, so external recipients couldn't reach it. The fix is to link
+// directly to R2 via S3-style presigned URLs — no Worker / Access in the
+// path, the URL itself carries the auth signature.
 //
-// We keep the r2_share_links table for audit/cleanup tracking: a future cron
-// can sweep R2 objects whose `expires_at` has passed.
+// We keep the r2_share_links table for audit/cleanup tracking: a future
+// cron can sweep R2 objects whose `expires_at` has passed.
 //
 // Operator setup (one-time): set the three secrets via wrangler:
 //   wrangler secret put R2_ACCOUNT_ID
 //   wrangler secret put R2_ACCESS_KEY_ID
 //   wrangler secret put R2_SECRET_ACCESS_KEY
-// R2 access keys are minted in the Cloudflare dashboard under R2 → Manage R2
-// API Tokens (scope to the ATTACHMENTS bucket, read-only). Without these
-// secrets, the createShareLink call below will throw at send time.
+// R2 access keys come from the Cloudflare dashboard → R2 → Manage R2 API
+// Tokens (scope to the ATTACHMENTS bucket, read-only). Without these
+// secrets, createShareLink() throws at send time.
 //
-// Expiry note: presigned URLs in S3/R2 cap at 7 days. The previous Worker-
-// proxy implementation supported 30 days; this is a regression in exchange
-// for not requiring an Access bypass policy. The table still records
-// `expires_at` so we can re-issue the signed URL out-of-band if/when needed.
+// Expiry note: S3-compatible presigned URLs cap at 7 days. The previous
+// Worker-proxy supported 30 days; this is a regression in exchange for not
+// requiring an Access bypass policy.
 
 export interface ShareLinkRow {
   id: string;
@@ -42,7 +40,7 @@ export interface ShareLinkRow {
 }
 
 export interface CreateShareLinkInput {
-  r2Bucket?: string;        // defaults to 'orange-inbox-attachments' (the bucket name, not the binding key)
+  r2Bucket?: string;        // R2 bucket NAME (default: orange-inbox-attachments)
   r2Key: string;
   filename: string | null;
   contentType: string | null;
@@ -53,20 +51,17 @@ export interface CreateShareLinkInput {
 
 export interface CreateShareLinkResult {
   token: string;
-  url: string;                // presigned R2 URL — what we put in the body
+  url: string;                // presigned R2 URL — embed in the outbound body
   expiresAt: number;
 }
 
-// S3-compatible presigned URLs cap at 7 days (RFC: SigV4 §X-Amz-Expires).
-// R2 inherits that ceiling. We default to the cap; callers can shorten.
+// S3-compatible presigned URLs cap at 7 days (SigV4 X-Amz-Expires max).
 export const MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const DEFAULT_SHARE_TTL_SECONDS = MAX_TTL_SECONDS;
 
-// The R2 bucket NAME (as you see it in `wrangler r2 bucket list`), not the
-// binding identifier. orange-inbox creates this in setup.sh; if you renamed
-// the bucket, update SHARE_BUCKET_NAME here. (We can't read it from the
-// binding directly — the runtime hides the underlying bucket name behind
-// env.ATTACHMENTS.)
+// R2 bucket name as seen in `wrangler r2 bucket list`, not the binding
+// identifier. `env.ATTACHMENTS` hides the underlying name; we have to
+// hard-code it. setup.sh creates this bucket.
 const SHARE_BUCKET_NAME = "orange-inbox-attachments";
 
 interface R2Credentials {
@@ -93,8 +88,6 @@ function loadR2Credentials(): R2Credentials {
   return { accountId, accessKeyId, secretAccessKey };
 }
 
-// Sign a GET URL for an R2 object. The aws4fetch client speaks S3-compatible
-// SigV4 against R2's `<account>.r2.cloudflarestorage.com` endpoint.
 async function presignR2GetUrl(
   creds: R2Credentials,
   bucketName: string,
@@ -108,14 +101,11 @@ async function presignR2GetUrl(
     service: "s3",
     region: "auto",
   });
-  // S3 wants the key url-encoded except slashes, which stay as path separators.
   const encodedKey = key.split("/").map(encodeURIComponent).join("/");
   const url = new URL(
     `https://${creds.accountId}.r2.cloudflarestorage.com/${bucketName}/${encodedKey}`,
   );
   url.searchParams.set("X-Amz-Expires", String(expiresInSeconds));
-  // Have R2 stamp a Content-Disposition response header so browsers default
-  // to download with the original filename rather than rendering inline.
   if (contentDispositionFilename) {
     url.searchParams.set(
       "response-content-disposition",
@@ -129,8 +119,6 @@ async function presignR2GetUrl(
   return signed.url;
 }
 
-// RFC 5987 / 8187 filename* parameter for Content-Disposition. Non-ASCII
-// names survive intact; ASCII fallback strips quotes for the legacy token.
 function rfc5987DispositionFilename(name: string): string {
   const ascii = name
     .replace(/[\\"]/g, "_")
@@ -141,9 +129,6 @@ function rfc5987DispositionFilename(name: string): string {
   return `filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
-// Mint a share-link row + return the presigned URL the caller should embed
-// in the outbound body. The row exists for audit/cleanup tracking; the
-// public URL goes directly to R2 and never re-enters our Worker.
 export async function createShareLink(
   userId: string,
   input: CreateShareLinkInput,

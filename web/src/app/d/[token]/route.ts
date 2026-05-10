@@ -1,31 +1,17 @@
 import { NextRequest } from "next/server";
-import { getEnv } from "@/lib/db";
-import { consumeShareLink, type ConsumeFailure } from "@/lib/share-links";
 
-// Public download endpoint for Mail Drop share links.
+// Legacy /d/<token> download endpoint for Mail Drop. Mail Drop migrated to
+// presigned R2 URLs (recipients hit R2 directly with no Worker in the loop),
+// so this route's lookup table is gone and the route exists only to:
+//   1. Return a clean 410 Gone for any old token URLs still circulating in
+//      previously-sent email bodies.
+//   2. Keep the path bound so 404 handlers don't try to interpret it as
+//      something else.
+// Tokens issued before the migration are unrecoverable — recipients who
+// click them get a "Link expired" page.
 //
-// AUTH MODEL — deliberately unauthenticated.
-//   The token in the URL path IS the credential. Anyone holding the URL can
-//   download the file until it expires (default 30 days) or hits its
-//   max_downloads cap (default unlimited within TTL). This mirrors how every
-//   other "share-by-link" service works (Drive/Dropbox/WeTransfer) and is the
-//   point of the feature — recipients of the email don't have orange-inbox
-//   accounts.
-//
-//   IMPORTANT operational note: in production, the host Worker sits behind
-//   Cloudflare Access. For this route to actually be reachable to external
-//   recipients, the Access application MUST add a Bypass policy for the
-//   `/d/*` path (Zero Trust → Access → Applications → Policies → Add policy
-//   → Action: Bypass → Path: /d/*), or the route must be served from a
-//   separate hostname not covered by the Access app. Without that, recipient
-//   clicks will hit the Access login page rather than the download. See the
-//   PR description for setup instructions.
-//
-// RATE LIMITING — best effort, per-Worker-instance.
-//   We keep a tiny in-memory token bucket keyed by client IP. This is purely
-//   to blunt naive enumeration / brute-force on tokens; serious abuse would
-//   need a durable store (KV/D1) which is out of scope for v1. Cloudflare's
-//   own per-IP DDOS protections sit in front of this anyway.
+// RATE LIMITING — best effort, per-Worker-instance. Same per-IP token bucket
+// as the original route to blunt drive-by enumeration.
 
 const RATE_LIMIT_WINDOW_MS = 60_000;     // 1 minute
 const RATE_LIMIT_MAX_HITS = 30;          // hits per IP per window
@@ -77,43 +63,14 @@ export async function GET(
     return notFound();
   }
 
-  const result = await consumeShareLink(token);
-  if (!result.ok) return statusFor(result.reason);
-  const { row } = result;
-
-  // r2_bucket is forward-looking — today only ATTACHMENTS is wired up. Any
-  // other value means a future migration referenced a bucket this code
-  // doesn't know about yet; refuse rather than guess.
-  const env = getEnv();
-  if (row.r2_bucket !== "ATTACHMENTS") {
-    console.error("share link points at unknown bucket", row.r2_bucket);
-    return new Response("Internal error", { status: 500 });
-  }
-
-  const obj = await env.ATTACHMENTS.get(row.r2_key);
-  if (!obj) {
-    // The bookkeeping row exists but the bytes are gone — treat as
-    // permanently gone, not "try again later".
-    return new Response("File no longer available", {
-      status: 410,
-      headers: { "Cache-Control": "no-store" },
-    });
-  }
-
-  const filename = row.filename || "download";
-  return new Response(obj.body, {
-    status: 200,
+  // Mail Drop now signs R2 URLs at send time; the lookup table this route
+  // used to consult is gone. Any token landing here is from a pre-migration
+  // send and unrecoverable.
+  return new Response("Link expired — this attachment was sent under an older system and is no longer available.", {
+    status: 410,
     headers: {
-      "Content-Type": row.content_type || "application/octet-stream",
-      "Content-Disposition": `attachment; ${rfc5987Disposition(filename)}`,
-      "Content-Length": String(row.size),
-      "X-Content-Type-Options": "nosniff",
-      // Don't cache: the response embeds an effectful side-effect (download
-      // counter increment) and the link can stop working at any moment.
-      "Cache-Control": "private, no-store",
-      // Defence in depth — a download endpoint should never be embeddable.
-      "X-Frame-Options": "DENY",
-      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "no-store",
+      "Content-Type": "text/plain; charset=utf-8",
     },
   });
 }
@@ -123,33 +80,6 @@ function notFound(): Response {
     status: 404,
     headers: { "Cache-Control": "no-store" },
   });
-}
-
-function statusFor(reason: ConsumeFailure): Response {
-  if (reason === "not_found") return notFound();
-  // expired / exhausted both 410 — semantically "the resource was here but
-  // is gone now," which is what 410 Gone is for.
-  const message = reason === "expired" ? "Link expired" : "Download limit reached";
-  return new Response(message, {
-    status: 410,
-    headers: { "Cache-Control": "no-store" },
-  });
-}
-
-// Build a Content-Disposition filename param that's safe for non-ASCII
-// (RFC 5987) with an ASCII fallback. Quotes/backslashes in the legacy
-// `filename=` token are stripped to underscores; everything else is
-// percent-encoded into `filename*=UTF-8''…` so non-ASCII names survive
-// (Apple Mail attachments routinely include accents, Japanese, emoji, etc.).
-// Modern clients (Chrome/Firefox/Safari/curl/wget) all read `filename*` and
-// ignore the legacy token; older clients fall back to the ASCII version.
-// Mirror of the helper in api/attachments/[id]/route.ts.
-function rfc5987Disposition(name: string): string {
-  const ascii = name
-    .replace(/[\\"]/g, "_")
-    .replace(/[^\x20-\x7e]/g, "_");
-  const encoded = encodeURIComponent(name).replace(/['()]/g, escape);
-  return `filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 // HEAD handler — explicitly defined so Next.js doesn't fall back to running

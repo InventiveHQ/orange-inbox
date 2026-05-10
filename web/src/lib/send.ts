@@ -126,8 +126,10 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   // temp_uploads lives in the control DB.
   //
   // Mail Drop policy: any single attachment > MAIL_DROP_THRESHOLD_BYTES is
-  // replaced in the body with a tokenised /d/<token> link instead of being
-  // inlined. We deliberately don't sum sizes — common MX caps are per-message
+  // replaced in the body with a presigned R2 URL instead of being inlined.
+  // The URL points directly at R2 — no Worker / Access in the request path,
+  // so external recipients can actually download it.
+  // We deliberately don't sum sizes — common MX caps are per-message
   // but we'd rather always-inline a 9 MB file alongside a 9 MB file (= 18 MB,
   // bouncy) than over-engineer the threshold. Bounce-on-aggregate is a
   // future tweak; v1 favours predictability.
@@ -197,11 +199,10 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   const isHtml = looksLikeHtml(input.body);
   let bodySource = input.body;
   if (droppedLinks.length > 0) {
-    const host = await resolveHost();
     if (isHtml) {
-      bodySource = `${input.body}${renderDroppedLinksHtml(droppedLinks, host)}`;
+      bodySource = `${input.body}${renderDroppedLinksHtml(droppedLinks)}`;
     } else {
-      bodySource = `${input.body}\n\n${renderDroppedLinksText(droppedLinks, host)}`;
+      bodySource = `${input.body}\n\n${renderDroppedLinksText(droppedLinks)}`;
     }
   }
   const textBody = isHtml ? htmlToText(bodySource) : bodySource;
@@ -567,10 +568,10 @@ function escapeHtml(s: string): string {
 // recipients. Wrapped in a styled box so it visually reads as an attachment
 // region rather than an arbitrary link list. Deliberately inline-styled
 // (most mail clients strip <style> blocks).
-function renderDroppedLinksHtml(links: DroppedAttachmentLink[], host: string): string {
+function renderDroppedLinksHtml(links: DroppedAttachmentLink[]): string {
   const items = links
     .map(l => {
-      const url = `https://${host}/d/${l.token}`;
+      const url = l.url;
       const expires = new Date(l.expiresAt * 1000).toLocaleDateString(undefined, {
         year: "numeric",
         month: "short",
@@ -589,9 +590,9 @@ ${items}
 </div>`;
 }
 
-function renderDroppedLinksText(links: DroppedAttachmentLink[], host: string): string {
+function renderDroppedLinksText(links: DroppedAttachmentLink[]): string {
   const lines = links.map(l => {
-    const url = `https://${host}/d/${l.token}`;
+    const url = l.url;
     const expires = new Date(l.expiresAt * 1000).toLocaleDateString(undefined, {
       year: "numeric",
       month: "short",

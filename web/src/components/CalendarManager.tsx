@@ -126,10 +126,28 @@ export default function CalendarManager() {
     return fetchEvents();
   }
 
+  // Search filter: the global SearchBar routes `?q=` here when the user has
+  // Calendar selected. We filter in-memory across the already-fetched window
+  // (case-insensitive substring on summary / location / description). When
+  // there's no query, this is a no-op.
+  const searchQuery = (searchParams.get("q") ?? "").trim().toLowerCase();
+  const filteredEvents = useMemo(() => {
+    if (!searchQuery) return events;
+    return events.filter(e => {
+      const hay = `${e.summary ?? ""}\n${e.location ?? ""}\n${e.description ?? ""}`.toLowerCase();
+      return hay.includes(searchQuery);
+    });
+  }, [events, searchQuery]);
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 flex flex-wrap items-center gap-3">
         <h1 className="text-base font-semibold mr-2">Calendar</h1>
+        {searchQuery && (
+          <span className="text-xs text-neutral-500">
+            Filtering by &ldquo;{searchQuery}&rdquo; · {filteredEvents.length} of {events.length}
+          </span>
+        )}
 
         <div className="flex items-center gap-1">
           <button
@@ -196,19 +214,19 @@ export default function CalendarManager() {
         ) : view === "day" ? (
           <CalendarDayGrid
             cursor={cursor}
-            events={events}
+            events={filteredEvents}
             onEditEvent={ev => setEditing(ev)}
           />
         ) : view === "week" ? (
           <CalendarWeekGrid
             cursor={cursor}
-            events={events}
+            events={filteredEvents}
             onEditEvent={ev => setEditing(ev)}
           />
         ) : (
           <CalendarMonthGrid
             cursor={cursor}
-            events={events}
+            events={filteredEvents}
             onEditEvent={ev => setEditing(ev)}
             onSelectDate={d => {
               setCursor(d);
