@@ -8,6 +8,7 @@ import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
+import { ToastProvider } from "@/components/ToastProvider";
 import ComposeFromUrl from "@/components/ComposeFromUrl";
 import SearchBar from "@/components/SearchBar";
 import MobileShell from "@/components/MobileShell";
@@ -74,24 +75,26 @@ export default async function InboxLayout({
 
   if (domains.length === 0 && effectiveScope !== "settings" && effectiveScope !== "help") {
     return (
-      <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
-        <ComposeFromUrl />
-        <AppBadgeSync />
-        <MobileShell
-          sidebar={
-            <Sidebar
-              domains={[]}
-              mailboxes={[]}
-              scope={effectiveScope}
-              initialCollapsed={sidebarCollapsed}
-              isAdmin={user.is_admin}
-            />
-          }
-          topBar={<TopBar mailboxes={[]} scope={effectiveScope} />}
-          list={null}
-          main={<FirstMailboxPrompt />}
-        />
-      </ComposeProvider>
+      <ToastProvider>
+        <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
+          <ComposeFromUrl />
+          <AppBadgeSync />
+          <MobileShell
+            sidebar={
+              <Sidebar
+                domains={[]}
+                mailboxes={[]}
+                scope={effectiveScope}
+                initialCollapsed={sidebarCollapsed}
+                isAdmin={user.is_admin}
+              />
+            }
+            topBar={<TopBar mailboxes={[]} scope={effectiveScope} />}
+            list={null}
+            main={<FirstMailboxPrompt />}
+          />
+        </ComposeProvider>
+      </ToastProvider>
     );
   }
 
@@ -128,25 +131,27 @@ export default async function InboxLayout({
   );
 
   return (
-    <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
-      <ComposeFromUrl />
-      <AppBadgeSync />
-      <KeyboardShortcuts />
-      <MobileShell
-        sidebar={
-          <Sidebar
-            domains={domains}
-            mailboxes={mailboxes}
-            scope={effectiveScope}
-            initialCollapsed={sidebarCollapsed}
-            isAdmin={user.is_admin}
-          />
-        }
-        topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}
-        list={listContent}
-        main={children}
-      />
-    </ComposeProvider>
+    <ToastProvider>
+      <ComposeProvider identities={identities} undoSendSeconds={user.undo_send_seconds}>
+        <ComposeFromUrl />
+        <AppBadgeSync />
+        <KeyboardShortcuts />
+        <MobileShell
+          sidebar={
+            <Sidebar
+              domains={domains}
+              mailboxes={mailboxes}
+              scope={effectiveScope}
+              initialCollapsed={sidebarCollapsed}
+              isAdmin={user.is_admin}
+            />
+          }
+          topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}
+          list={listContent}
+          main={children}
+        />
+      </ComposeProvider>
+    </ToastProvider>
   );
 }
 
