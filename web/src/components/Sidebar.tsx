@@ -56,9 +56,11 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           onClick={toggle}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          aria-controls="orange-sidebar-nav"
           className={`${
             collapsed ? "" : "ml-auto"
-          } rounded p-1 text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-800`}
+          } rounded p-1 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-neutral-100`}
         >
           {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
         </button>
@@ -68,7 +70,7 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
         <ComposeButton scope={scope} collapsed={collapsed} />
       </div>
 
-      <nav className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-2" : "px-2"}`}>
+      <nav id="orange-sidebar-nav" aria-label="Mailboxes" className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-2" : "px-2"}`}>
         <SpecialLink
           href="/inbox/all"
           label="All inboxes"

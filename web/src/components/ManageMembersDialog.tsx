@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { MailboxRow } from "@/lib/queries";
 
@@ -42,6 +42,57 @@ export default function ManageMembersDialog({
   const [inviteRole, setInviteRole] = useState<Member["role"]>("member");
   const [actionError, setActionError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null,
+  );
+
+  // Esc + focus trap. Confines Tab/Shift+Tab to focusable descendants of the
+  // dialog so keyboard users can't escape into the obscured background, and
+  // returns focus to the opener on close.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter(el => el.offsetParent !== null || el === document.activeElement);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && active === first) {
+        last.focus();
+        e.preventDefault();
+      } else if (!e.shiftKey && active === last) {
+        first.focus();
+        e.preventDefault();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    // Move initial focus into the dialog so Tab/Shift+Tab cycle within it.
+    const root = dialogRef.current;
+    if (root) {
+      const firstFocusable = root.querySelector<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+      );
+      firstFocusable?.focus();
+    }
+    const opener = openerRef.current;
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (opener && typeof opener.focus === "function") opener.focus();
+    };
+  }, [onClose]);
 
   async function refresh() {
     setLoadError(null);
@@ -151,18 +202,23 @@ export default function ManageMembersDialog({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         onClick={e => e.stopPropagation()}
         className="w-full max-w-md max-h-[85vh] flex flex-col rounded-lg bg-white dark:bg-neutral-950 shadow-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden"
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
           <div>
-            <div className="text-sm font-medium">Manage mailbox</div>
-            <div className="text-xs text-neutral-500">{initialLabel}</div>
+            <div id={titleId} className="text-sm font-medium">Manage mailbox</div>
+            <div className="text-xs text-neutral-600 dark:text-neutral-400">{initialLabel}</div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 text-xl leading-none"
-            aria-label="Close"
+            className="rounded-md px-1 text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 text-xl leading-none"
+            aria-label="Close dialog"
           >
             ×
           </button>
@@ -171,9 +227,9 @@ export default function ManageMembersDialog({
         <div className="overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800">
           {/* Settings */}
           <section className="px-4 py-3 space-y-2">
-            <div className="text-xs uppercase tracking-wider text-neutral-500">Settings</div>
+            <div className="text-xs uppercase tracking-wider text-neutral-600 dark:text-neutral-400">Settings</div>
             <label className="block text-sm">
-              <span className="text-xs text-neutral-500">Address</span>
+              <span className="text-xs text-neutral-600 dark:text-neutral-400">Address</span>
               <div className="mt-1 flex items-center gap-1">
                 <input
                   type="text"
@@ -184,11 +240,11 @@ export default function ManageMembersDialog({
                   }}
                   className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 focus:outline-none focus:border-[var(--color-brand)]"
                 />
-                <span className="text-neutral-500 px-1">@{mailbox.domain_name}</span>
+                <span className="text-neutral-600 dark:text-neutral-400 px-1">@{mailbox.domain_name}</span>
               </div>
             </label>
             <label className="block text-sm">
-              <span className="text-xs text-neutral-500">Display name (optional)</span>
+              <span className="text-xs text-neutral-600 dark:text-neutral-400">Display name (optional)</span>
               <input
                 type="text"
                 value={displayName}
@@ -211,14 +267,14 @@ export default function ManageMembersDialog({
               />
               <span>
                 Catch-all{" "}
-                <span className="text-xs text-neutral-500">
+                <span className="text-xs text-neutral-600 dark:text-neutral-400">
                   — receive mail addressed to anything else on this domain
                 </span>
               </span>
             </label>
             <div className="flex items-center justify-end gap-2 pt-1">
-              {settingsError && <span className="text-xs text-red-600">{settingsError}</span>}
-              {settingsSaved && !settingsError && <span className="text-xs text-green-600">Saved</span>}
+              {settingsError && <span role="alert" className="text-xs text-red-700 dark:text-red-400">{settingsError}</span>}
+              {settingsSaved && !settingsError && <span className="text-xs text-green-700 dark:text-green-400">Saved</span>}
               <button
                 type="button"
                 onClick={saveSettings}
@@ -232,13 +288,13 @@ export default function ManageMembersDialog({
 
           {/* Members */}
           <section className="px-4 py-3">
-            <div className="text-xs uppercase tracking-wider text-neutral-500 mb-1">Members</div>
-            {loadError && <div className="text-sm text-red-600">{loadError}</div>}
+            <div className="text-xs uppercase tracking-wider text-neutral-600 dark:text-neutral-400 mb-1">Members</div>
+            {loadError && <div role="alert" className="text-sm text-red-700 dark:text-red-400">{loadError}</div>}
             {members === null && !loadError && (
-              <div className="text-sm text-neutral-500">Loading…</div>
+              <div className="text-sm text-neutral-600 dark:text-neutral-400">Loading…</div>
             )}
             {members && members.length === 0 && (
-              <div className="text-sm text-neutral-500">No members yet.</div>
+              <div className="text-sm text-neutral-600 dark:text-neutral-400">No members yet.</div>
             )}
             <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
               {members?.map(m => (
@@ -246,16 +302,17 @@ export default function ManageMembersDialog({
                   <div className="min-w-0">
                     <div className="text-sm truncate">{m.display_name || m.email}</div>
                     {m.display_name && (
-                      <div className="text-xs text-neutral-500 truncate">{m.email}</div>
+                      <div className="text-xs text-neutral-600 dark:text-neutral-400 truncate">{m.email}</div>
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs uppercase tracking-wider text-neutral-500">{m.role}</span>
+                    <span className="text-xs uppercase tracking-wider text-neutral-600 dark:text-neutral-400">{m.role}</span>
                     <button
                       type="button"
                       onClick={() => remove(m.user_id)}
                       disabled={isPending}
-                      className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                      aria-label={`Remove ${m.display_name || m.email}`}
+                      className="text-xs text-red-700 dark:text-red-400 hover:underline disabled:opacity-50"
                     >
                       Remove
                     </button>
@@ -267,7 +324,7 @@ export default function ManageMembersDialog({
 
           {/* Invite */}
           <section className="px-4 py-3 space-y-2">
-            <div className="text-xs uppercase tracking-wider text-neutral-500">Invite</div>
+            <div className="text-xs uppercase tracking-wider text-neutral-600 dark:text-neutral-400">Invite</div>
             <div className="flex gap-2">
               <input
                 type="email"
@@ -277,11 +334,13 @@ export default function ManageMembersDialog({
                 onKeyDown={e => {
                   if (e.key === "Enter") invite();
                 }}
+                aria-label="Invite email address"
                 className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-brand)]"
               />
               <select
                 value={inviteRole}
                 onChange={e => setInviteRole(e.target.value as Member["role"])}
+                aria-label="Invite role"
                 className="rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm"
               >
                 {ROLES.map(r => (
@@ -299,7 +358,7 @@ export default function ManageMembersDialog({
                 Invite
               </button>
             </div>
-            {actionError && <div className="text-xs text-red-600">{actionError}</div>}
+            {actionError && <div role="alert" className="text-xs text-red-700 dark:text-red-400">{actionError}</div>}
           </section>
         </div>
 
@@ -308,7 +367,7 @@ export default function ManageMembersDialog({
             type="button"
             onClick={deleteMailbox}
             disabled={isPending}
-            className="text-xs text-red-600 hover:underline disabled:opacity-50"
+            className="text-xs text-red-700 dark:text-red-400 hover:underline disabled:opacity-50"
           >
             Delete this mailbox
           </button>

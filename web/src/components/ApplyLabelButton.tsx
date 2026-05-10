@@ -23,6 +23,8 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -59,6 +61,67 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
+
+  // Once the labels render, focus the first item so arrow keys can drive
+  // the menu without the user having to click anything.
+  useEffect(() => {
+    if (!open || !available || available.length === 0) return;
+    const first = popoverRef.current?.querySelector<HTMLElement>('[role="menuitemcheckbox"]');
+    first?.focus();
+  }, [open, available]);
+
+  function focusItem(delta: 1 | -1 | "first" | "last") {
+    const items = Array.from(
+      popoverRef.current?.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]') ?? [],
+    );
+    if (items.length === 0) return;
+    const active = document.activeElement as HTMLElement | null;
+    const idx = active ? items.indexOf(active) : -1;
+    let next: number;
+    if (delta === "first") next = 0;
+    else if (delta === "last") next = items.length - 1;
+    else if (idx === -1) next = delta === 1 ? 0 : items.length - 1;
+    else next = (idx + delta + items.length) % items.length;
+    items[next].focus();
+  }
+
+  function onPopoverKey(e: React.KeyboardEvent) {
+    // Don't hijack arrow keys while typing into the new-label input.
+    const inInput = (e.target as HTMLElement).tagName === "INPUT";
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (inInput) return;
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        focusItem(1);
+        return;
+      case "ArrowUp":
+        e.preventDefault();
+        focusItem(-1);
+        return;
+      case "Home":
+        e.preventDefault();
+        focusItem("first");
+        return;
+      case "End":
+        e.preventDefault();
+        focusItem("last");
+        return;
+    }
+  }
+
+  function onTriggerKey(e: React.KeyboardEvent) {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      setOpen(true);
+    }
+  }
 
   function toggle(label: Label) {
     if (!appliedIds) return;
@@ -133,11 +196,15 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
   return (
     <div ref={containerRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         data-action="label"
         onClick={() => setOpen(o => !o)}
+        onKeyDown={onTriggerKey}
         title="Apply label"
         aria-label="Apply label"
+        aria-haspopup="menu"
+        aria-expanded={open}
         className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
@@ -147,17 +214,20 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
 
       {open && (
         <div
+          ref={popoverRef}
+          onKeyDown={onPopoverKey}
           className="absolute right-0 top-full mt-1 z-30 w-64 max-h-72 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 shadow-lg"
           role="menu"
+          aria-label="Apply label"
         >
           {available === null && !error && (
-            <div className="px-3 py-2 text-xs text-neutral-500">Loading…</div>
+            <div className="px-3 py-2 text-xs text-neutral-600 dark:text-neutral-400">Loading…</div>
           )}
           {error && (
-            <div className="px-3 py-2 text-xs text-red-600">{error}</div>
+            <div role="alert" className="px-3 py-2 text-xs text-red-700 dark:text-red-400">{error}</div>
           )}
           {available && available.length === 0 && (
-            <div className="px-3 py-2 text-xs text-neutral-500">
+            <div className="px-3 py-2 text-xs text-neutral-600 dark:text-neutral-400">
               No labels yet. Create one below.
             </div>
           )}
@@ -169,14 +239,18 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
                   <li key={l.id}>
                     <button
                       type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={checked}
                       onClick={() => toggle(l)}
                       disabled={isPending}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 disabled:opacity-60"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 focus:bg-neutral-100 dark:focus:bg-neutral-900 focus:outline-none disabled:opacity-60"
                     >
                       <input
                         type="checkbox"
                         checked={checked}
                         readOnly
+                        tabIndex={-1}
+                        aria-hidden
                         className="pointer-events-none"
                       />
                       <span
@@ -204,6 +278,7 @@ export default function ApplyLabelButton({ threadId }: { threadId: string }) {
                   }
                 }}
                 placeholder="New label"
+                aria-label="New label name"
                 maxLength={64}
                 disabled={creating}
                 className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-60"
