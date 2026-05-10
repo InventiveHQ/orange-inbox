@@ -26,6 +26,20 @@ export interface ParsedIcs {
   organizer: string | null;    // bare email, lowercased
   uid: string | null;
   method: string | null;       // REQUEST | CANCEL | REPLY | PUBLISH | …
+  // Recurrence (#80). RFC 5545 RRULE value sans the "RRULE:" prefix.
+  // NULL when the event isn't recurring; a non-null value is stored
+  // verbatim and passed through to calendar_events.rrule on promotion.
+  rrule: string | null;
+  // IANA tz lifted from DTSTART;TZID= (#82). Falls back to NULL when
+  // the value is UTC (`Z` suffix) or floating. Stored separately from
+  // startsAt so the display side can render in the inviter's intended
+  // zone independent of where DTSTART resolves on the wire.
+  tz: string | null;
+  // Inbound REPLY routing (#81). The first ATTENDEE we find in a
+  // METHOD=REPLY VEVENT — its mailto + PARTSTAT drive
+  // updateAttendeeRsvp on the web side. NULL on REQUEST/CANCEL.
+  replyAttendee: string | null;
+  replyPartstat: "ACCEPTED" | "TENTATIVE" | "DECLINED" | "NEEDS-ACTION" | null;
 }
 
 export function parseIcs(raw: string): ParsedIcs | null {
@@ -35,9 +49,15 @@ export function parseIcs(raw: string): ParsedIcs | null {
   // first VEVENT block we find. Most invites have exactly one VEVENT; if
   // there are multiple (recurring exceptions, multiple events shipped in a
   // single component) we surface the first — fine for the inline card.
+  //
+  // ATTENDEE lines are special: a single VEVENT can carry several. We
+  // collect them on a separate list so the REPLY-routing path (#81) can
+  // walk them; the rest of the props use the first-occurrence Map below.
   let method: string | null = null;
   let event: Map<string, IcsValue> | null = null;
+  let eventAttendees: IcsValue[] = [];
   let current: Map<string, IcsValue> | null = null;
+  let currentAttendees: IcsValue[] = [];
   let depth = 0; // 0 = top-level, 1 = inside VEVENT (or anything we entered)
 
   for (const line of lines) {
@@ -50,6 +70,7 @@ export function parseIcs(raw: string): ParsedIcs | null {
       const block = value.toUpperCase();
       if (block === "VEVENT" && current === null) {
         current = new Map();
+        currentAttendees = [];
       }
       depth += 1;
       continue;
@@ -58,8 +79,12 @@ export function parseIcs(raw: string): ParsedIcs | null {
       depth -= 1;
       const block = value.toUpperCase();
       if (block === "VEVENT" && current !== null) {
-        if (event === null) event = current;
+        if (event === null) {
+          event = current;
+          eventAttendees = currentAttendees;
+        }
         current = null;
+        currentAttendees = [];
       }
       continue;
     }
@@ -70,10 +95,16 @@ export function parseIcs(raw: string): ParsedIcs | null {
       continue;
     }
 
-    // Capture event-scoped properties. We keep the first occurrence — duplicate
-    // DTSTART/DTEND would be malformed anyway.
-    if (current && !current.has(upper)) {
-      current.set(upper, { params, value });
+    if (current) {
+      if (upper === "ATTENDEE") {
+        currentAttendees.push({ params, value });
+        continue;
+      }
+      // Capture event-scoped properties. We keep the first occurrence —
+      // duplicate DTSTART/DTEND would be malformed anyway.
+      if (!current.has(upper)) {
+        current.set(upper, { params, value });
+      }
     }
   }
 
@@ -88,6 +119,40 @@ export function parseIcs(raw: string): ParsedIcs | null {
   const dtend = event.get("DTEND");
   const endsAt = dtend ? parseDateValue(dtend) : null;
 
+  // RRULE: stored verbatim sans the "RRULE:" prefix (the prefix never
+  // makes it past parseLine).
+  const rruleVal = event.get("RRULE");
+  const rrule = rruleVal ? rruleVal.value.trim() || null : null;
+
+  // TZID: lifted off DTSTART's params if present. We deliberately don't
+  // try to resolve VTIMEZONE blocks here — the IANA name in TZID is
+  // what we surface to the user; the wire startsAt was already converted
+  // to unix seconds via parseDateValue (with the floating-time fallback
+  // documented at the top of this file).
+  const tz = dtstart.params.TZID || null;
+
+  // REPLY routing: if METHOD=REPLY, surface the first ATTENDEE's mailto
+  // and PARTSTAT so updateAttendeeRsvp can flip the matching row. We pick
+  // the first attendee — RFC 5546 §3.2.3 says a REPLY carries exactly the
+  // responding attendee's row, so "first" is "the one we care about".
+  let replyAttendee: string | null = null;
+  let replyPartstat: ParsedIcs["replyPartstat"] = null;
+  if ((method ?? "").toUpperCase() === "REPLY" && eventAttendees.length > 0) {
+    const first = eventAttendees[0];
+    const raw = first.value.trim();
+    const mail = raw.toLowerCase().startsWith("mailto:") ? raw.slice(7) : raw;
+    replyAttendee = mail.trim().toLowerCase() || null;
+    const partstat = (first.params.PARTSTAT || "").toUpperCase();
+    if (
+      partstat === "ACCEPTED" ||
+      partstat === "TENTATIVE" ||
+      partstat === "DECLINED" ||
+      partstat === "NEEDS-ACTION"
+    ) {
+      replyPartstat = partstat;
+    }
+  }
+
   return {
     startsAt,
     endsAt,
@@ -96,6 +161,10 @@ export function parseIcs(raw: string): ParsedIcs | null {
     organizer: extractMailto(event.get("ORGANIZER")),
     uid: textValue(event.get("UID")),
     method,
+    rrule,
+    tz,
+    replyAttendee,
+    replyPartstat,
   };
 }
 

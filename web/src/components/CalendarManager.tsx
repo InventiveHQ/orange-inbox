@@ -50,6 +50,13 @@ export interface CalendarEvent {
   rsvp_sent_at: number | null;
   cancelled: number;
   raw_ics: string | null;
+  // IANA tz (#82). NULL = floating / viewer-local.
+  tz?: string | null;
+  // Recurrence (#80). RFC 5545 RRULE value sans the "RRULE:" prefix.
+  // NULL = single-shot. The form's "Repeats" picker round-trips this.
+  rrule?: string | null;
+  rdate?: string | null;
+  exdate?: string | null;
   created_at?: number;
   updated_at?: number;
 }
