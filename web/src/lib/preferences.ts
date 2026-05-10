@@ -4,38 +4,48 @@ import { getDb } from "./db";
 // preference (the default), "light" / "dark" pin the UI regardless.
 export type Theme = "light" | "dark" | "system";
 
+// Row spacing preset for the thread list (issue #35). "comfortable" matches the
+// pre-existing layout, "cozy" tightens vertical rhythm, "compact" is denser
+// still for power users / large inboxes.
+export type Density = "comfortable" | "cozy" | "compact";
+
 export interface UserPreferences {
   theme: Theme;
   accent_hex: string;
+  density: Density;
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   theme: "system",
   accent_hex: "#f97316",
+  density: "comfortable",
 };
 
 interface PreferencesRow {
   theme: string;
   accent_hex: string;
+  density: string | null;
 }
 
 // Returns defaults if no row exists for the user yet — the table is sparsely
 // populated (only users who've changed defaults get a row).
 export async function getUserPreferences(userId: string): Promise<UserPreferences> {
   const row = await getDb()
-    .prepare("SELECT theme, accent_hex FROM user_preferences WHERE user_id = ?")
+    .prepare("SELECT theme, accent_hex, density FROM user_preferences WHERE user_id = ?")
     .bind(userId)
     .first<PreferencesRow>();
   if (!row) return DEFAULT_PREFERENCES;
   return {
     theme: normaliseTheme(row.theme),
     accent_hex: normaliseHex(row.accent_hex) ?? DEFAULT_PREFERENCES.accent_hex,
+    density: normaliseDensity(row.density),
   };
 }
 
 export interface PreferencesPatch {
   theme?: Theme;
   accent_hex?: string;
+  density?: Density;
 }
 
 // Upsert-shaped: merge the patch over current values, then INSERT or UPDATE.
@@ -55,17 +65,22 @@ export async function updateUserPreferences(
     if (!hex) return null;
     next.accent_hex = hex;
   }
+  if (patch.density !== undefined) {
+    if (!isDensity(patch.density)) return null;
+    next.density = patch.density;
+  }
 
   await getDb()
     .prepare(
-      `INSERT INTO user_preferences (user_id, theme, accent_hex, updated_at)
-       VALUES (?, ?, ?, unixepoch())
+      `INSERT INTO user_preferences (user_id, theme, accent_hex, density, updated_at)
+       VALUES (?, ?, ?, ?, unixepoch())
        ON CONFLICT(user_id) DO UPDATE SET
          theme = excluded.theme,
          accent_hex = excluded.accent_hex,
+         density = excluded.density,
          updated_at = excluded.updated_at`,
     )
-    .bind(userId, next.theme, next.accent_hex)
+    .bind(userId, next.theme, next.accent_hex, next.density)
     .run();
   return next;
 }
@@ -76,6 +91,14 @@ function isTheme(v: unknown): v is Theme {
 
 function normaliseTheme(v: string): Theme {
   return isTheme(v) ? v : "system";
+}
+
+function isDensity(v: unknown): v is Density {
+  return v === "comfortable" || v === "cozy" || v === "compact";
+}
+
+function normaliseDensity(v: string | null | undefined): Density {
+  return isDensity(v) ? v : "comfortable";
 }
 
 // Accept #rgb or #rrggbb (case-insensitive); always store the lowercase
@@ -96,7 +119,7 @@ function normaliseHex(v: string): string | null {
 export const PREFS_COOKIE = "orange-prefs";
 
 export function encodePreferencesCookie(p: UserPreferences): string {
-  return JSON.stringify({ theme: p.theme, accent_hex: p.accent_hex });
+  return JSON.stringify({ theme: p.theme, accent_hex: p.accent_hex, density: p.density });
 }
 
 export function decodePreferencesCookie(raw: string | undefined): UserPreferences | null {
@@ -117,7 +140,11 @@ export function decodePreferencesCookie(raw: string | undefined): UserPreference
     const theme = isTheme(j.theme) ? j.theme : null;
     const accent = typeof j.accent_hex === "string" ? normaliseHex(j.accent_hex) : null;
     if (!theme || !accent) return null;
-    return { theme, accent_hex: accent };
+    // Density was introduced after theme/accent — tolerate cookies written by
+    // older clients by falling back to the comfortable default instead of
+    // discarding the whole cookie (which would force a flash to system theme).
+    const density = isDensity(j.density) ? j.density : DEFAULT_PREFERENCES.density;
+    return { theme, accent_hex: accent, density };
   } catch {
     return null;
   }

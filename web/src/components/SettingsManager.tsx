@@ -11,6 +11,7 @@ import {
   DEFAULT_PREFERENCES,
   encodePreferencesCookie,
   PREFS_COOKIE,
+  type Density,
   type Theme,
   type UserPreferences,
 } from "@/lib/preferences";
@@ -1485,6 +1486,12 @@ const THEME_OPTIONS: { value: Theme; label: string; description: string }[] = [
   { value: "system", label: "System", description: "Match your OS." },
 ];
 
+const DENSITY_OPTIONS: { value: Density; label: string; description: string }[] = [
+  { value: "comfortable", label: "Comfortable", description: "Default spacing." },
+  { value: "cozy", label: "Cozy", description: "Tighter rows." },
+  { value: "compact", label: "Compact", description: "Densest — power users." },
+];
+
 function AppearanceSection({ id }: { id: string }) {
   // Optimistically apply changes locally as they're picked, then PATCH the
   // server. On success, sync the orange-prefs cookie so the next SSR render
@@ -1530,6 +1537,7 @@ function AppearanceSection({ id }: { id: string }) {
   useEffect(() => {
     if (typeof document === "undefined") return;
     document.documentElement.dataset.theme = prefs.theme;
+    document.documentElement.dataset.density = prefs.density;
     document.documentElement.style.setProperty("--brand", prefs.accent_hex);
   }, [prefs]);
 
@@ -1558,6 +1566,10 @@ function AppearanceSection({ id }: { id: string }) {
 
   function pickTheme(theme: Theme) {
     persist({ ...prefs, theme });
+  }
+
+  function pickDensity(density: Density) {
+    persist({ ...prefs, density });
   }
 
   function pickAccent(hex: string) {
@@ -1597,6 +1609,35 @@ function AppearanceSection({ id }: { id: string }) {
                   onClick={() => pickTheme(opt.value)}
                   disabled={!loaded || isPending}
                   aria-pressed={active}
+                  className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                    active
+                      ? "border-[var(--color-brand)] bg-[var(--color-brand)]/10 text-neutral-900 dark:text-neutral-100"
+                      : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  } disabled:opacity-50`}
+                  title={opt.description}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-2">
+            Density
+          </div>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Row density">
+            {DENSITY_OPTIONS.map(opt => {
+              const active = prefs.density === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => pickDensity(opt.value)}
+                  disabled={!loaded || isPending}
                   className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                     active
                       ? "border-[var(--color-brand)] bg-[var(--color-brand)]/10 text-neutral-900 dark:text-neutral-100"

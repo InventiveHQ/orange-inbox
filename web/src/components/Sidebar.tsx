@@ -82,7 +82,8 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col transition-[width] duration-150 ${
+      data-no-print
+      className={`sidebar shrink-0 border-r border-neutral-200 dark:border-neutral-800 flex flex-col transition-[width] duration-150 ${
         collapsed ? "w-16" : "w-64"
       }`}
     >

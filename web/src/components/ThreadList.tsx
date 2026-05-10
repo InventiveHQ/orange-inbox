@@ -11,7 +11,7 @@ import {
   parseQuadrant,
   type TriageQuadrant,
 } from "@/lib/triage";
-import Avatar from "./Avatar";
+import Avatar, { hashHue } from "./Avatar";
 import CategoryTabs from "./CategoryTabs";
 import LabelChip from "./LabelChip";
 import UndoToast from "./UndoToast";
@@ -539,6 +539,13 @@ function ThreadRow({
   const subject = t.last_subject || "(no subject)";
   const isUnread = t.unread_count > 0;
   const avatarSeed = t.last_from_addr || sender;
+  // Per-sender color flair (issue #48). The hue is hashed from the canonical
+  // email so the same sender stays the same color even when their display
+  // name varies across messages. We only render the bar on unread rows —
+  // read rows would just be visual noise. The hsl() values use a low
+  // saturation in light mode and a slightly lower lightness in dark so the
+  // flair reads as a tint, not a stripe of paint.
+  const flairHue = hashHue(t.last_from_addr || sender || "?");
 
   // Swipe state lives per-row so simultaneous swipes don't fight. Translate
   // is applied as inline style during the gesture for fluidity, then snapped
@@ -632,6 +639,20 @@ function ThreadRow({
         }}
         className="bg-white dark:bg-neutral-950 relative"
       >
+        {isUnread && (
+          <span
+            aria-hidden
+            className="absolute left-0 top-0 bottom-0 w-[3px] dark:hidden"
+            style={{ backgroundColor: `hsl(${flairHue} 55% 60%)` }}
+          />
+        )}
+        {isUnread && (
+          <span
+            aria-hidden
+            className="absolute left-0 top-0 bottom-0 w-[3px] hidden dark:block"
+            style={{ backgroundColor: `hsl(${flairHue} 45% 38%)` }}
+          />
+        )}
         <div className="flex items-stretch">
           <label
             className={`flex items-center justify-center pl-3 pr-2 cursor-pointer ${
@@ -648,8 +669,14 @@ function ThreadRow({
             />
           </label>
           <Link
+            data-thread-row
             href={`/inbox/${encodeURIComponent(scope)}/${t.id}`}
-            className={`flex-1 min-w-0 block py-3 pr-4 transition-colors ${
+            style={{
+              paddingTop: "var(--row-py)",
+              paddingBottom: "var(--row-py)",
+              paddingRight: "var(--row-px)",
+            }}
+            className={`flex-1 min-w-0 block ${
               isActive
                 ? "bg-[var(--color-brand)]/10"
                 : "hover:bg-neutral-100 dark:hover:bg-neutral-900"

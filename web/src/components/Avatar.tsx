@@ -13,6 +13,17 @@ const AVATAR_PALETTE = [
   "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-200",
 ];
 
+// Deterministic hash → hue (0-359). Same input always produces the same hue,
+// which lets a sender's color flair on ThreadList rows (#48) match their
+// avatar palette family without us having to round-trip through the avatar's
+// 8-bucket tailwind palette. Shared so multiple components can derive
+// consistent per-sender colors from `last_from_addr`.
+export function hashHue(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+}
+
 export function colorForSeed(seed: string): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;

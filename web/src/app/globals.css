@@ -1,11 +1,47 @@
 @import "tailwindcss";
 
+/* Honour the OS-level "reduce motion" pref globally (issue #49). Disabling
+   every animation/transition is the conservative choice — individual rules
+   downstream can re-enable specific motion if it's purely informational
+   (e.g. a loading spinner). Lives at the top of the file so it wins against
+   anything cascading below without per-rule `prefers-reduced-motion` checks. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* Drive `--color-brand` from a runtime CSS variable so the root layout can
    override it inline on <html> (per-user accent picker). The default falls
    back to the orange — keeps the unauthenticated marketing surfaces and any
-   pre-hydration paint on-brand. */
+   pre-hydration paint on-brand.
+
+   `--row-py` / `--row-px` are the density tokens consumed by ThreadList rows
+   (issue #35). The defaults match the previous hard-coded `py-3 pr-4`
+   spacing; the `[data-density]` rules below tighten them for cozy / compact. */
 :root {
   --brand: #f97316;
+  --row-py: 0.75rem;
+  --row-px: 1rem;
+}
+
+/* Density presets stamped on <html> by the root layout from the orange-prefs
+   cookie. Comfortable is identical to :root (left here for completeness so a
+   round-trip from cozy → comfortable resets cleanly). */
+[data-density="comfortable"] {
+  --row-py: 0.75rem;
+  --row-px: 1rem;
+}
+[data-density="cozy"] {
+  --row-py: 0.5rem;
+  --row-px: 1rem;
+}
+[data-density="compact"] {
+  --row-py: 0.3125rem;
+  --row-px: 0.75rem;
 }
 
 @theme inline {
@@ -50,4 +86,71 @@
   outline: 2px solid var(--color-brand);
   outline-offset: 1px;
   border-radius: 4px;
+}
+
+/* Subtle motion language (issue #49). The thread row hover is the most
+   common interaction in the app, so it gets the snappiest transition. The
+   modal fade+scale is wired up via `data-orange-modal` attributes on the
+   wrapper of each Compose / lightbox / confirmation surface so we can
+   centralise the timing here rather than redefine it per-component. */
+[data-thread-row] {
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+@keyframes orange-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+[data-orange-modal] {
+  animation: orange-modal-in 100ms ease-out;
+}
+
+/* Print rules (issue #46). The on-screen chrome (sidebar, top bar, action
+   buttons, toasts, composer) is irrelevant on paper — strip it all so a
+   user printing a thread gets just the conversation. We also flatten dark
+   backgrounds back to white so no one wastes a toner cartridge on a black
+   inbox, and force iframes (HTML message bodies) to lay out at their
+   natural height instead of the scrollable fixed-height we use on-screen. */
+@media print {
+  .sidebar,
+  [data-no-print],
+  [aria-label="Sidebar"],
+  [aria-label="Mailboxes"],
+  [aria-label="Top bar"],
+  [aria-label="Compose"],
+  [role="toolbar"] {
+    display: none !important;
+  }
+  body,
+  [data-theme] body,
+  [data-theme] {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .thread-message {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  iframe {
+    height: auto !important;
+    min-height: 0 !important;
+    border: none !important;
+  }
+  /* Prevent dark-mode card surfaces from printing as black blocks. */
+  [class*="dark:bg-"] {
+    background: #ffffff !important;
+  }
+  [class*="dark:text-"] {
+    color: #000000 !important;
+  }
+  a {
+    color: #000000 !important;
+    text-decoration: underline;
+  }
 }

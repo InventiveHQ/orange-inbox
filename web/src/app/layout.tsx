@@ -57,6 +57,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       lang="en"
       className={`${geistSans.variable} h-full antialiased`}
       data-theme={prefs.theme}
+      data-density={prefs.density}
       style={{ ["--brand" as string]: prefs.accent_hex }}
     >
       <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
