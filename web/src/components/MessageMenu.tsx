@@ -9,9 +9,12 @@ interface Props {
   // for outbound messages (you can't usefully block yourself).
   fromAddr: string;
   direction: "inbound" | "outbound";
+  // True when `fromAddr` is in the current user's VIP list. Determines
+  // whether the menu offers "Add to VIPs" or "Remove from VIPs".
+  isVip?: boolean;
 }
 
-export default function MessageMenu({ messageId, fromAddr, direction }: Props) {
+export default function MessageMenu({ messageId, fromAddr, direction, isVip = false }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +120,25 @@ export default function MessageMenu({ messageId, fromAddr, direction }: Props) {
   }
 
   const canBlock = direction === "inbound" && fromAddr;
+  const canVip = !!fromAddr;
+
+  function toggleVip() {
+    setOpen(false);
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch("/api/me/vips", {
+        method: isVip ? "DELETE" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ addr: fromAddr }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Failed (${res.status})`);
+        return;
+      }
+      router.refresh();
+    });
+  }
 
   return (
     <div ref={containerRef} className="relative">
@@ -154,6 +176,19 @@ export default function MessageMenu({ messageId, fromAddr, direction }: Props) {
           >
             View original
           </a>
+          {canVip && (
+            <>
+              <div className="border-t border-neutral-200 dark:border-neutral-800" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={toggleVip}
+                className="block w-full text-left px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900 focus:bg-neutral-100 dark:focus:bg-neutral-900 focus:outline-none"
+              >
+                {isVip ? "Remove from VIPs" : "Add to VIPs"}
+              </button>
+            </>
+          )}
           {canBlock && (
             <>
               <div className="border-t border-neutral-200 dark:border-neutral-800" />

@@ -31,6 +31,9 @@ interface PatchBody {
   read?: boolean;
   muted?: boolean;
   pinned?: boolean;
+  // Reminder timestamp (unix seconds). null clears the reminder. Different
+  // from snooze — see remindThread / threads_index.remind_at.
+  remind_at?: number | null;
 }
 
 // Toggle thread-level state: star, archive, read. Source of truth for
@@ -78,6 +81,18 @@ export async function PATCH(
     if (typeof b.pinned === "boolean") {
       indexUpdates.push("pinned = ?");
       indexBinds.push(b.pinned ? 1 : 0);
+    }
+    // remind_at is explicitly nullable: null clears the reminder, a number
+    // sets it. We accept any finite number — the UI guarantees future-
+    // timestamps but the server doesn't enforce, so an already-elapsed value
+    // immediately surfaces the "due" banner (which is fine).
+    if (b.remind_at === null || typeof b.remind_at === "number") {
+      const v = b.remind_at === null ? null : Math.floor(b.remind_at);
+      if (v !== null && !Number.isFinite(v)) {
+        return NextResponse.json({ error: "remind_at must be finite" }, { status: 400 });
+      }
+      indexUpdates.push("remind_at = ?");
+      indexBinds.push(v);
     }
 
     if (indexUpdates.length === 0) {

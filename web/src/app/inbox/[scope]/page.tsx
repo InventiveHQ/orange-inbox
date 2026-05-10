@@ -2,12 +2,13 @@ import { getCurrentUser } from "@/lib/auth";
 import { listContactsForUser } from "@/lib/contacts";
 import { listTemplatesForUser } from "@/lib/templates";
 import { listAllIdentities, listIdentities } from "@/lib/identities";
-import { listAllDomains, listDomainsForUser } from "@/lib/queries";
+import { listAllDomains, listDomainsForUser, listVipAddresses } from "@/lib/queries";
 import { listLabelsForUser } from "@/lib/labels";
 import ContactsManager from "@/components/ContactsManager";
 import TemplatesManager from "@/components/TemplatesManager";
 import SettingsManager from "@/components/SettingsManager";
 import HelpManager from "@/components/HelpManager";
+import VipsManager from "@/components/VipsManager";
 
 export default async function InboxIndex({
   params,
@@ -22,6 +23,7 @@ export default async function InboxIndex({
   if (scope === "templates") return <TemplatesRoute />;
   if (scope === "settings") return <SettingsRoute />;
   if (scope === "help") return <HelpManager />;
+  if (scope === "vips") return <VipsRoute />;
 
   const message =
     scope === "drafts" ? "Select a draft to edit it." : "Select a thread to read it.";
@@ -43,6 +45,13 @@ async function ContactsRoute({ searchParams }: { searchParams: { mailbox?: strin
     listContactsForUser(user.id, filter !== "all" ? filter : undefined),
   ]);
   return <ContactsManager contacts={contacts} identities={identities} filter={filter} />;
+}
+
+async function VipsRoute() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const vips = await listVipAddresses(user.id);
+  return <VipsManager initialVips={vips} />;
 }
 
 async function TemplatesRoute() {

@@ -85,6 +85,13 @@ export default function Sidebar({ domains, mailboxes, scope, initialCollapsed = 
           unreadCount={totalUnread}
         />
         <SpecialLink
+          href="/inbox/vips"
+          label="VIPs"
+          active={scope === "vips"}
+          icon={<VipIcon />}
+          collapsed={collapsed}
+        />
+        <SpecialLink
           href="/inbox/drafts"
           label="Drafts"
           active={scope === "drafts"}
@@ -432,6 +439,14 @@ function TemplatesIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M5 1.5A1.5 1.5 0 0 1 6.5 0h6A1.5 1.5 0 0 1 14 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 5 9.5v-8Zm-2.5 3a.5.5 0 0 1 .5.5v9.5h7.5a.5.5 0 0 1 0 1H3a1 1 0 0 1-1-1V5a.5.5 0 0 1 .5-.5Z" />
+    </svg>
+  );
+}
+
+function VipIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 1.25 9.86 5l4.14.6-3 2.93.71 4.13L8 10.71l-3.71 1.95.71-4.13-3-2.93L6.14 5 8 1.25Z" />
     </svg>
   );
 }

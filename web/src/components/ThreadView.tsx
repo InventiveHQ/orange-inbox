@@ -10,16 +10,28 @@ import SnoozeButton from "./SnoozeButton";
 import ThreadActions from "./ThreadActions";
 import MessageHtmlFrame from "./MessageHtmlFrame";
 import MessageMenu from "./MessageMenu";
+import ReminderDueBanner from "./ReminderDueBanner";
 
 interface Props {
   detail: ThreadDetail;
   mailboxId: string;
+  // Set of from-addresses (lowercase) the current user has marked VIP.
+  // Empty set when the user has no VIPs. Drives the avatar halo and the
+  // "Add to / Remove from VIPs" item in MessageMenu.
+  vipAddrs: Set<string>;
 }
 
-export default function ThreadView({ detail, mailboxId }: Props) {
+export default function ThreadView({ detail, mailboxId, vipAddrs }: Props) {
   const { thread, messages } = detail;
   const subject = messages[0]?.subject || thread.subject_normalized;
   const lastInbound = [...messages].reverse().find(m => m.direction === "inbound");
+  // Server-side "is the reminder due" check. The query already returns
+  // `remind_at` in unix seconds — comparing against Date.now() at render
+  // time means the banner shows up the first time the user opens the
+  // thread after the timestamp elapses, without needing a polling cron.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const reminderDue = thread.remind_at != null && thread.remind_at <= nowSec;
+  const reminderUpcoming = thread.remind_at != null && thread.remind_at > nowSec;
 
   return (
     <article className="flex-1 overflow-y-auto">
@@ -37,6 +49,14 @@ export default function ThreadView({ detail, mailboxId }: Props) {
                   📌 Pinned
                 </span>
               )}
+              {reminderUpcoming && thread.remind_at != null && (
+                <span
+                  className="ml-2 align-middle inline-flex items-center gap-1 rounded-md bg-sky-100 dark:bg-sky-900/30 px-2 py-0.5 text-xs font-medium text-sky-800 dark:text-sky-300"
+                  title={`Reminder set for ${formatRemindAt(thread.remind_at)}`}
+                >
+                  🔔 Reminder set for {formatRemindAt(thread.remind_at)}
+                </span>
+              )}
             </h1>
             <div className="mt-1 text-xs text-neutral-500 break-all">
               {thread.mailbox_local_part}@{thread.domain_name} · {messages.length} message
@@ -51,6 +71,7 @@ export default function ThreadView({ detail, mailboxId }: Props) {
             initialArchived={thread.archived === 1}
             initialMuted={thread.muted === 1}
             initialPinned={thread.pinned === 1}
+            initialRemindAt={thread.remind_at}
           />
           <ApplyLabelButton threadId={thread.id} />
           <SnoozeButton threadId={thread.id} initialSnoozedUntil={thread.snoozed_until} />
@@ -105,6 +126,10 @@ export default function ThreadView({ detail, mailboxId }: Props) {
         </div>
       </header>
 
+      {reminderDue && (
+        <ReminderDueBanner threadId={thread.id} remindAt={thread.remind_at!} />
+      )}
+
       {thread.muted === 1 && (
         <div className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 px-4 py-2 sm:px-6 text-xs text-neutral-600 dark:text-neutral-400">
           Muted — new replies stay archived and won&apos;t show in your inbox.
@@ -113,14 +138,14 @@ export default function ThreadView({ detail, mailboxId }: Props) {
 
       <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
         {messages.map(m => (
-          <MessageBlock key={m.id} m={m} />
+          <MessageBlock key={m.id} m={m} isVip={vipAddrs.has(m.from_addr.trim().toLowerCase())} />
         ))}
       </div>
     </article>
   );
 }
 
-function MessageBlock({ m }: { m: ThreadMessage }) {
+function MessageBlock({ m, isVip }: { m: ThreadMessage; isVip: boolean }) {
   const to = parseAddrs(m.to_json);
   const isOutbound = m.direction === "outbound";
   const sentByLabel =
@@ -142,7 +167,7 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
     <section className="px-4 py-4 sm:px-6 sm:py-5">
       <div className="flex items-baseline justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
-          <Avatar seed={avatarSeed} label={senderText} size="lg" title={m.from_addr} />
+          <Avatar seed={avatarSeed} label={senderText} size="lg" title={m.from_addr} vip={isVip} />
           <div className="min-w-0">
             <div className="text-sm font-medium break-words">
               {m.from_name && m.from_name.trim() ? (
@@ -173,7 +198,7 @@ function MessageBlock({ m }: { m: ThreadMessage }) {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <span className="text-xs text-neutral-500">{formatFullDate(m.date)}</span>
-          <MessageMenu messageId={m.id} fromAddr={m.from_addr} direction={m.direction} />
+          <MessageMenu messageId={m.id} fromAddr={m.from_addr} direction={m.direction} isVip={isVip} />
         </div>
       </div>
 
@@ -247,6 +272,16 @@ function parseAddrs(json: string): Array<{ addr: string; name?: string }> {
   } catch {
     return [];
   }
+}
+
+// "Mon, May 12 at 5:00 PM" — long format for the reminder indicator on the
+// header. Same shape SnoozeButton uses for its banner so the wording stays
+// consistent.
+function formatRemindAt(secs: number): string {
+  const d = new Date(secs * 1000);
+  const date = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${date} at ${time}`;
 }
 
 function formatBytes(n: number): string {
