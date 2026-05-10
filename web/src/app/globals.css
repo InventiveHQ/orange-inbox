@@ -1,9 +1,35 @@
 @import "tailwindcss";
 
+/* Drive `--color-brand` from a runtime CSS variable so the root layout can
+   override it inline on <html> (per-user accent picker). The default falls
+   back to the orange — keeps the unauthenticated marketing surfaces and any
+   pre-hydration paint on-brand. */
+:root {
+  --brand: #f97316;
+}
+
 @theme inline {
-  --color-brand: #f38020;
+  --color-brand: var(--brand);
   --color-brand-fg: #ffffff;
   --font-sans: var(--font-geist-sans);
+}
+
+/* Theme override.
+
+   Tailwind 4's default `dark` variant matches `prefers-color-scheme: dark`,
+   but we want users to be able to pin Light or Dark regardless of the OS. We
+   wire the `dark:` variant to "apply when the user picked dark, OR they're on
+   system *and* the OS is dark". `data-theme="light"` short-circuits to never
+   match. The root layout stamps `data-theme` on <html> from the cookie. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where([data-theme="system"], [data-theme="system"] *) {
+      @slot;
+    }
+  }
 }
 
 /* iOS Safari auto-zooms when a focused field renders smaller than 16px.

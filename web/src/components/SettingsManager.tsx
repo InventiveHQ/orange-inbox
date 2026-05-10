@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 import type { DomainRow } from "@/lib/queries";
 import type { Identity } from "@/lib/identities";
 import type { LabelRow } from "@/lib/labels";
+import {
+  DEFAULT_PREFERENCES,
+  encodePreferencesCookie,
+  PREFS_COOKIE,
+  type Theme,
+  type UserPreferences,
+} from "@/lib/preferences";
 import { APP_VERSION } from "@/lib/version";
 import AddMailboxDialog from "./AddMailboxDialog";
 import LabelChip from "./LabelChip";
@@ -60,6 +67,7 @@ export default function SettingsManager({
       { id: "sending", label: "Sending" },
       { id: "notifications", label: "Notifications" },
       { id: "export", label: "Import / Export" },
+      { id: "appearance", label: "Appearance" },
       { id: "about", label: "About" },
     ],
     [isAdmin, hasOwnedMailboxes],
@@ -113,6 +121,7 @@ export default function SettingsManager({
             <SendingSection id="sending" initialUndoSendSeconds={initialUndoSendSeconds} />
             <NotificationsSection id="notifications" />
             <ExportSection id="export" ownedIdentities={ownedIdentities} />
+            <AppearanceSection id="appearance" />
             <AboutSection id="about" />
           </div>
         </div>
@@ -1334,6 +1343,242 @@ function NotificationsSection({ id }: { id: string }) {
       <PushNotificationToggle />
     </section>
   );
+}
+
+// Eight curated swatches across the colour wheel. The Tailwind 500-step hex
+// values, so a user picking "blue" gets the same blue Tailwind would render
+// for `bg-blue-500`.
+const ACCENT_PRESETS: { name: string; hex: string }[] = [
+  { name: "orange", hex: "#f97316" },
+  { name: "red", hex: "#ef4444" },
+  { name: "amber", hex: "#f59e0b" },
+  { name: "emerald", hex: "#10b981" },
+  { name: "cyan", hex: "#06b6d4" },
+  { name: "blue", hex: "#3b82f6" },
+  { name: "violet", hex: "#8b5cf6" },
+  { name: "pink", hex: "#ec4899" },
+];
+
+const THEME_OPTIONS: { value: Theme; label: string; description: string }[] = [
+  { value: "light", label: "Light", description: "Always light." },
+  { value: "dark", label: "Dark", description: "Always dark." },
+  { value: "system", label: "System", description: "Match your OS." },
+];
+
+function AppearanceSection({ id }: { id: string }) {
+  // Optimistically apply changes locally as they're picked, then PATCH the
+  // server. On success, sync the orange-prefs cookie so the next SSR render
+  // (e.g. a hard refresh) starts in the chosen state. Errors revert.
+  const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_PREFERENCES);
+  const [loaded, setLoaded] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hexInput, setHexInput] = useState<string>(DEFAULT_PREFERENCES.accent_hex);
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/me/preferences");
+        if (cancelled) return;
+        if (!res.ok) {
+          setLoaded(true);
+          return;
+        }
+        const j = (await res.json()) as { preferences: UserPreferences };
+        if (cancelled) return;
+        setPrefs(j.preferences);
+        setHexInput(j.preferences.accent_hex);
+        setLoaded(true);
+        // Sync the cookie so the next SSR render is in the chosen state even
+        // if this is the first time we've seen prefs on this device.
+        writePrefsCookie(j.preferences);
+      } catch {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Mirror the latest prefs onto <html> so the picked theme/accent take effect
+  // immediately. We do this in an effect (not inline during a click handler)
+  // so React's immutability rule sees the DOM mutation as a side-effect tied
+  // to render output.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.theme = prefs.theme;
+    document.documentElement.style.setProperty("--brand", prefs.accent_hex);
+  }, [prefs]);
+
+  function persist(next: UserPreferences) {
+    setError(null);
+    const previous = prefs;
+    setPrefs(next);
+    startTransition(async () => {
+      const res = await fetch("/api/me/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Save failed (${res.status})`);
+        // Roll back the optimistic UI on failure — the effect above will
+        // re-mirror `previous` onto <html>.
+        setPrefs(previous);
+        return;
+      }
+      writePrefsCookie(next);
+      setSavedAt(Date.now());
+    });
+  }
+
+  function pickTheme(theme: Theme) {
+    persist({ ...prefs, theme });
+  }
+
+  function pickAccent(hex: string) {
+    setHexInput(hex);
+    persist({ ...prefs, accent_hex: hex });
+  }
+
+  function commitHexInput() {
+    const normalised = normaliseHexClient(hexInput);
+    if (!normalised) {
+      setError("Invalid hex color");
+      setHexInput(prefs.accent_hex);
+      return;
+    }
+    if (normalised === prefs.accent_hex) return;
+    persist({ ...prefs, accent_hex: normalised });
+  }
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Appearance"
+        description="Theme and accent colour. Stored per user — the same account on a different device will pick these up automatically."
+      />
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 space-y-5">
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-2">
+            Theme
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {THEME_OPTIONS.map(opt => {
+              const active = prefs.theme === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => pickTheme(opt.value)}
+                  disabled={!loaded || isPending}
+                  aria-pressed={active}
+                  className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                    active
+                      ? "border-[var(--color-brand)] bg-[var(--color-brand)]/10 text-neutral-900 dark:text-neutral-100"
+                      : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  } disabled:opacity-50`}
+                  title={opt.description}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-2">
+            Accent colour
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {ACCENT_PRESETS.map(p => {
+              const active = prefs.accent_hex.toLowerCase() === p.hex.toLowerCase();
+              return (
+                <button
+                  key={p.hex}
+                  type="button"
+                  onClick={() => pickAccent(p.hex)}
+                  disabled={!loaded || isPending}
+                  aria-label={p.name}
+                  aria-pressed={active}
+                  title={p.name}
+                  style={{ backgroundColor: p.hex }}
+                  className={`h-7 w-7 rounded-full border-2 transition-all ${
+                    active
+                      ? "border-neutral-900 dark:border-neutral-100 scale-110"
+                      : "border-transparent"
+                  } disabled:opacity-50`}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">
+              Custom hex
+            </span>
+            <div className="mt-1 flex items-center gap-2">
+              <span
+                className="h-7 w-7 rounded-md border border-neutral-300 dark:border-neutral-700 shrink-0"
+                style={{ backgroundColor: prefs.accent_hex }}
+                aria-hidden
+              />
+              <input
+                type="text"
+                value={hexInput}
+                onChange={e => setHexInput(e.target.value)}
+                onBlur={commitHexInput}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                disabled={!loaded || isPending}
+                placeholder="#f97316"
+                spellCheck={false}
+                className="w-32 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1 text-sm font-mono focus:outline-none focus:border-[var(--color-brand)] disabled:opacity-50"
+              />
+            </div>
+          </label>
+        </div>
+
+        <div className="text-xs text-neutral-500 flex items-center gap-2">
+          {isPending && <span>Saving…</span>}
+          {!isPending && savedAt && <span>Saved</span>}
+          {error && <span className="text-red-600">{error}</span>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Mirror of preferences.ts:normaliseHex — kept client-side to avoid bundling
+// the server-only db module via that file (it's pure validation).
+function normaliseHexClient(v: string): string | null {
+  const trimmed = v.trim().toLowerCase();
+  const m3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(trimmed);
+  if (m3) return `#${m3[1]}${m3[1]}${m3[2]}${m3[2]}${m3[3]}${m3[3]}`;
+  if (/^#[0-9a-f]{6}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+// 1-year max-age — the cookie is the SSR source of truth; expiring it would
+// make us paint with defaults until the bootstrap fetch completes. Path=/ so
+// it covers every route. SameSite=Lax matches our auth flow (Cloudflare
+// Access redirects to the host worker) and avoids CSRF on PATCH.
+function writePrefsCookie(p: UserPreferences) {
+  if (typeof document === "undefined") return;
+  const value = encodeURIComponent(encodePreferencesCookie(p));
+  const oneYear = 60 * 60 * 24 * 365;
+  document.cookie = `${PREFS_COOKIE}=${value}; Max-Age=${oneYear}; Path=/; SameSite=Lax`;
 }
 
 function AboutSection({ id }: { id: string }) {
