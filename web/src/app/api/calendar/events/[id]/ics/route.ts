@@ -4,12 +4,14 @@ import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { getCalendarEvent } from "@/lib/calendar";
 import { buildSingleEventCalendar } from "@/lib/ical";
 
-// GET /api/calendar/events/<id>.ics
+// GET /api/calendar/events/<id>/ics
 //
-// Cookie-authenticated single-event download. The path segment is literally
-// "[id].ics" so the URL ends in `.ics` and OS-level "open with" pickers
-// recognise the file as iCalendar. The id portion is the calendar_events
-// row id (NOT the ical_uid).
+// Cookie-authenticated single-event download. OS-level "open with" pickers
+// rely on the Content-Disposition `filename="…ics"` rather than the URL
+// path, so the literal `.ics` extension at the URL level isn't needed —
+// Next 16's type generator doesn't extract `[id]` from a combined
+// `[id].ics` segment, hence the `[id]/ics/` split. The id portion is the
+// calendar_events row id (NOT the ical_uid).
 //
 // Scoped to the caller's user_id via getCalendarEvent's WHERE clause — if
 // the row exists but belongs to another user we return 404, identical to
