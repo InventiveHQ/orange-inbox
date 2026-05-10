@@ -4,6 +4,7 @@ import { listDomainsForUser, listMailboxesForUser, listThreads } from "@/lib/que
 import { DEFAULT_QUADRANT, listThreadsForTriage } from "@/lib/triage";
 import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
+import { listSavedSearches } from "@/lib/saved-searches";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
@@ -26,13 +27,18 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, mailboxes, identities, cookieStore] = await Promise.all([
+  const [domains, mailboxes, identities, savedSearches, cookieStore] = await Promise.all([
     listDomainsForUser(user.id),
     listMailboxesForUser(user.id),
     listIdentities(user.id),
+    listSavedSearches(user.id),
     cookies(),
   ]);
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
+  // Default open: this section is the whole point of the saved-search feature,
+  // and it's empty for new users so collapsing-by-default would hide the
+  // discoverability hint. Toggling writes a cookie that flips the default.
+  const smartMailboxesOpen = cookieStore.get("smart-mailboxes-open")?.value !== "0";
 
   // Validate the scope: "all", "drafts", "contacts", "templates", "settings",
   // "help", or a mailbox the user has access to. Anything else falls back to
@@ -93,6 +99,8 @@ export default async function InboxLayout({
                 scope={effectiveScope}
                 initialCollapsed={sidebarCollapsed}
                 isAdmin={user.is_admin}
+                savedSearches={savedSearches}
+                initialSmartOpen={smartMailboxesOpen}
               />
             }
             topBar={<TopBar mailboxes={[]} scope={effectiveScope} />}
@@ -150,6 +158,8 @@ export default async function InboxLayout({
               scope={effectiveScope}
               initialCollapsed={sidebarCollapsed}
               isAdmin={user.is_admin}
+              savedSearches={savedSearches}
+              initialSmartOpen={smartMailboxesOpen}
             />
           }
           topBar={<TopBar mailboxes={searchMailboxes} scope={effectiveScope} />}
