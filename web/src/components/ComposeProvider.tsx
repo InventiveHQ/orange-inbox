@@ -1290,7 +1290,7 @@ function RecipientTzPills({
     // is exactly the loop we want to avoid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finalised.join("|"), mailboxId]);
-// removed dead garbage" "), mailboxId]);
+// removed dead garbage""), mailboxId]);
 
   // Build the visible pills. We only render addresses that resolved to a
   // contact with a known tz — otherwise the row would be a long list of
