@@ -164,26 +164,24 @@ export async function rotateTokenForUser(
 // user, with the most recent updated_at returned alongside so the route
 // handler can drive ETag / Last-Modified.
 //
-// #78 (parallel work) introduces user_calendar_prefs.hidden — a per-user
-// per-mailbox visibility flag. We DON'T currently have that table because
-// our worktree branched before #78, but we want this query to gracefully
-// pick up the filter once #78 lands. The plan:
-//
-//   * For now, return every event row.
-//   * When #78 ships its migration, add a LEFT JOIN against user_calendar_prefs
-//     here and filter `hidden = 0` (treat missing rows as visible).
-//
-// We don't try to detect the table at runtime because (a) D1's PRAGMA path
-// is awkward and (b) the migration order is deterministic — once #78 is
-// merged this file gets a follow-up commit. Comment is the contract.
+// Honours `user_calendar_prefs.hidden` from #78 — a per-user per-mailbox
+// visibility flag. LEFT JOIN treats missing pref rows as visible (the
+// default state for any calendar the user hasn't actively hidden). The
+// COALESCE handles the Personal calendar where mailbox_id is NULL on both
+// sides — SQL `=` against NULL is always NULL, so we'd otherwise miss the
+// match.
 export async function listEventsForFeed(
   userId: string,
 ): Promise<{ rows: CalendarEventRow[]; lastModified: number }> {
   const { results } = await getDb()
     .prepare(
-      `SELECT * FROM calendar_events
-        WHERE user_id = ?
-        ORDER BY starts_at ASC`,
+      `SELECT e.* FROM calendar_events e
+         LEFT JOIN user_calendar_prefs p
+           ON p.user_id = e.user_id
+          AND COALESCE(p.mailbox_id, '') = COALESCE(e.mailbox_id, '')
+        WHERE e.user_id = ?
+          AND COALESCE(p.hidden, 0) = 0
+        ORDER BY e.starts_at ASC`,
     )
     .bind(userId)
     .all<CalendarEventRow>();
