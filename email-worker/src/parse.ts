@@ -39,6 +39,7 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
   let autoSubmitted: string | null = null;
   let precedence: string | null = null;
   let hasListHeaders = false;
+  let hasListId = false;
   for (const h of headers) {
     if (h.key === "auto-submitted") {
       autoSubmitted = h.value.trim().toLowerCase();
@@ -46,6 +47,11 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
       precedence = h.value.trim().toLowerCase();
     } else if (h.key.startsWith("list-")) {
       hasListHeaders = true;
+      // List-Id specifically signals a mailing list / forum (RFC 2919). We
+      // track it separately because the auto-categorizer needs to distinguish
+      // forum-style mail (List-Id present) from generic List-* traffic
+      // (List-Unsubscribe alone, common on marketing blasts).
+      if (h.key === "list-id") hasListId = true;
     }
   }
 
@@ -74,6 +80,7 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
     autoSubmitted,
     precedence,
     hasListHeaders,
+    hasListId,
     authResults,
     replyToAddr,
     listUnsubUrl: unsub.url,

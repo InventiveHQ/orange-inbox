@@ -37,6 +37,7 @@ export interface ParsedMessage {
   autoSubmitted: string | null; // raw value of "Auto-Submitted" header, lowercased
   precedence: string | null;    // raw value of "Precedence" header, lowercased
   hasListHeaders: boolean;      // true if any List-* header is present
+  hasListId: boolean;           // true if a List-Id header is present (mailing-list / forum)
   // 0018: trust signals. Both populated by parse.ts; first_contact is
   // computed at store-time so it isn't on this type.
   authResults: ParsedAuthResults | null;

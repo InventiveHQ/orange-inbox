@@ -1,6 +1,12 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
-import { listDomainsForUser, listMailboxesForUser, listThreads, listVipThreads } from "@/lib/queries";
+import {
+  listDomainsForUser,
+  listMailboxesForUser,
+  listThreads,
+  listVipThreads,
+  type MessageCategory,
+} from "@/lib/queries";
 import { DEFAULT_QUADRANT, listThreadsForTriage } from "@/lib/triage";
 import { listIdentities } from "@/lib/identities";
 import { listDraftsForUser } from "@/lib/drafts";
@@ -27,14 +33,23 @@ export default async function InboxLayout({
   const user = await getCurrentUser();
   if (!user) return <SignInPrompt />;
 
-  const [domains, mailboxes, identities, savedSearches, cookieStore] = await Promise.all([
+  const [domains, mailboxes, identities, savedSearches, cookieStore, headerStore] = await Promise.all([
     listDomainsForUser(user.id),
     listMailboxesForUser(user.id),
     listIdentities(user.id),
     listSavedSearches(user.id),
     cookies(),
+    headers(),
   ]);
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
+
+  // Auto-categorization tabs (#68). Layouts can't read searchParams in this
+  // Next, but the RSC request carries the URL on the `next-url` header so we
+  // can fish out `?category=` ourselves. Falls back to `referer` for the
+  // initial server render and to "primary" when neither is present. The
+  // CategoryTabs client component calls router.refresh() after pushing so
+  // the layout actually re-fetches with the new param.
+  const categoryParam = readCategoryFromHeaders(headerStore);
   // Default open: this section is the whole point of the saved-search feature,
   // and it's empty for new users so collapsing-by-default would hide the
   // discoverability hint. Toggling writes a cookie that flips the default.
@@ -97,6 +112,7 @@ export default async function InboxLayout({
             listThreadsForTriage(user.id, {
               quadrant: DEFAULT_QUADRANT,
               includeMuted: true,
+              category: categoryParam,
             })
           : listThreads(user.id, {
               mailboxId,
@@ -105,6 +121,10 @@ export default async function InboxLayout({
               // views show them so muted mail is still findable without leaving
               // the inbox UI.
               includeMuted: mailboxId === undefined,
+              // Domain roll-ups don't render the category strip yet (the
+              // semantics across multi-mailbox domains need more thought),
+              // so don't filter on category there either.
+              category: isDomainScope ? undefined : categoryParam,
             }),
     isDrafts ? listDraftsForUser(user.id) : Promise.resolve([]),
   ]);
@@ -219,6 +239,41 @@ function TopBar({ mailboxes, scope }: { mailboxes: SearchMailbox[]; scope: strin
       </div>
     </div>
   );
+}
+
+// Categories the auto-categorizer emits. Anything outside this set in the
+// URL is silently ignored and we fall back to "primary".
+const VALID_CATEGORIES: ReadonlySet<string> = new Set([
+  "primary",
+  "promotions",
+  "updates",
+  "social",
+  "forums",
+]);
+
+function readCategoryFromHeaders(
+  headerStore: Awaited<ReturnType<typeof headers>>,
+): MessageCategory {
+  // `next-url` is set by Next on RSC payload requests and carries the
+  // pathname + search; this is the workaround for layouts not receiving
+  // searchParams as a prop. Falls back to `referer` for the initial render
+  // (which carries the full URL the browser asked for).
+  const candidate =
+    headerStore.get("next-url") ?? headerStore.get("referer") ?? null;
+  if (!candidate) return "primary";
+  let qs: string;
+  try {
+    // next-url is path+query; referer is a full URL. URL parsing handles
+    // both when given a base.
+    const u = new URL(candidate, "http://localhost");
+    qs = u.search;
+  } catch {
+    return "primary";
+  }
+  const params = new URLSearchParams(qs);
+  const raw = params.get("category");
+  if (raw && VALID_CATEGORIES.has(raw)) return raw as MessageCategory;
+  return "primary";
 }
 
 function SignInPrompt() {

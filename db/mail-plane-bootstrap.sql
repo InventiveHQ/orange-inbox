@@ -74,7 +74,12 @@ CREATE TABLE messages (
   list_unsub_url     TEXT,
   list_unsub_mailto  TEXT,
   list_unsub_one_click INTEGER NOT NULL DEFAULT 0,
-  unsubscribed_at    INTEGER
+  unsubscribed_at    INTEGER,
+  -- 0027_message_categories: heuristic auto-categorization at ingest
+  -- (one of 'primary' / 'promotions' / 'updates' / 'social' / 'forums').
+  -- NULL on rows ingested before the categorizer landed; the listing query
+  -- treats NULL as Primary so the column can be added without a backfill.
+  category           TEXT
 );
 CREATE UNIQUE INDEX messages_mailbox_msgid ON messages(mailbox_id, message_id_header);
 CREATE INDEX        messages_thread_date   ON messages(thread_id, date);
@@ -85,6 +90,7 @@ CREATE INDEX messages_spam_reported ON messages(spam_reported_by_user_id)
 CREATE INDEX messages_list_unsub
   ON messages(mailbox_id, from_addr)
   WHERE list_unsub_url IS NOT NULL OR list_unsub_mailto IS NOT NULL;
+CREATE INDEX messages_category_date ON messages(category, date DESC);
 
 CREATE TABLE attachments (
   id            TEXT PRIMARY KEY,

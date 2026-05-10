@@ -12,6 +12,7 @@ import {
   type TriageQuadrant,
 } from "@/lib/triage";
 import Avatar from "./Avatar";
+import CategoryTabs from "./CategoryTabs";
 import LabelChip from "./LabelChip";
 import UndoToast from "./UndoToast";
 
@@ -45,12 +46,31 @@ function showsTriageBar(scope: string): boolean {
   return scope === "all";
 }
 
+// Category tabs (Primary / Promotions / Updates / Social / Forums) appear
+// above the unified inbox and per-mailbox inboxes. Drafts / VIPs / domain
+// roll-ups have their own filter semantics so we keep them off the strip.
+const SCOPES_WITHOUT_CATEGORIES: ReadonlySet<string> = new Set([
+  "drafts",
+  "vips",
+]);
+function showsCategoryTabs(scope: string): boolean {
+  // Hide for special scopes that don't represent an inbox view. Domain
+  // roll-ups (`domain:<id>`) keep them off too — those views aggregate
+  // mailboxes the user can read on a domain, and category filtering on
+  // that surface needs more thought (probably keyed off mail DBs the
+  // domain spans).
+  if (SCOPES_WITHOUT_CATEGORIES.has(scope)) return false;
+  if (scope.startsWith("domain:")) return false;
+  return true;
+}
+
 export default function ThreadList({ threads, scope, activeThreadId, showDomain }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const quadrant = parseQuadrant(searchParams.get("view"));
   const triageEnabled = showsTriageBar(scope);
+  const categoryTabsEnabled = showsCategoryTabs(scope);
 
   // Scroll memory — the <ul> is the scroller. We persist its scrollTop to
   // sessionStorage keyed by the current pathname+search so navigating into a
@@ -293,6 +313,7 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      {categoryTabsEnabled && <CategoryTabs />}
       {triageEnabled && (
         <TriageBar current={quadrant} onChange={navigateToQuadrant} />
       )}
