@@ -62,7 +62,7 @@
   // `wrangler secret put VAPID_PRIVATE_KEY`. setup.sh handles bootstrap.
   "vars": {
     "VAPID_PUBLIC_KEY": "BH8smumQaKTZZh9luj79lTPSVZEfCJbPW6smaIGieSbzYmHxDzEQyZ-wkMhsoOyLJqi6bxfHZTN8fl0YeezpdxE",
-    "VAPID_SUBJECT": "mailto:sean@inventivehq.com"
+    "VAPID_SUBJECT": "mailto:admin@example.com"
   }
 
   // INTERNAL_SECRET and VAPID_PRIVATE_KEY are provisioned as Worker secrets

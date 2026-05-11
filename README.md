@@ -5,7 +5,7 @@ who use [Cloudflare Email Routing](https://developers.cloudflare.com/email-routi
 and want a real inbox UI instead of forwarding everything to a third party.
 
 > Status: actively developed. The core inbox — receive, read, compose, reply,
-> labels, search, snooze, scheduled send, undo send, drafts, templates, push
+> labels, search, scheduled send, undo send, drafts, templates, push
 > notifications, PWA install — is working end-to-end. Versions are still
 > 0.1.x; expect rough edges.
 
@@ -320,7 +320,7 @@ manual `byte_estimate` refresh — live in
 - [x] Cloudflare Access auth + "add a mail domain" wizard + three-pane read UI.
 - [x] Compose + send via `env.EMAIL.send()`, identity-aware replies.
 - [x] Labels, full-text search, drafts, templates, contacts.
-- [x] Snooze, scheduled send, undo send, attachments, mailbox signatures.
+- [x] Scheduled send, undo send, attachments, mailbox signatures.
 - [x] Mail-DB overflow sharding.
 - [x] PWA install + web push notifications.
 - [x] Two-tier roles (Admin/User) + per-mailbox member management.
