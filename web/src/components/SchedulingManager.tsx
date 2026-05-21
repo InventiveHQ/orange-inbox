@@ -202,18 +202,18 @@ export default function SchedulingManager({ userId }: { userId: string }) {
                   <button
                     onClick={() => {
                       navigator.clipboard?.writeText(
-                        `${window.location.origin}/book/${et.slug}`,
+                        `${window.location.origin}/p/book/${et.slug}`,
                       );
                     }}
                     className="truncate text-xs text-blue-600 hover:underline dark:text-blue-400"
                     title="Copy public link"
                   >
-                    /book/{et.slug} · {et.durationMinutes} min
+                    /p/book/{et.slug} · {et.durationMinutes} min
                   </button>
                 </div>
                 <div className="flex shrink-0 gap-2 text-sm">
                   <a
-                    href={`/book/${et.slug}`}
+                    href={`/p/book/${et.slug}`}
                     target="_blank"
                     rel="noreferrer"
                     className="text-neutral-500 hover:underline"

@@ -4,9 +4,9 @@ import { turnstileSiteKey } from "@/lib/turnstile";
 import BookingClient from "./BookingClient";
 
 // Public booking page (orange-inbox#104). Reachable WITHOUT authentication —
-// Cloudflare Access must NOT cover /book/* (add a Bypass policy, same
-// constraint as /c/* and /d/*). See db/migrations/0053_booking.sql and the
-// deploy notes.
+// it lives under the /p/* prefix, which the operator's single Cloudflare
+// Access Bypass policy already covers (same as /p/c/*). See
+// db/migrations/0053_booking.sql and the deploy notes.
 
 export const dynamic = "force-dynamic";
 

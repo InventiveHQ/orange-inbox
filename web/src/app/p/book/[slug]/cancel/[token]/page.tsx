@@ -3,7 +3,7 @@ import { getBookingByToken, getEventTypeById } from "@/lib/booking";
 import CancelClient from "./CancelClient";
 
 // Public booking-cancel page — the cancel token is the credential.
-// Cloudflare Access must NOT cover /book/*.
+// Lives under /p/*, covered by the public Cloudflare Access Bypass policy.
 
 export const dynamic = "force-dynamic";
 

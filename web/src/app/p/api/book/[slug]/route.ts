@@ -10,11 +10,11 @@ import { isSlotAvailable } from "@/lib/booking-availability";
 import { fulfillBooking } from "@/lib/booking-fulfill";
 import { verifyTurnstile } from "@/lib/turnstile";
 
-// POST /api/book/<slug>
+// POST /p/api/book/<slug>
 //
-// Public — creates a booking. Cloudflare Access must NOT cover /api/book/*.
-// Re-checks slot availability across every linked calendar before committing
-// so a stale public page can't double-book.
+// Public — creates a booking; lives under /p/*, covered by the public
+// Cloudflare Access Bypass policy. Re-checks slot availability across every
+// linked calendar before committing so a stale public page can't double-book.
 
 export const dynamic = "force-dynamic";
 

@@ -317,8 +317,8 @@ function confirmationText(
   if (origin) {
     lines.push(
       "",
-      `Reschedule: ${origin}/book/${eventType.slug}/reschedule/${booking.rescheduleToken}`,
-      `Cancel: ${origin}/book/${eventType.slug}/cancel/${booking.cancelToken}`,
+      `Reschedule: ${origin}/p/book/${eventType.slug}/reschedule/${booking.rescheduleToken}`,
+      `Cancel: ${origin}/p/book/${eventType.slug}/cancel/${booking.cancelToken}`,
     );
   }
   return lines.join("\n");

@@ -26,7 +26,7 @@ export default function CancelClient(props: Props) {
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch("/api/book/cancel", {
+      const r = await fetch("/p/api/book/cancel", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ token: props.token }),

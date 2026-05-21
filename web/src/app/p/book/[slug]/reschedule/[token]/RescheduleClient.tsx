@@ -39,7 +39,7 @@ export default function RescheduleClient(props: Props) {
     }
     const from = Math.floor(Date.now() / 1000);
     const to = from + Math.min(props.bookingWindowDays || 60, 60) * 86400;
-    fetch(`/api/book/${props.slug}/availability?from=${from}&to=${to}`)
+    fetch(`/p/api/book/${props.slug}/availability?from=${from}&to=${to}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
       .then((j) => setSlots((j as { slots?: Slot[] }).slots ?? []))
       .catch(() => setError("Couldn't load available times."))
@@ -92,7 +92,7 @@ export default function RescheduleClient(props: Props) {
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch("/api/book/reschedule", {
+      const r = await fetch("/p/api/book/reschedule", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ token: props.token, start: selected.start }),

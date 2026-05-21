@@ -2,7 +2,7 @@ import { getCurrentUser } from "@/lib/auth";
 import SchedulingManager from "@/components/SchedulingManager";
 
 // Scheduling admin (orange-inbox#101). Behind Cloudflare Access like the rest
-// of the app — only /book/* and /api/book/* are public.
+// of the app — only /p/book/* and /p/api/book/* are public.
 
 export const dynamic = "force-dynamic";
 

@@ -9,7 +9,7 @@ import {
 import { isSlotAvailable } from "@/lib/booking-availability";
 import { rescheduleBookingFulfillment } from "@/lib/booking-fulfill";
 
-// POST /api/book/reschedule  { token, start }
+// POST /p/api/book/reschedule  { token, start }
 //
 // Public — the reschedule token is the credential. Re-checks the new slot
 // across every linked calendar, then moves every calendar event the booking

@@ -6,7 +6,7 @@ import {
 } from "@/lib/booking";
 import { cancelBookingFulfillment } from "@/lib/booking-fulfill";
 
-// POST /api/book/cancel  { token, reason? }
+// POST /p/api/book/cancel  { token, reason? }
 //
 // Public — the cancel token is the credential. Fans the cancellation out to
 // every calendar the booking touched and emails a CANCEL .ics.

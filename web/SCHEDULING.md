@@ -2,7 +2,7 @@
 
 A Calendly-style booking layer on top of Orange Mail's native calendar
 (orange-inbox#101). Admin UI at **`/scheduling`**; public booking links at
-**`/book/<slug>`**.
+**`/p/book/<slug>`**.
 
 ## What it does
 
@@ -17,16 +17,14 @@ A Calendly-style booking layer on top of Orange Mail's native calendar
 
 ## Required deployment config
 
-### 1. Cloudflare Access — bypass the public paths
+### 1. Cloudflare Access — public paths
 
-The app sits behind Cloudflare Access. The booking pages are public, so add an
-Access **Bypass** policy (Everyone) — or a separate hostname — for:
+The app sits behind Cloudflare Access. The booking pages are public, but they
+live under the `/p/*` prefix (`/p/book/*`, `/p/api/book/*`) — which the main
+deploy's `orange-inbox-public` Access **Bypass** policy already covers. No
+extra Access configuration is needed.
 
-- `/book/*`
-- `/api/book/*`
-
-Everything else (`/scheduling`, `/api/scheduling/*`) stays gated. This is the
-same constraint the existing `/c/*` and `/d/*` public pages already need.
+Everything else (`/scheduling`, `/api/scheduling/*`) stays gated.
 
 ### 2. D1 migration
 

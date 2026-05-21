@@ -6,11 +6,11 @@ import {
 } from "@/lib/booking";
 import { computeAvailableSlots } from "@/lib/booking-availability";
 
-// GET /api/book/<slug>/availability?from=<unix>&to=<unix>
+// GET /p/api/book/<slug>/availability?from=<unix>&to=<unix>
 //
-// Public — no authentication. Cloudflare Access must NOT cover /api/book/*
-// (see /book route notes). Returns the open slots for the booking link
-// within the window, as the intersection across every linked calendar.
+// Public — no authentication. Lives under /p/*, covered by the public
+// Cloudflare Access Bypass policy. Returns the open slots for the booking
+// link within the window, as the intersection across every linked calendar.
 
 export const dynamic = "force-dynamic";
 

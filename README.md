@@ -257,50 +257,15 @@ Send mail to `anything@yourdomain.com`, watch the tail print the parsed
 `from`/`to`/`mailbox`/`thread` IDs, then refresh the app — the thread
 appears at the top of the list.
 
-### 4. Public pages — Cloudflare Access bypass
-
-Step 2 puts Access in front of the **whole** app. A few features serve pages
-to people who are *not* signed in — authorized by an unguessable URL token
-instead of a login. Those paths must be exempted, or outside visitors hit the
-Access login wall:
-
-| Path          | Feature                               | Needed if you use…  |
-| ------------- | ------------------------------------- | ------------------- |
-| `/c/*`        | Confidential message viewer           | Confidential send   |
-| `/d/*`        | Attachment share / download links     | Share links         |
-| `/book/*`     | Public booking pages                  | Meeting booking     |
-| `/api/book/*` | Booking availability + create/cancel  | Meeting booking     |
-| `/_next/*`    | Static JS/CSS the public pages load   | Any of the above    |
-
-`/_next/*` carries only client bundles — no secrets, and API routes still
-enforce auth — so exposing it is safe; public pages render blank without it.
-
-For each path, add an Access application that takes **precedence** over the
-`orange-inbox` app from step 2:
-
-1. **Zero Trust → Access → Applications → Add an application → Self-hosted**
-2. **Application domain:** your host domain + the path
-   (e.g. `mail.example.com` + `/book`)
-3. Add one policy — **Action: Bypass**, **Include: Everyone**
-4. Repeat for each path (a separate application each).
-
-Cloudflare matches the most specific application first, so token-guarded
-pages skip the login while the rest of the app stays protected.
-
-> `/scheduling` and `/api/scheduling/*` are admin-only — leave them behind the
-> step-2 app. That includes the Google OAuth callback, which the host's own
-> signed-in browser calls.
-
-Verify in an incognito window: a confidential-message link, or `/book/<slug>`
-for a real booking link, should load without a login prompt.
-
-### 5. Scheduling — meeting booking
+### 4. Scheduling — meeting booking
 
 The booking feature — admin UI at `/scheduling`, public links at
-`/book/<slug>` — works once migration `0053_booking.sql` is applied.
+`/p/book/<slug>` — works once migration `0053_booking.sql` is applied.
 `./scripts/setup.sh` applies it automatically; or run
-`cd web && npx wrangler d1 migrations apply orange-inbox --remote`. Booking
-pages also need the Access bypass from step 4.
+`cd web && npx wrangler d1 migrations apply orange-inbox --remote`. The public
+booking pages live under `/p/*`, so the step-2 Access Bypass already covers
+them — no extra Access config. `/scheduling` and `/api/scheduling/*` (including
+the Google OAuth callback) stay gated behind Access as admin-only.
 
 Two integrations are optional:
 

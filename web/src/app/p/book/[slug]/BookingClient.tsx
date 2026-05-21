@@ -71,7 +71,7 @@ export default function BookingClient(props: Props) {
     const days = Math.min(props.bookingWindowDays || 60, 60);
     const to = from + days * 86400;
     setLoading(true);
-    fetch(`/api/book/${props.slug}/availability?from=${from}&to=${to}`)
+    fetch(`/p/api/book/${props.slug}/availability?from=${from}&to=${to}`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`status ${r.status}`);
         return r.json() as Promise<{ slots: Slot[] }>;
@@ -174,7 +174,7 @@ export default function BookingClient(props: Props) {
     }
     setSubmitting(true);
     try {
-      const r = await fetch(`/api/book/${props.slug}`, {
+      const r = await fetch(`/p/api/book/${props.slug}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -244,13 +244,13 @@ export default function BookingClient(props: Props) {
         <div className="mt-4 flex gap-4 text-sm">
           <a
             className="text-blue-600 underline dark:text-blue-400"
-            href={`/book/${props.slug}/reschedule/${result.rescheduleToken}`}
+            href={`/p/book/${props.slug}/reschedule/${result.rescheduleToken}`}
           >
             Reschedule
           </a>
           <a
             className="text-blue-600 underline dark:text-blue-400"
-            href={`/book/${props.slug}/cancel/${result.cancelToken}`}
+            href={`/p/book/${props.slug}/cancel/${result.cancelToken}`}
           >
             Cancel
           </a>
