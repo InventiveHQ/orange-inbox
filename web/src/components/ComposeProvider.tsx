@@ -11,16 +11,35 @@ import {
   useTransition,
 } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import type { Identity } from "@/lib/identities";
 import type { ContactRow } from "@/lib/contacts";
 import type { TemplateRow } from "@/lib/templates";
 import { substituteVariables, type TemplateContext } from "@/lib/templates";
 import { looksLikeHtml } from "@/lib/html-text";
-import RichTextEditor, { type SlashCommandState, type SlashNavigationHandlers } from "./RichTextEditor";
+import type { SlashCommandState, SlashNavigationHandlers } from "./RichTextEditor";
 import RelativeTime from "./RelativeTime";
 import UndoSendToast from "./UndoSendToast";
 import { useToast } from "./ToastProvider";
 import { queueSend } from "@/lib/sw-client";
+
+// Lexical + @lexical/* is the single heaviest dependency in the client
+// bundle (~200 KB+ of JS). The composer is the only thing on the inbox
+// route that uses it, and the modal only mounts on a user action — so load
+// the editor on demand instead of shipping Lexical to every inbox page
+// load. The placeholder keeps the modal layout stable for the brief moment
+// the chunk is in flight on first compose.
+const RichTextEditor = dynamic(() => import("./RichTextEditor"), {
+  ssr: false,
+  loading: () => (
+    <div
+      className="px-4 py-3 text-sm text-neutral-400 dark:text-neutral-500"
+      style={{ minHeight: 220 }}
+    >
+      Loading editor…
+    </div>
+  ),
+});
 
 // #66 Confidential passcode format — kept in sync with lib/send.ts. 8
 // characters from a 31-symbol unambiguous alphabet (A–Z minus I/O/L, digits

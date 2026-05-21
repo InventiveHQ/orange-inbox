@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import CommandPalette from "./CommandPalette";
+import dynamic from "next/dynamic";
+
+// The palette and its data bundle are only needed once the user hits ⌘K —
+// keep it out of the inbox's initial bundle and load the chunk on first
+// open. Gating the render on `open` (below) is what actually defers it:
+// next/dynamic only fetches the chunk when the component first renders.
+const CommandPalette = dynamic(() => import("./CommandPalette"), { ssr: false });
 
 // Mounts once per inbox layout. Owns:
 //   - the global ⌘K / Ctrl+K listener that opens the palette;
@@ -39,5 +45,7 @@ export default function CommandPaletteShortcut() {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, []);
 
-  return <CommandPalette open={open} onClose={() => setOpen(false)} />;
+  // Only mount once opened — CommandPalette's data cache is module-level, so
+  // it survives the unmount on close and a reopen still serves instantly.
+  return open ? <CommandPalette open onClose={() => setOpen(false)} /> : null;
 }
