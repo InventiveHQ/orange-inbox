@@ -163,18 +163,56 @@ fully delegated to Access — the Worker trusts the
 request. Without Access in front, no header is set and the app shows
 "Sign in required".
 
+**Protect the app.**
+
 1. **Zero Trust** → **Access** → **Applications** → **Add an application**
 2. Choose **Self-hosted**
 3. **Application name:** `orange-inbox`
 4. **Application domain:** the custom domain from step 1, or your
-   `*.workers.dev` URL
+   `*.workers.dev` URL. Leave the **path** empty so it covers `/*`.
 5. Pick at least one **identity provider**. **One-time PIN** works without
    any setup; Google / GitHub / SAML / OIDC are all options if you want SSO.
-6. Add a **policy**:
-   - **Action:** Allow
-   - **Configure rules:** e.g. `Emails ending in` → `@yourdomain.com`, or
-     a literal email allowlist for a single user
+6. Add a **policy** — **Action:** Allow, **Configure rules:** e.g.
+   `Emails ending in` → `@yourdomain.com`, or a literal email allowlist.
 7. Save. Access starts protecting the URL within seconds.
+
+**Open the public paths (required).** Some routes are reached by people and
+systems that will never have an Access account — confidential-message
+recipients, calendar apps fetching a subscribed feed, and every browser
+loading the app's own CSS/JS. If Access covers these, the app breaks:
+static assets behind Access fail whenever a session lapses (the UI renders
+unstyled), confidential-message recipients hit a login wall, and
+calendar/tracking requests can't authenticate at all.
+
+These path prefixes must be exempted with a **Bypass** policy:
+
+| Path prefix | Reached by |
+| --- | --- |
+| `/_next/*`, `/sw.js` | every browser — app bundle + service worker (**critical**) |
+| `/manifest.webmanifest`, `/*.png` | PWA manifest + icons (cosmetic; skip if short on slots) |
+| `/c/*`, `/api/confidential/*` | recipients opening a confidential message |
+| `/api/calendar/ics/*` | Google / Apple / Outlook fetching a subscribed calendar feed |
+| `/api/track/*` | recipients' mail clients loading open-tracking pixels |
+
+Exposing these without Access is safe: the static files are content-hashed
+build artifacts with no secrets, and each dynamic route is guarded by its
+own unguessable URL token (plus an optional passcode for confidential
+messages) — the token is the credential, not the Access login. (`/d/*` is a
+decommissioned route that returns `410` for everything; it needs no bypass.)
+
+A self-hosted Access application takes **at most five destinations**, which
+is fewer than the list above, so split it across two Bypass applications.
+Access matches the most specific path first, so these coexist with the `/*`
+Allow application:
+
+| Application | Destinations | Policy |
+| --- | --- | --- |
+| `orange-inbox` | `<host>/*` | Allow — your users |
+| `orange-inbox-assets` | `/_next/*`, `/sw.js`, `/manifest.webmanifest`, `/*.png` | Bypass — Everyone |
+| `orange-inbox-public` | `/c/*`, `/api/confidential/*`, `/api/calendar/ics/*`, `/api/track/*` | Bypass — Everyone |
+
+For each Bypass app: add the paths under **Destinations**, then give it one
+policy with **Action: Bypass** and an **Everyone** include rule.
 
 Visit the host URL — you redirect to Access, sign in (PIN or your IdP), and
 land back in the app authenticated. The first sign-in lazily creates a row
