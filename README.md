@@ -6,8 +6,8 @@ and want a real inbox UI instead of forwarding everything to a third party.
 
 > Status: actively developed. The core inbox — receive, read, compose, reply,
 > labels, search, scheduled send, undo send, drafts, templates, push
-> notifications, PWA install — is working end-to-end. Versions are still
-> 0.1.x; expect rough edges.
+> notifications, PWA install, and Calendly-style meeting booking — is
+> working end-to-end. Versions are still 0.1.x; expect rough edges.
 
 ## Try it
 
@@ -33,6 +33,9 @@ below.
 - Outbound mail uses the
   [`send_email` binding](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/),
   so SPF/DKIM/DMARC are managed by Cloudflare.
+- A **meeting-booking** layer on the native calendar — public, Calendly-style
+  booking links with multi-calendar availability and Google Calendar + Meet
+  (admin at `/scheduling`; configured in [Post-deploy setup](#post-deploy-setup)).
 
 Multi-domain is a first-class concern: one deployment can serve mail for many
 domains, with both a unified inbox and per-domain silos.
@@ -217,6 +220,79 @@ Send mail to `anything@yourdomain.com`, watch the tail print the parsed
 `from`/`to`/`mailbox`/`thread` IDs, then refresh the app — the thread
 appears at the top of the list.
 
+### 4. Public pages — Cloudflare Access bypass
+
+Step 2 puts Access in front of the **whole** app. A few features serve pages
+to people who are *not* signed in — authorized by an unguessable URL token
+instead of a login. Those paths must be exempted, or outside visitors hit the
+Access login wall:
+
+| Path          | Feature                               | Needed if you use…  |
+| ------------- | ------------------------------------- | ------------------- |
+| `/c/*`        | Confidential message viewer           | Confidential send   |
+| `/d/*`        | Attachment share / download links     | Share links         |
+| `/book/*`     | Public booking pages                  | Meeting booking     |
+| `/api/book/*` | Booking availability + create/cancel  | Meeting booking     |
+| `/_next/*`    | Static JS/CSS the public pages load   | Any of the above    |
+
+`/_next/*` carries only client bundles — no secrets, and API routes still
+enforce auth — so exposing it is safe; public pages render blank without it.
+
+For each path, add an Access application that takes **precedence** over the
+`orange-inbox` app from step 2:
+
+1. **Zero Trust → Access → Applications → Add an application → Self-hosted**
+2. **Application domain:** your host domain + the path
+   (e.g. `mail.example.com` + `/book`)
+3. Add one policy — **Action: Bypass**, **Include: Everyone**
+4. Repeat for each path (a separate application each).
+
+Cloudflare matches the most specific application first, so token-guarded
+pages skip the login while the rest of the app stays protected.
+
+> `/scheduling` and `/api/scheduling/*` are admin-only — leave them behind the
+> step-2 app. That includes the Google OAuth callback, which the host's own
+> signed-in browser calls.
+
+Verify in an incognito window: a confidential-message link, or `/book/<slug>`
+for a real booking link, should load without a login prompt.
+
+### 5. Scheduling — meeting booking
+
+The booking feature — admin UI at `/scheduling`, public links at
+`/book/<slug>` — works once migration `0053_booking.sql` is applied.
+`./scripts/setup.sh` applies it automatically; or run
+`cd web && npx wrangler d1 migrations apply orange-inbox --remote`. Booking
+pages also need the Access bypass from step 4.
+
+Two integrations are optional:
+
+**Google Calendar + Meet** — lets booking links pull availability from Google
+calendars and auto-generate Meet links. Create a Google Cloud OAuth client
+(Calendar API enabled; authorized redirect URI
+`https://<host>/api/scheduling/connections/google/callback`), then:
+
+```sh
+cd web
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+Without these, booking links still work with Orange Mail's own calendars —
+Google is simply unavailable. OAuth tokens are stored AES-GCM encrypted.
+
+**Turnstile** — bot protection on the public booking form. Set both with
+`npx wrangler secret put` (run from `web/`):
+
+```sh
+npx wrangler secret put TURNSTILE_SITE_KEY
+npx wrangler secret put TURNSTILE_SECRET_KEY
+```
+
+Until set, the form works without a challenge.
+
+Full reference: [`web/SCHEDULING.md`](./web/SCHEDULING.md).
+
 ## Installing on your phone
 
 orange-inbox ships as a Progressive Web App. Once installed it launches with
@@ -326,6 +402,7 @@ manual `byte_estimate` refresh — live in
 - [x] Two-tier roles (Admin/User) + per-mailbox member management.
 - [x] Mobile shell + in-app help.
 - [x] One-click deploy button.
+- [x] Calendly-style meeting booking — multi-calendar availability, Google Calendar + Meet, public booking pages.
 
 ## License
 
