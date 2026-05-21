@@ -184,34 +184,34 @@ static assets behind Access fail whenever a session lapses (the UI renders
 unstyled), confidential-message recipients hit a login wall, and
 calendar/tracking requests can't authenticate at all.
 
-These path prefixes must be exempted with a **Bypass** policy:
+Every dynamic public route lives under one prefix — `/p/*`:
 
-| Path prefix | Reached by |
+| Path | Reached by |
 | --- | --- |
-| `/_next/*`, `/sw.js` | every browser — app bundle + service worker (**critical**) |
-| `/manifest.webmanifest`, `/*.png` | PWA manifest + icons (cosmetic; skip if short on slots) |
-| `/c/*`, `/api/confidential/*` | recipients opening a confidential message |
-| `/api/calendar/ics/*` | Google / Apple / Outlook fetching a subscribed calendar feed |
-| `/api/track/*` | recipients' mail clients loading open-tracking pixels |
+| `/p/c/*`, `/p/api/confidential/*` | recipients opening a confidential message |
+| `/p/api/calendar/ics/*` | Google / Apple / Outlook fetching a subscribed calendar feed |
+| `/p/api/track/*` | recipients' mail clients loading open-tracking pixels |
 
-Exposing these without Access is safe: the static files are content-hashed
-build artifacts with no secrets, and each dynamic route is guarded by its
-own unguessable URL token (plus an optional passcode for confidential
-messages) — the token is the credential, not the Access login.
-
-A self-hosted Access application takes **at most five destinations**, which
-is fewer than the list above, so split it across two Bypass applications.
-Access matches the most specific path first, so these coexist with the `/*`
-Allow application:
+So a single Bypass destination — `/p/*` — covers every public route. With
+the framework's static assets that totals five destinations, exactly the
+per-application limit, so **one** Bypass application is enough. Access
+matches the most specific path first, so its destinations coexist with the
+`/*` Allow application:
 
 | Application | Destinations | Policy |
 | --- | --- | --- |
 | `orange-inbox` | `<host>/*` | Allow — your users |
-| `orange-inbox-assets` | `/_next/*`, `/sw.js`, `/manifest.webmanifest`, `/*.png` | Bypass — Everyone |
-| `orange-inbox-public` | `/c/*`, `/api/confidential/*`, `/api/calendar/ics/*`, `/api/track/*` | Bypass — Everyone |
+| `orange-inbox-public` | `/p/*`, `/_next/*`, `/sw.js`, `/manifest.webmanifest`, `/*.png` | Bypass — Everyone |
 
-For each Bypass app: add the paths under **Destinations**, then give it one
-policy with **Action: Bypass** and an **Everyone** include rule.
+For the Bypass app: add the five paths under **Destinations**, then give it
+one policy with **Action: Bypass** and an **Everyone** include rule.
+(`/manifest.webmanifest` and `/*.png` are only cosmetic — the PWA manifest
+and icons — so drop them if you want destination headroom.)
+
+Exposing these without Access is safe: the static files are content-hashed
+build artifacts with no secrets, and each `/p/*` route is guarded by its
+own unguessable URL token (plus an optional passcode for confidential
+messages) — the token is the credential, not the Access login.
 
 Visit the host URL — you redirect to Access, sign in (PIN or your IdP), and
 land back in the app authenticated. The first sign-in lazily creates a row

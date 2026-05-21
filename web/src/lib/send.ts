@@ -68,7 +68,7 @@ export interface SendInput {
   // placeholder body ("{sender} sent you a confidential message — view at
   // <url>") rather than `body` itself; the real body lives in the
   // confidential_messages row keyed by the generated token, viewable only
-  // via the public /c/<token> URL. expiresAt is unix seconds (capped at
+  // via the public /p/c/<token> URL. expiresAt is unix seconds (capped at
   // CONFIDENTIAL_MAX_TTL_SECONDS in the future); passcode is an optional
   // high-entropy alphanumeric string the recipient must enter on the view
   // page. When omitted, the helper here can mint one.
@@ -78,7 +78,7 @@ export interface SendInput {
   };
   // #69 Opt-in read receipts. When true, mint a tracking_token, store it on
   // the message row, and inject a 1x1 transparent PNG <img> into the HTML
-  // body that hits /api/track/<token>.png when the recipient opens. Has no
+  // body that hits /p/api/track/<token>.png when the recipient opens. Has no
   // effect on the plain-text alternative (no inline image to attach to).
   trackOpens?: boolean;
 }
@@ -305,7 +305,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   if (input.trackOpens && !input.confidential) {
     trackingToken = generateOpaqueToken();
     const host = await resolveHost();
-    const pixelUrl = `https://${host}/api/track/${trackingToken}.png`;
+    const pixelUrl = `https://${host}/p/api/track/${trackingToken}.png`;
     const pixelTag = `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;outline:none;" />`;
     // wrapHtmlFragment / buildHtmlFromText both close with </body></html>;
     // insert the pixel immediately before </body> so it sits inside the
@@ -498,7 +498,7 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
   // #66 — persist the confidential payload last so a failure here surfaces
   // before we delete the draft and clean up uploads. The recipient at this
   // point already has the placeholder email in their inbox; if the row
-  // insert fails the /c/<token> URL will 404 and the sender will see it as
+  // insert fails the /p/c/<token> URL will 404 and the sender will see it as
   // a failed send (the SendError is raised after the batch). Keeping the
   // row in the same batch as the draft delete means the two ops succeed or
   // fail atomically.
@@ -836,7 +836,7 @@ function normaliseConfidentialPasscode(
 
 // HTML body shown to the recipient when confidential mode is on. The visible
 // content is intentionally short and contains the view URL + a human-readable
-// expiry; the real message lives behind the /c/<token> route.
+// expiry; the real message lives behind the /p/c/<token> route.
 function buildConfidentialPlaceholderHtml(
   senderLabel: string,
   host: string,
@@ -844,7 +844,7 @@ function buildConfidentialPlaceholderHtml(
   expiresAt: number,
   hasPasscode: boolean,
 ): string {
-  const url = `https://${host}/c/${token}`;
+  const url = `https://${host}/p/c/${token}`;
   const expires = new Date(expiresAt * 1000).toLocaleString(undefined, {
     year: "numeric",
     month: "short",

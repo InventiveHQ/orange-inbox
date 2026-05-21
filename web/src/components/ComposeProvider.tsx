@@ -292,7 +292,7 @@ function ComposeModal({
 
   // #66 Confidential mode state. `confidential` is the user-facing toggle
   // (off by default). `confidentialTtlDays` picks one of 1/7/30 day windows
-  // for the public /c/<token> URL; `confidentialPasscode` is the optional
+  // for the public /p/c/<token> URL; `confidentialPasscode` is the optional
   // out-of-band code (empty = no passcode prompt) — an 8-character
   // alphanumeric code from an unambiguous alphabet, typically minted via the
   // "Generate" button. The expiry is re-computed on submit (now + ttl), so a
@@ -1227,7 +1227,7 @@ function ComposeModal({
 //
 // Two related but independent controls in the send-menu dropdown:
 //   - Confidential mode: recipient gets a placeholder body + link; the real
-//     content lives at /c/<token> until expiry. Optional 8-character
+//     content lives at /p/c/<token> until expiry. Optional 8-character
 //     alphanumeric passcode is shared out-of-band by the sender.
 //   - Track opens: outbound HTML carries a 1×1 PNG that pings the server.
 //     Mutually exclusive with confidential (no real body to attach to).

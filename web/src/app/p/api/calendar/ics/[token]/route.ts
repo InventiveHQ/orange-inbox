@@ -7,7 +7,7 @@ import {
   touchTokenUsed,
 } from "@/lib/ics-tokens";
 
-// GET /api/calendar/ics/<token>
+// GET /p/api/calendar/ics/<token>
 //
 // Token-gated read-only feed for external calendar subscribers (Google /
 // Apple / Outlook). Auth is the URL itself — there is no cookie or Access

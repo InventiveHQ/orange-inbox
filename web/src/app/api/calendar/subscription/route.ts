@@ -19,11 +19,11 @@ import {
 // /api/calendar/subscription/[token] so the URL identifies what's being
 // revoked.
 //
-// These routes are deliberately NOT under /api/calendar/ics/ — that prefix
-// carries a Cloudflare Access *Bypass* policy so external calendar apps can
-// fetch the public feed without an Access account. A bypass there would
-// strip the Access JWT that requireUser() needs, turning every call here
-// into a 401.
+// These routes are deliberately NOT under /p/ — that prefix carries a
+// Cloudflare Access *Bypass* policy so external calendar apps can fetch the
+// public feed (/p/api/calendar/ics/<token>) without an Access account. A
+// bypass there would strip the Access JWT that requireUser() needs, turning
+// every call to this management API into a 401.
 
 export async function GET() {
   try {
@@ -68,7 +68,7 @@ function buildResponse(row: IcsTokenRow, host: string): TokenResponse {
   // webcal:// is the canonical scheme calendar clients sniff on; we also
   // expose the https:// twin so the user can paste it manually if their
   // client doesn't recognise webcal://.
-  const path = `/api/calendar/ics/${row.token}`;
+  const path = `/p/api/calendar/ics/${row.token}`;
   return {
     token: row.token,
     scope: row.scope,

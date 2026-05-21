@@ -3,9 +3,9 @@ import { getDb } from "@/lib/db";
 import ConfidentialViewer from "./ConfidentialViewer";
 
 // Public confidential-message view (#66). Reachable WITHOUT authentication —
-// the URL token is the only credential. Cloudflare Access must NOT cover this
-// path; the operator needs to add a Bypass policy for /c/* (same constraint
-// the previous /d/* attachment-download route had).
+// the URL token is the only credential. It lives under /p/*, the prefix the
+// operator exempts with a single Cloudflare Access Bypass policy; Access
+// must NOT gate /p/*.
 //
 // SSR responsibilities:
 //   1. Look up the confidential_messages row by token.
@@ -15,7 +15,8 @@ import ConfidentialViewer from "./ConfidentialViewer";
 //   3. Return a clear 410 / message-not-found page when the row is expired,
 //      revoked, or missing. Never leak that the *id* exists if it's expired.
 //   4. If a passcode is set, render the passcode form (client component) and
-//      let it POST against /c/<token>/route.ts before revealing the body.
+//      let it POST against /p/api/confidential/<token> before revealing the
+//      body.
 //
 // We do NOT increment `views` here. The increment happens on the route POST
 // (passcode-protected path) or as a server action invoked from the viewer
@@ -82,7 +83,7 @@ export default async function ConfidentialPage({ params }: PageProps) {
           requiresPasscode={requiresPasscode}
           // When there's no passcode, the body is already trustable to ship
           // server-side — the token guarded access. The viewer renders it
-          // and pings /c/<token>/route.ts with action=view to bump the
+          // and pings /p/api/confidential/<token> with action=view to bump the
           // view counter.
           initialBodyText={requiresPasscode ? null : row.body_text}
           initialBodyHtml={requiresPasscode ? null : row.body_html}

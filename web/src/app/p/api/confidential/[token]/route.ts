@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
-// Public endpoint backing the /c/<token> viewer (#66). NO requireUser — the
-// token is the only credential. The Cloudflare Access bypass that covers
-// /c/* must also cover /api/confidential/* (same constraint).
+// Public endpoint backing the /p/c/<token> viewer (#66). NO requireUser —
+// the token is the only credential. Both this route and the viewer live
+// under /p/*, the single prefix covered by the Cloudflare Access Bypass
+// policy; Access must NOT gate /p/*.
 //
 // Two actions:
 //   - { action: "view" }: increment the views counter for the non-passcode

@@ -47,7 +47,7 @@ export default function ConfidentialViewer({
     if (requiresPasscode) return;
     if (viewPingedRef.current) return;
     viewPingedRef.current = true;
-    void fetch(`/api/confidential/${encodeURIComponent(token)}`, {
+    void fetch(`/p/api/confidential/${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "view" }),
@@ -68,7 +68,7 @@ export default function ConfidentialViewer({
     setError(null);
     setUnlocking(true);
     try {
-      const res = await fetch(`/api/confidential/${encodeURIComponent(token)}`, {
+      const res = await fetch(`/p/api/confidential/${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "unlock", passcode: cleaned }),
