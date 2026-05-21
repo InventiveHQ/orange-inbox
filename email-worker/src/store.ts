@@ -258,18 +258,33 @@ export async function storeMessage(
   // lives. Best-effort: a failure here can't roll back the message, and
   // worst case the user's calendar still shows the original event until
   // they clear it manually.
+  //
+  // Security: the UPDATE is additionally scoped by organizer_email.
+  // `calendar_events` is one shared table and the same ical_uid exists as a
+  // separate row per user who promoted the invite; without the organizer
+  // predicate anyone who knows a UID (co-recipients of a real invite do)
+  // could cancel everyone's copy by mailing themselves a forged CANCEL. We
+  // require the CANCEL's ORGANIZER to match the stored organizer_email. A
+  // CANCEL with no parseable ORGANIZER cannot be authenticated against the
+  // stored event, so we skip the update entirely.
   if (calendarParse && calendarParse.parsedMethod === "CANCEL" && calendarParse.parsedUid) {
-    try {
-      await env.DB
-        .prepare(
-          `UPDATE calendar_events
-              SET cancelled = 1, updated_at = unixepoch()
-            WHERE ical_uid = ?`,
-        )
-        .bind(calendarParse.parsedUid)
-        .run();
-    } catch (err) {
-      console.warn("calendar CANCEL propagate failed", err);
+    if (!calendarParse.parsedOrganizer) {
+      console.warn(
+        "calendar CANCEL skipped: no ORGANIZER to authenticate against stored event",
+      );
+    } else {
+      try {
+        await env.DB
+          .prepare(
+            `UPDATE calendar_events
+                SET cancelled = 1, updated_at = unixepoch()
+              WHERE ical_uid = ? AND organizer_email = ?`,
+          )
+          .bind(calendarParse.parsedUid, calendarParse.parsedOrganizer)
+          .run();
+      } catch (err) {
+        console.warn("calendar CANCEL propagate failed", err);
+      }
     }
   }
 
@@ -419,6 +434,11 @@ interface CalendarParseResult {
   stmt: D1PreparedStatement;
   parsedUid: string | null;
   parsedMethod: string | null;   // uppercase: REQUEST | CANCEL | REPLY | …
+  // ORGANIZER mailbox (bare email, already lowercased by parseIcs). Used to
+  // scope the cross-user CANCEL UPDATE so an attacker can't cancel events
+  // they don't organise just by knowing the ical_uid. NULL when the .ics
+  // has no parseable ORGANIZER.
+  parsedOrganizer: string | null;
   // METHOD=REPLY only — surface so the caller can route the rsvp flip
   // without re-parsing. Both null on REQUEST/CANCEL/PUBLISH.
   replyAttendee: string | null;
@@ -474,6 +494,9 @@ function buildCalendarInsert(
         stmt,
         parsedUid: parsed.uid,
         parsedMethod: parsed.method ? parsed.method.toUpperCase() : null,
+        // parseIcs already lowercases the organizer mailbox; keep it as-is so
+        // it lines up with the lowercased calendar_events.organizer_email.
+        parsedOrganizer: parsed.organizer,
         replyAttendee: parsed.replyAttendee,
         replyPartstat: parsed.replyPartstat,
       };

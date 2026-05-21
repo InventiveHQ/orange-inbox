@@ -7,7 +7,7 @@ and want a real inbox UI instead of forwarding everything to a third party.
 > Status: actively developed. The core inbox — receive, read, compose, reply,
 > labels, search, scheduled send, undo send, drafts, templates, push
 > notifications, PWA install, and Calendly-style meeting booking — is
-> working end-to-end. Versions are still 0.1.x; expect rough edges.
+> working end-to-end. Versions are still 0.2.x; expect rough edges.
 
 ## Try it
 
@@ -166,18 +166,55 @@ fully delegated to Access — the Worker trusts the
 request. Without Access in front, no header is set and the app shows
 "Sign in required".
 
+**Protect the app.**
+
 1. **Zero Trust** → **Access** → **Applications** → **Add an application**
 2. Choose **Self-hosted**
 3. **Application name:** `orange-inbox`
 4. **Application domain:** the custom domain from step 1, or your
-   `*.workers.dev` URL
+   `*.workers.dev` URL. Leave the **path** empty so it covers `/*`.
 5. Pick at least one **identity provider**. **One-time PIN** works without
    any setup; Google / GitHub / SAML / OIDC are all options if you want SSO.
-6. Add a **policy**:
-   - **Action:** Allow
-   - **Configure rules:** e.g. `Emails ending in` → `@yourdomain.com`, or
-     a literal email allowlist for a single user
+6. Add a **policy** — **Action:** Allow, **Configure rules:** e.g.
+   `Emails ending in` → `@yourdomain.com`, or a literal email allowlist.
 7. Save. Access starts protecting the URL within seconds.
+
+**Open the public paths (required).** Some routes are reached by people and
+systems that will never have an Access account — confidential-message
+recipients, calendar apps fetching a subscribed feed, and every browser
+loading the app's own CSS/JS. If Access covers these, the app breaks:
+static assets behind Access fail whenever a session lapses (the UI renders
+unstyled), confidential-message recipients hit a login wall, and
+calendar/tracking requests can't authenticate at all.
+
+Every dynamic public route lives under one prefix — `/p/*`:
+
+| Path | Reached by |
+| --- | --- |
+| `/p/c/*`, `/p/api/confidential/*` | recipients opening a confidential message |
+| `/p/api/calendar/ics/*` | Google / Apple / Outlook fetching a subscribed calendar feed |
+| `/p/api/track/*` | recipients' mail clients loading open-tracking pixels |
+
+So a single Bypass destination — `/p/*` — covers every public route. With
+the framework's static assets that totals five destinations, exactly the
+per-application limit, so **one** Bypass application is enough. Access
+matches the most specific path first, so its destinations coexist with the
+`/*` Allow application:
+
+| Application | Destinations | Policy |
+| --- | --- | --- |
+| `orange-inbox` | `<host>/*` | Allow — your users |
+| `orange-inbox-public` | `/p/*`, `/_next/*`, `/sw.js`, `/manifest.webmanifest`, `/*.png` | Bypass — Everyone |
+
+For the Bypass app: add the five paths under **Destinations**, then give it
+one policy with **Action: Bypass** and an **Everyone** include rule.
+(`/manifest.webmanifest` and `/*.png` are only cosmetic — the PWA manifest
+and icons — so drop them if you want destination headroom.)
+
+Exposing these without Access is safe: the static files are content-hashed
+build artifacts with no secrets, and each `/p/*` route is guarded by its
+own unguessable URL token (plus an optional passcode for confidential
+messages) — the token is the credential, not the Access login.
 
 Visit the host URL — you redirect to Access, sign in (PIN or your IdP), and
 land back in the app authenticated. The first sign-in lazily creates a row

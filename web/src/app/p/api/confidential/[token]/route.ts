@@ -1,24 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
-// Public endpoint backing the /c/<token> viewer (#66). NO requireUser — the
-// token is the only credential. The Cloudflare Access bypass that covers
-// /c/* must also cover /api/confidential/* (same constraint).
+// Public endpoint backing the /p/c/<token> viewer (#66). NO requireUser —
+// the token is the only credential. Both this route and the viewer live
+// under /p/*, the single prefix covered by the Cloudflare Access Bypass
+// policy; Access must NOT gate /p/*.
 //
 // Two actions:
 //   - { action: "view" }: increment the views counter for the non-passcode
 //     path. The body itself came down via SSR, so this is a fire-and-forget
 //     counter bump.
-//   - { action: "unlock", passcode }: verify the 4-digit code in constant-
-//     ish time and return the body. Throttled per-IP with a token bucket.
+//   - { action: "unlock", passcode }: verify the high-entropy alphanumeric
+//     code in constant-ish time and return the body. Throttled per-IP with a
+//     token bucket.
 //
-// We intentionally use a per-IP throttle (same shape as /d/[token]/route.ts)
-// rather than a per-token attempt cap. A per-token cap would let an attacker
+// We intentionally use a per-IP token-bucket throttle rather than a
+// per-token attempt cap. A per-token cap would let an attacker
 // brick a confidential message by attempting it 10 times — denial-of-message
 // against the legitimate recipient. The per-IP throttle slows brute-force
-// without enabling that, and the 4-digit space is small enough that we'd
-// want to surface "the sender should re-issue with a longer passcode" as a
-// future tweak rather than rely on the lock-out alone.
+// without enabling that. The passcode is an 8-character code drawn from a
+// 31-symbol unambiguous alphabet (~40 bits of entropy), so the per-IP
+// throttle plus the keyspace make brute-force infeasible.
 
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_HITS = 20;       // hits per IP per window
@@ -139,7 +141,10 @@ export async function POST(
       .run();
     return NextResponse.json({ body_text: row.body_text, body_html: row.body_html });
   }
-  const supplied = (body.passcode ?? "").toString().trim();
+  // Stored passcodes are canonicalised to uppercase at creation time, so we
+  // uppercase the submitted value before comparing — the recipient can type
+  // the code in any case. Comparison stays constant-time.
+  const supplied = (body.passcode ?? "").toString().trim().toUpperCase();
   if (!constantTimeEquals(supplied, row.view_passcode)) {
     // Don't bump views on a failed attempt. The per-IP throttle is the
     // only thing standing in the way of an offline brute-force here.
@@ -153,9 +158,11 @@ export async function POST(
 }
 
 // Cheap constant-time string compare. Web Crypto doesn't ship a built-in for
-// this — but for 4-digit codes the timing leak is at most 4 character-compare
-// operations of difference and a network round-trip dominates the observable
-// timing anyway. We still bother since defence-in-depth is essentially free.
+// this. Length-agnostic: an early return on a length mismatch leaks only the
+// length, which is fixed and public for our passcodes anyway; the per-symbol
+// comparison below is constant-time across equal-length inputs. A network
+// round-trip dominates the observable timing regardless — we still bother
+// since defence-in-depth is essentially free.
 function constantTimeEquals(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;

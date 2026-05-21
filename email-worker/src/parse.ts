@@ -1,22 +1,31 @@
 import PostalMime, { type Address, type Attachment, type Header } from "postal-mime";
 import { isExecutable } from "./attachment-safety";
-import { parseAuthenticationResults } from "./auth-results";
+import { extractAuthservId, parseAuthenticationResults } from "./auth-results";
 import { findHeader, parseListUnsubscribe } from "./list-unsubscribe";
 import { classify } from "./triage";
 import type { AddressInfo, ParsedAttachment, ParsedMessage } from "./types";
 
-export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
+export async function parseEmail(
+  raw: ReadableStream,
+  trustedAuthservId?: string,
+): Promise<ParsedMessage> {
   const parsed = await PostalMime.parse(raw, { attachmentEncoding: "arraybuffer" });
 
   const text = parsed.text;
   const html = parsed.html;
   const from = flattenOne(parsed.from) ?? { addr: "" };
 
-  // Concatenate all Authentication-Results headers (some MTAs stamp more
-  // than one — e.g. one per upstream hop). The parser treats `;`-joined
-  // input as multiple methods, which is what we want.
-  const authResultsHeader = collectHeader(parsed.headers, "authentication-results");
-  const authResults = parseAuthenticationResults(authResultsHeader);
+  // SECURITY: an inbound message can embed its own Authentication-Results
+  // header(s). We must consider ONLY the header stamped by our trusted MX
+  // (Cloudflare prepends it, so it is the first one). selectTrustedAuthResults
+  // picks that single header — never merges across headers — and parses it
+  // alone so a forged verdict can't slip in for a method Cloudflare omitted.
+  const authResultsHeaders = collectHeaders(parsed.headers, "authentication-results");
+  const trustedAuthResultsHeader = selectTrustedAuthResultsHeader(
+    authResultsHeaders,
+    trustedAuthservId,
+  );
+  const authResults = parseAuthenticationResults(trustedAuthResultsHeader);
 
   // Reply-To: postal-mime gives us an Address[] (could be a single mailbox
   // or a group). We only care about the first usable address, lowercased.
@@ -99,18 +108,54 @@ export async function parseEmail(raw: ReadableStream): Promise<ParsedMessage> {
   return out;
 }
 
-// Collect every header value matching the (lowercase) name and join them
-// with `;` so the Authentication-Results parser sees them as a single
-// multi-segment value.
-function collectHeader(headers: Header[] | undefined, lowerName: string): string {
-  if (!headers || headers.length === 0) return "";
+// Collect every header value matching the (lowercase) name as a separate
+// array entry, in received order. postal-mime preserves header order, so
+// for a header type the trusted receiver prepends (Authentication-Results)
+// the first entry is the one our MX stamped.
+function collectHeaders(headers: Header[] | undefined, lowerName: string): string[] {
+  if (!headers || headers.length === 0) return [];
   const values: string[] = [];
   for (const h of headers) {
     if (h.key.toLowerCase() === lowerName && h.value) {
       values.push(h.value);
     }
   }
-  return values.join("; ");
+  return values;
+}
+
+// SECURITY-CRITICAL: choose the ONE Authentication-Results header we trust.
+//
+// An attacker controls the raw message and can embed extra
+// Authentication-Results headers with forged "pass" verdicts. We must never
+// merge headers and must never read verdicts from an attacker-supplied one.
+//
+//   * If TRUSTED_AUTHSERV_ID is configured: return the first header whose
+//     parsed authserv-id (case-insensitive) equals it. If none match,
+//     return null — the message has NO trusted auth results (treated as
+//     unknown verdicts). We deliberately do NOT fall back to attacker data.
+//   * If TRUSTED_AUTHSERV_ID is not configured: return ONLY the first
+//     header. Cloudflare prepends its Authentication-Results header, so the
+//     first entry is the trusted one. Never merge across headers.
+//
+// `headers` must be in received order (see collectHeaders).
+function selectTrustedAuthResultsHeader(
+  headers: string[],
+  trustedAuthservId?: string,
+): string | null {
+  if (headers.length === 0) return null;
+
+  const trusted = trustedAuthservId?.trim().toLowerCase();
+  if (trusted) {
+    for (const h of headers) {
+      if (extractAuthservId(h) === trusted) return h;
+    }
+    // No header from the trusted receiver — do not trust anything.
+    return null;
+  }
+
+  // No trusted authserv-id configured: trust only the first (prepended)
+  // header. This is the Cloudflare-stamped one for a normal deployment.
+  return headers[0];
 }
 
 // Returns true when this mailbox has never received a message from the

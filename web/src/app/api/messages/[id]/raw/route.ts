@@ -48,6 +48,12 @@ export async function GET(
     const baseHeaders: Record<string, string> = {
       "Content-Type": "text/plain; charset=utf-8",
       "X-Content-Type-Options": "nosniff",
+      // This route serves attacker-controlled message source from the app's
+      // own origin. It's sent as text/plain so it shouldn't execute, but as
+      // defense-in-depth we add a restrictive CSP so it cannot run script
+      // even if the content type were ever misinterpreted on direct
+      // navigation.
+      "Content-Security-Policy": "default-src 'none'; sandbox",
       "Cache-Control": "private, no-store",
     };
 

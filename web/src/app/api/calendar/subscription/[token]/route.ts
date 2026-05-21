@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { revokeToken } from "@/lib/ics-tokens";
 
-// DELETE /api/calendar/ics/tokens/<token>
+// DELETE /api/calendar/subscription/<token>
 //
 // Revoke a single ICS subscription token. Scoped to the caller — `revokeToken`
 // matches on (token, user_id) so a user can't revoke another user's token

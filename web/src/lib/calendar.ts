@@ -835,20 +835,32 @@ export async function promoteInvitesForThread(
   }
 }
 
-// Mark every row for a given ical_uid as cancelled. Called from the
-// email-worker when a METHOD=CANCEL invite arrives. Cross-user by design:
-// a shared mailbox's cancellation cascades to everyone who'd promoted it.
+// Mark every row for a given ical_uid as cancelled. Called when a
+// METHOD=CANCEL invite arrives. Cross-user by design: a shared mailbox's
+// cancellation cascades to everyone who'd promoted it.
+//
+// Security: scoped by organizer_email as well as ical_uid. `calendar_events`
+// is one shared table and the same ical_uid exists as a separate row per
+// user who promoted the invite. A UID-only UPDATE would let anyone who
+// knows a UID (co-recipients of a real invite do) cancel everyone's copy by
+// forging a CANCEL. The caller MUST pass the organizer parsed from the
+// inbound CANCEL .ics; it is matched case-insensitively against the stored
+// (lowercased) organizer_email. An empty/absent organizer cannot be
+// authenticated against the stored event — the function no-ops in that case.
 export async function markCancelledByUid(
   db: D1Database,
   icalUid: string,
+  organizerEmail: string,
 ): Promise<void> {
+  const organizer = organizerEmail.trim().toLowerCase();
+  if (!organizer) return; // unauthenticatable CANCEL — never run a UID-only update
   await db
     .prepare(
       `UPDATE calendar_events
           SET cancelled = 1, updated_at = unixepoch()
-        WHERE ical_uid = ?`,
+        WHERE ical_uid = ? AND organizer_email = ?`,
     )
-    .bind(icalUid)
+    .bind(icalUid, organizer)
     .run();
 }
 

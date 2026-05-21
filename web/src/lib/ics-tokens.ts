@@ -4,7 +4,7 @@ import type { CalendarEventRow } from "./calendar";
 // Per-user ICS subscription tokens (#83).
 //
 // The token is opaque, URL-safe, and the only auth on the token-gated feed at
-// `/api/calendar/ics/<token>`. The settings UI surfaces:
+// `/p/api/calendar/ics/<token>`. The settings UI surfaces:
 //
 //   * The current (active) token, lazily minted on first view.
 //   * A `Last used` timestamp, updated by the feed handler on each hit.

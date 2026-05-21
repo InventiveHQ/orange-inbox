@@ -6,12 +6,14 @@ import type { User } from "./auth";
 // mailbox; mailbox_id NULL = "global" — usable across any mailbox the user
 // can access.
 //
-// V1 SIMPLIFICATION: the schema has no creator/owner column on labels, so
-// global labels are visible to (and manageable by) every signed-in user in
-// the deployment. For a proper multi-user story we'd need to add a
-// labels.created_by_user_id column (and a separate user_label_access table
-// if we want per-user sharing of globals). Mailbox-scoped labels already get
-// proper isolation via user_mailbox_access.
+// OWNERSHIP MODEL: global labels (mailbox_id NULL) are *visible* to every
+// signed-in user, but mutation (rename/delete) is restricted by ownership.
+// labels.created_by_user_id records the creator; only that user (or an
+// admin) may modify or delete a global label — see canManageLabel(). Legacy
+// global labels predating this column have created_by_user_id NULL and are
+// treated as unowned: only admins may manage them. Mailbox-scoped labels are
+// isolated/managed via user_mailbox_access + admin as before. (A separate
+// user_label_access table would be needed for per-user sharing of globals.)
 
 export interface LabelRow {
   id: string;
@@ -91,18 +93,31 @@ export async function bulkLoadThreadLabels(
 
 // True if the user can rename/delete the label. Mailbox-scoped labels
 // require global admin (mailbox management is admin-only). Global labels
-// stay open to any signed-in user — see file header for the gap.
+// (mailbox_id NULL) require ownership: the creator (created_by_user_id) or
+// an admin. Legacy global labels with a NULL created_by_user_id are unowned
+// and manageable by admins only — see file header.
 export async function canManageLabel(
   user: User,
   labelId: string,
 ): Promise<boolean> {
   const label = await getDb()
-    .prepare("SELECT id, mailbox_id FROM labels WHERE id = ?")
+    .prepare("SELECT id, mailbox_id, created_by_user_id FROM labels WHERE id = ?")
     .bind(labelId)
-    .first<{ id: string; mailbox_id: string | null }>();
+    .first<{
+      id: string;
+      mailbox_id: string | null;
+      created_by_user_id: string | null;
+    }>();
   if (!label) return false;
-  if (label.mailbox_id == null) return true; // v1 global gap
-  return user.is_admin;
+  if (user.is_admin) return true;
+  if (label.mailbox_id == null) {
+    // Global label: only the recorded owner may manage it. Legacy rows with
+    // a NULL owner are unowned and fall through to admins-only above.
+    return label.created_by_user_id != null
+      && label.created_by_user_id === user.id;
+  }
+  // Mailbox-scoped labels are admin-only (handled by the is_admin check above).
+  return false;
 }
 
 // True if the user may apply this label to this thread. Requires:

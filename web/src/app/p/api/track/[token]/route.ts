@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
 // Public read-receipt pixel (#69). The outbound HTML body contains
-//   <img src="https://<host>/api/track/<token>.png" ... />
+//   <img src="https://<host>/p/api/track/<token>.png" ... />
 // so the {token} param arrives with a ".png" suffix; we strip it before
 // looking up the message. No requireUser — recipients are by definition
 // unauthenticated against our control plane. The token is per-message and

@@ -36,6 +36,15 @@ export async function GET(
         // Belt-and-braces: the iframe sandbox is the real boundary, but we
         // also force browsers not to sniff this into something executable.
         "X-Content-Type-Options": "nosniff",
+        // This route serves attacker-controlled inbound email HTML from the
+        // app's own origin. The normal render path wraps it in a sandboxed
+        // iframe, but a direct top-level navigation here would otherwise run
+        // any script in the email. This CSP neutralizes inline and loaded
+        // scripts regardless of how the document is loaded, while still
+        // allowing the inline styles and data:/https: images that legitimate
+        // email HTML relies on.
+        "Content-Security-Policy":
+          "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; sandbox",
         "Cache-Control": "private, no-store",
       },
     });

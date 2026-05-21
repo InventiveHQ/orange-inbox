@@ -1,6 +1,23 @@
 import { getDb } from "./db";
 import { getActiveMailDbs } from "./mail-db";
 
+// Sentinel markers wrapped around matched terms in FTS5 snippet() output.
+//
+// FTS5 snippet() returns the RAW indexed column text and inserts these marker
+// strings verbatim — it performs NO HTML escaping. Using `<mark>`/`</mark>` as
+// markers would therefore mean attacker-controlled email text (a subject or
+// body containing `<img src=x onerror=...>`) lands in an HTML string that, if
+// rendered with dangerouslySetInnerHTML, executes script in our origin.
+//
+// To make that class of bug impossible we use ASCII control characters that
+// (a) cannot legitimately appear in real subject/body text and (b) have no
+// meaning in HTML. The snippet string is then split on these sentinels and
+// rendered as auto-escaped React text + real <mark> elements — never as HTML.
+// U+0001 (Start of Heading) / U+0002 (Start of Text) are unused, non-printing
+// control codes.
+export const SNIPPET_MARK_START = "";
+export const SNIPPET_MARK_END = "";
+
 export interface SearchResult {
   // Thread fields — enough to render a result row that links to the thread.
   thread_id: string;
@@ -14,10 +31,16 @@ export interface SearchResult {
   message_subject: string | null;
   from_addr: string;
   from_name: string | null;
-  // FTS5 snippet() output. Contains plain text from subject/snippet/text_body
-  // with `<mark>...</mark>` markers around the matched terms — and nothing
-  // else. See sanitiseQuery() / the SQL below for why this is XSS-safe to
-  // dangerouslySetInnerHTML.
+  // FTS5 snippet() output. Contains RAW, attacker-controlled text from the
+  // indexed columns (subject/snippet/text_body — all stored verbatim from
+  // inbound email). snippet() does NOT HTML-escape its input, so this string
+  // MUST NEVER be treated as HTML / passed to dangerouslySetInnerHTML.
+  //
+  // Matched terms are wrapped with the non-HTML sentinel control characters
+  // SNIPPET_MARK_START / SNIPPET_MARK_END (see below) — never with `<mark>`
+  // tags. Consumers split on those sentinels and render the highlighted
+  // segments as real, auto-escaped React <mark> elements. See
+  // renderSnippet() in web/src/app/search/page.tsx.
   match_snippet: string;
 }
 
@@ -499,6 +522,14 @@ async function runFtsQuery(
   // standalone subquery (only source = messages_fts) and join messages
   // outside — this is the only structure that doesn't trip
   // "D1_ERROR: unable to use function snippet in the requested context".
+  //
+  // The snippet() start/end markers are non-HTML sentinel control characters
+  // (SNIPPET_MARK_START / SNIPPET_MARK_END), NOT `<mark>` tags. snippet()
+  // does not HTML-escape the raw indexed text, so emitting HTML tags here
+  // would make the column unsafe to render. The sentinels are inert in HTML
+  // and are converted to real React <mark> elements by renderSnippet() at the
+  // render site. They are bound as a SQL parameter (not interpolated) so the
+  // characters reach SQLite literally.
   const whereSql = extraWhere.length > 0 ? `AND ${extraWhere.join(" AND ")}` : "";
   const sql = `
     SELECT
@@ -512,7 +543,7 @@ async function runFtsQuery(
       hit.match_snippet
     FROM (
       SELECT rowid,
-             snippet(messages_fts, -1, '<mark>', '</mark>', '…', 12) AS match_snippet
+             snippet(messages_fts, -1, ?, ?, '…', 12) AS match_snippet
         FROM messages_fts
        WHERE messages_fts MATCH ?
     ) AS hit
@@ -521,7 +552,9 @@ async function runFtsQuery(
     ORDER BY m.date DESC
     LIMIT ?
   `;
-  const stmt = db.prepare(sql).bind(match, ...extraParams, limit);
+  const stmt = db
+    .prepare(sql)
+    .bind(SNIPPET_MARK_START, SNIPPET_MARK_END, match, ...extraParams, limit);
   try {
     const { results } = await stmt.all<MailDbHit>();
     return results ?? [];

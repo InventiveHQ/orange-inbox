@@ -22,6 +22,36 @@ import UndoSendToast from "./UndoSendToast";
 import { useToast } from "./ToastProvider";
 import { queueSend } from "@/lib/sw-client";
 
+// #66 Confidential passcode format — kept in sync with lib/send.ts. 8
+// characters from a 31-symbol unambiguous alphabet (A–Z minus I/O/L, digits
+// 2–9), ~40 bits of entropy. We can't import the server helper here (send.ts
+// pulls in next/headers and other server-only modules), so the alphabet and
+// generator are mirrored client-side. The server re-validates on send.
+const CONFIDENTIAL_PASSCODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const CONFIDENTIAL_PASSCODE_LENGTH = 8;
+const CONFIDENTIAL_PASSCODE_RE = new RegExp(
+  `^[${CONFIDENTIAL_PASSCODE_ALPHABET}]{${CONFIDENTIAL_PASSCODE_LENGTH}}$`,
+);
+
+// Mint a confidential passcode with the browser CSPRNG. Rejection-samples
+// random bytes to avoid modulo bias (same approach as the server helper).
+function generateConfidentialPasscode(): string {
+  const alphabet = CONFIDENTIAL_PASSCODE_ALPHABET;
+  const n = alphabet.length;
+  const limit = 256 - (256 % n);
+  let out = "";
+  while (out.length < CONFIDENTIAL_PASSCODE_LENGTH) {
+    const buf = new Uint8Array(CONFIDENTIAL_PASSCODE_LENGTH);
+    crypto.getRandomValues(buf);
+    for (const b of buf) {
+      if (b >= limit) continue;
+      out += alphabet[b % n];
+      if (out.length === CONFIDENTIAL_PASSCODE_LENGTH) break;
+    }
+  }
+  return out;
+}
+
 export interface ComposeOpenArgs {
   replyToMessageId?: string;
   preferredMailboxId?: string;
@@ -262,10 +292,11 @@ function ComposeModal({
 
   // #66 Confidential mode state. `confidential` is the user-facing toggle
   // (off by default). `confidentialTtlDays` picks one of 1/7/30 day windows
-  // for the public /c/<token> URL; `confidentialPasscode` is the optional
-  // 4-digit out-of-band code (empty = no passcode prompt). The expiry is
-  // re-computed on submit (now + ttl), so a long compose session doesn't
-  // shrink the window unexpectedly.
+  // for the public /p/c/<token> URL; `confidentialPasscode` is the optional
+  // out-of-band code (empty = no passcode prompt) — an 8-character
+  // alphanumeric code from an unambiguous alphabet, typically minted via the
+  // "Generate" button. The expiry is re-computed on submit (now + ttl), so a
+  // long compose session doesn't shrink the window unexpectedly.
   //
   // #69 Track-opens state. `trackOpens` defaults to the user's preference
   // (Settings → Sending → Track opens by default). The composer still lets
@@ -571,15 +602,17 @@ function ComposeModal({
   // compose session doesn't shrink the recipient's view window. Returns
   // undefined when the toggle is off OR when the passcode is malformed
   // (caller surfaces that as an error). Treating empty-string passcode as
-  // "no passcode" matches the UX of the input — the placeholder reads
-  // "Optional 4-digit code".
+  // "no passcode" matches the UX of the input — the field is optional.
   function buildConfidentialField(): { ok: true; value: { expires_at: number; passcode: string | null } | null } | { ok: false; error: string } {
     if (!confidential) return { ok: true, value: null };
     const ttlSec = confidentialTtlDays * 86400;
     const expires = Math.floor(Date.now() / 1000) + ttlSec;
-    const cleaned = confidentialPasscode.trim();
-    if (cleaned !== "" && !/^\d{4}$/.test(cleaned)) {
-      return { ok: false, error: "Passcode must be 4 digits or blank." };
+    const cleaned = confidentialPasscode.trim().toUpperCase();
+    if (cleaned !== "" && !CONFIDENTIAL_PASSCODE_RE.test(cleaned)) {
+      return {
+        ok: false,
+        error: `Passcode must be ${CONFIDENTIAL_PASSCODE_LENGTH} characters (letters and digits) or blank.`,
+      };
     }
     return {
       ok: true,
@@ -1194,8 +1227,8 @@ function ComposeModal({
 //
 // Two related but independent controls in the send-menu dropdown:
 //   - Confidential mode: recipient gets a placeholder body + link; the real
-//     content lives at /c/<token> until expiry. Optional 4-digit passcode is
-//     shared out-of-band by the sender.
+//     content lives at /p/c/<token> until expiry. Optional 8-character
+//     alphanumeric passcode is shared out-of-band by the sender.
 //   - Track opens: outbound HTML carries a 1×1 PNG that pings the server.
 //     Mutually exclusive with confidential (no real body to attach to).
 //
@@ -1261,17 +1294,36 @@ function PrivacyToggles({
           </div>
           <label className="block text-xs">
             <span className="uppercase tracking-wider text-neutral-500">Passcode (optional)</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={4}
-              pattern="\d{4}"
-              placeholder="4 digits"
-              value={confidentialPasscode}
-              onChange={e => onConfidentialPasscodeChange(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              className="mt-1 w-24 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1 font-mono tracking-[0.2em] focus:outline-none focus:border-[var(--color-brand)]"
-            />
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                type="text"
+                inputMode="text"
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                maxLength={CONFIDENTIAL_PASSCODE_LENGTH}
+                placeholder={`${CONFIDENTIAL_PASSCODE_LENGTH} characters`}
+                value={confidentialPasscode}
+                onChange={e =>
+                  onConfidentialPasscodeChange(
+                    e.target.value
+                      .toUpperCase()
+                      .split("")
+                      .filter(ch => CONFIDENTIAL_PASSCODE_ALPHABET.includes(ch))
+                      .join("")
+                      .slice(0, CONFIDENTIAL_PASSCODE_LENGTH),
+                  )
+                }
+                className="w-40 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1 font-mono tracking-[0.2em] uppercase focus:outline-none focus:border-[var(--color-brand)]"
+              />
+              <button
+                type="button"
+                onClick={() => onConfidentialPasscodeChange(generateConfidentialPasscode())}
+                className="rounded-md border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-[11px] hover:bg-neutral-100 dark:hover:bg-neutral-900"
+              >
+                Generate
+              </button>
+            </div>
             <span className="block mt-1 text-[11px] text-neutral-500">
               Share it with the recipient yourself (text/voice). They&apos;ll be prompted on the view page.
             </span>

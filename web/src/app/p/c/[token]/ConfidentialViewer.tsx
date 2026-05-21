@@ -5,12 +5,20 @@ import { useEffect, useRef, useState } from "react";
 // Client side of the /c/<token> view. Two flows:
 //   1. No passcode: body_text/body_html came down from SSR. We render
 //      immediately and POST { action: "view" } to bump the view counter.
-//   2. Passcode: SSR withheld the body. We render a 4-digit input, POST
-//      { action: "unlock", passcode }, and swap in the returned body.
+//   2. Passcode: SSR withheld the body. We render an 8-character alphanumeric
+//      passcode input, POST { action: "unlock", passcode }, and swap in the
+//      returned body.
 //
 // Throttling: passcode attempts are throttled at the route level (per-IP
 // token bucket). Locally we also rate-limit the submit button to one in-
 // flight POST at a time so a stuck network doesn't fire a burst of attempts.
+
+// Confidential passcode format (kept in sync with lib/send.ts): 8 characters
+// from an unambiguous uppercase alphabet (A–Z minus I/O/L, digits 2–9). The
+// recipient may type lowercase; we uppercase before validating/submitting.
+const PASSCODE_LENGTH = 8;
+const PASSCODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const PASSCODE_RE = new RegExp(`^[${PASSCODE_ALPHABET}]{${PASSCODE_LENGTH}}$`);
 
 interface Props {
   token: string;
@@ -39,7 +47,7 @@ export default function ConfidentialViewer({
     if (requiresPasscode) return;
     if (viewPingedRef.current) return;
     viewPingedRef.current = true;
-    void fetch(`/api/confidential/${encodeURIComponent(token)}`, {
+    void fetch(`/p/api/confidential/${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "view" }),
@@ -52,15 +60,15 @@ export default function ConfidentialViewer({
   async function unlock(e: React.FormEvent) {
     e.preventDefault();
     if (unlocking) return;
-    const cleaned = passcode.trim();
-    if (!/^\d{4}$/.test(cleaned)) {
-      setError("Enter the 4-digit code");
+    const cleaned = passcode.trim().toUpperCase();
+    if (!PASSCODE_RE.test(cleaned)) {
+      setError(`Enter the ${PASSCODE_LENGTH}-character code`);
       return;
     }
     setError(null);
     setUnlocking(true);
     try {
-      const res = await fetch(`/api/confidential/${encodeURIComponent(token)}`, {
+      const res = await fetch(`/p/api/confidential/${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "unlock", passcode: cleaned }),
@@ -121,25 +129,35 @@ export default function ConfidentialViewer({
     >
       <label className="block">
         <span className="text-xs uppercase tracking-wider text-neutral-500">
-          Enter the 4-digit passcode
+          Enter the {PASSCODE_LENGTH}-character passcode
         </span>
         <input
           type="text"
-          inputMode="numeric"
+          inputMode="text"
           autoComplete="one-time-code"
-          maxLength={4}
-          pattern="\d{4}"
+          autoCapitalize="characters"
+          spellCheck={false}
+          maxLength={PASSCODE_LENGTH}
           value={passcode}
-          onChange={e => setPasscode(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          onChange={e =>
+            setPasscode(
+              e.target.value
+                .toUpperCase()
+                .split("")
+                .filter(ch => PASSCODE_ALPHABET.includes(ch))
+                .join("")
+                .slice(0, PASSCODE_LENGTH),
+            )
+          }
           autoFocus
-          aria-label="4-digit passcode"
-          className="mt-1 block w-full sm:w-40 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-3 py-2 text-lg tracking-[0.4em] font-mono text-center focus:outline-none focus:border-[var(--color-brand)]"
+          aria-label={`${PASSCODE_LENGTH}-character passcode`}
+          className="mt-1 block w-full sm:w-52 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-3 py-2 text-lg tracking-[0.3em] font-mono text-center uppercase focus:outline-none focus:border-[var(--color-brand)]"
         />
       </label>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <button
         type="submit"
-        disabled={unlocking || passcode.length < 4}
+        disabled={unlocking || passcode.length < PASSCODE_LENGTH}
         className="rounded-md bg-[var(--color-brand)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {unlocking ? "Checking…" : "View message"}

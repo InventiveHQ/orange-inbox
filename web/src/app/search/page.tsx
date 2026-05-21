@@ -1,10 +1,77 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { listMailboxesForUser } from "@/lib/queries";
-import { searchThreads, type SearchResult } from "@/lib/search";
+import {
+  searchThreads,
+  SNIPPET_MARK_START,
+  SNIPPET_MARK_END,
+  type SearchResult,
+} from "@/lib/search";
 import { formatThreadDate, senderLabel } from "@/lib/format";
 import SearchBar from "@/components/SearchBar";
 import SaveSearchButton from "@/components/SaveSearchButton";
+
+// Tailwind classes for a highlighted match term. Kept as a constant so every
+// <mark> renderSnippet() produces is styled identically (these used to live in
+// an `[&>mark]:…` arbitrary-variant on the container back when the snippet was
+// injected as HTML).
+const SNIPPET_MARK_CLASS =
+  "bg-yellow-200 text-neutral-900 rounded-sm px-0.5 " +
+  "dark:bg-yellow-300/40 dark:text-neutral-100";
+
+/**
+ * Render an FTS5 `match_snippet` string as safe React nodes.
+ *
+ * `match_snippet` is RAW, attacker-controlled email text (see SearchResult in
+ * web/src/lib/search.ts). FTS5 snippet() does NOT HTML-escape it — it only
+ * inserts the SNIPPET_MARK_START / SNIPPET_MARK_END sentinel control
+ * characters around matched terms. It therefore MUST NEVER be passed to
+ * dangerouslySetInnerHTML: a subject/body like `<img src=x onerror=...>` would
+ * become live HTML and execute script in our origin.
+ *
+ * Instead we split on the sentinels and emit JSX: plain text segments render
+ * as `{seg}` (React auto-escapes them, so any attacker markup shows up as
+ * inert literal text) and segments that sat between a start and end sentinel
+ * render as real `<mark>` elements. The sentinels themselves never reach the
+ * DOM.
+ *
+ * Exported so any other `match_snippet` consumer renders it the same safe way.
+ */
+export function renderSnippet(snippet: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let rest = snippet;
+  let key = 0;
+
+  while (rest.length > 0) {
+    const start = rest.indexOf(SNIPPET_MARK_START);
+    if (start === -1) {
+      // No more highlights — the remainder is plain text.
+      nodes.push(rest);
+      break;
+    }
+    // Plain text before the highlight.
+    if (start > 0) nodes.push(rest.slice(0, start));
+
+    const afterStart = rest.slice(start + SNIPPET_MARK_START.length);
+    const end = afterStart.indexOf(SNIPPET_MARK_END);
+    if (end === -1) {
+      // Unbalanced sentinel (shouldn't happen) — render the rest as plain
+      // text rather than dropping it or guessing.
+      nodes.push(afterStart);
+      break;
+    }
+    const highlighted = afterStart.slice(0, end);
+    nodes.push(
+      <mark key={`m${key++}`} className={SNIPPET_MARK_CLASS}>
+        {highlighted}
+      </mark>,
+    );
+    rest = afterStart.slice(end + SNIPPET_MARK_END.length);
+  }
+
+  return nodes;
+}
 
 interface Props {
   searchParams: Promise<{ q?: string | string[]; scope?: string | string[] }>;
@@ -85,13 +152,17 @@ function ResultList({ results, query }: { results: SearchResult[]; query: string
                 <div className="truncate text-sm text-neutral-700 dark:text-neutral-300">
                   {subject}
                 </div>
-                <div
-                  className="mt-0.5 text-xs text-neutral-500 line-clamp-2 [&>mark]:bg-yellow-200 [&>mark]:text-neutral-900 [&>mark]:rounded-sm [&>mark]:px-0.5 dark:[&>mark]:bg-yellow-300/40 dark:[&>mark]:text-neutral-100"
-                  // Safe: snippet() returns plain text from the indexed columns
-                  // with literal `<mark>...</mark>` markers we passed in. There
-                  // is no other HTML in the string. See web/src/lib/search.ts.
-                  dangerouslySetInnerHTML={{ __html: r.match_snippet }}
-                />
+                {/*
+                  match_snippet is RAW attacker-controlled email text — FTS5
+                  snippet() does not HTML-escape it. renderSnippet() splits it
+                  on non-HTML sentinel markers and returns auto-escaped React
+                  nodes (plain text + real <mark> elements), so any markup in
+                  the email body renders as inert literal text. NEVER use
+                  dangerouslySetInnerHTML here. See web/src/lib/search.ts.
+                */}
+                <div className="mt-0.5 text-xs text-neutral-500 line-clamp-2">
+                  {renderSnippet(r.match_snippet)}
+                </div>
                 <div className="mt-1 text-[10px] uppercase tracking-wider text-neutral-400">
                   {r.mailbox_local_part}@{r.domain_name}
                 </div>
