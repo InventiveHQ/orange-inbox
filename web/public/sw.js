@@ -1,7 +1,7 @@
 // orange mail service worker.
 // VERSION is the source of truth for the cache key; rewritten by
 // scripts/bump-version.mjs alongside src/lib/version.ts.
-const VERSION = 'v0.2.5';
+const VERSION = 'v0.2.6';
 const CACHE = `orange-${VERSION}`;
 // Separate runtime cache for stale-while-revalidate'd thread/message JSON.
 // Keeping it out of the precache means a SKIP_WAITING bump doesn't blow away
