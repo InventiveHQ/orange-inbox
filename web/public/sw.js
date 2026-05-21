@@ -21,6 +21,15 @@ const SHELL = [
   '/favicon-32.png',
 ];
 
+// How long a navigation fetch may run before we fall back to the cached app
+// shell. Without this cap a slow or flaky connection leaves the PWA on a
+// blank screen until the browser's own (30 s+) network timeout — the
+// previous handler used `.catch()` alone, which only fires on a *hard*
+// failure, never on a merely-slow connection. 3 s is short enough that a
+// stuck launch feels recoverable, long enough that a healthy connection
+// almost always wins the race and serves fresh HTML.
+const NAV_TIMEOUT_MS = 3000;
+
 // IndexedDB store for queued outbound messages. Schema:
 //   { id (autoinc), createdAt, payload, status, lastError, attempts }
 // payload is the verbatim JSON body the composer would have POSTed to
@@ -366,6 +375,53 @@ function isOfflineCacheable(url) {
   return false;
 }
 
+// Network-first-with-timeout for HTML navigations. On a healthy connection
+// the network fetch wins the race so a fresh deploy is still picked up
+// immediately; on a slow/flaky one we stop waiting after NAV_TIMEOUT_MS and
+// serve the precached shell, which hydrates and lets the app take over
+// client-side rather than the user staring at a blank screen. A hard
+// network failure falls back the same way.
+async function navigationResponse(event, req) {
+  const fallback = () =>
+    caches
+      .match(req)
+      .then((r) => r || caches.match('/inbox/all'))
+      .then((r) => r || caches.match('/'));
+
+  const network = fetch(req).then((res) => {
+    // Keep the precached shell entries fresh for the next cold start, but
+    // only for the fixed SHELL routes so CACHE stays bounded.
+    if (res.ok && SHELL.includes(new URL(req.url).pathname)) {
+      const copy = res.clone();
+      event.waitUntil(
+        caches
+          .open(CACHE)
+          .then((c) => c.put(req, copy))
+          .catch(() => {}),
+      );
+    }
+    return res;
+  });
+
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      // Nothing cached yet (first-ever launch) → keep waiting on the network;
+      // there's no better answer to give.
+      resolve(fallback().then((r) => r || network));
+    }, NAV_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([network, timeout]);
+  } catch {
+    // Hard network failure before the timeout fired — serve the shell.
+    return (await fallback()) || network;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   const url = new URL(req.url);
@@ -385,8 +441,7 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
 
   if (req.mode === 'navigate') {
-    // Network-first for HTML so a fresh deploy is picked up immediately.
-    e.respondWith(fetch(req).catch(() => caches.match('/inbox/all') || caches.match('/')));
+    e.respondWith(navigationResponse(e, req));
     return;
   }
   // Cache-first for static assets we precached.

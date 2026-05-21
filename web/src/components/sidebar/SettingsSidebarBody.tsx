@@ -67,8 +67,7 @@ export default function SettingsSidebarBody({
       {sections.map(s => (
         <SectionLink
           key={s.id}
-          id={s.id}
-          label={s.label}
+          section={s}
           active={active === s.id}
           onActivate={() => setActive(s.id)}
         />
@@ -78,34 +77,47 @@ export default function SettingsSidebarBody({
 }
 
 function SectionLink({
-  id,
-  label,
+  section,
   active,
   onActivate,
 }: {
-  id: string;
-  label: string;
+  section: SettingsSection;
   active: boolean;
   onActivate: () => void;
 }) {
+  const className = `block rounded-md px-3 py-1.5 text-sm transition-colors ${
+    active
+      ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
+      : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
+  }`;
+
+  // Link-type entry: a full-page navigation to another route, not a
+  // scroll-to-anchor within SettingsManager. The ↗ hints it leaves the page.
+  if (section.href) {
+    return (
+      <a href={section.href} className={className}>
+        {section.label}
+        <span aria-hidden className="ml-1 text-neutral-400">
+          ↗
+        </span>
+      </a>
+    );
+  }
+
   return (
     <a
-      href={`#${id}`}
+      href={`#${section.id}`}
       onClick={e => {
         e.preventDefault();
-        const el = document.getElementById(id);
+        const el = document.getElementById(section.id);
         if (!el) return;
         el.scrollIntoView({ behavior: "smooth", block: "start" });
-        history.replaceState(null, "", `#${id}`);
+        history.replaceState(null, "", `#${section.id}`);
         onActivate();
       }}
-      className={`block rounded-md px-3 py-1.5 text-sm transition-colors ${
-        active
-          ? "bg-[var(--color-brand)]/15 text-[var(--color-brand)] font-medium"
-          : "text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-      }`}
+      className={className}
     >
-      {label}
+      {section.label}
     </a>
   );
 }

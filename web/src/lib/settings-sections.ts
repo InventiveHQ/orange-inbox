@@ -4,11 +4,15 @@
 //
 // Each entry's `id` is the anchor of the corresponding section in
 // SettingsManager.tsx — clicking a drawer entry scrolls that anchor
-// into view.
+// into view. Entries with an `href` instead navigate to that route.
 
 export interface SettingsSection {
   id: string;
   label: string;
+  // When set, the entry navigates to this route instead of scrolling to an
+  // in-page anchor. Used for full-page sub-areas (e.g. Scheduling) that
+  // aren't sections of SettingsManager.
+  href?: string;
 }
 
 export interface SettingsSectionFlags {
@@ -37,6 +41,7 @@ export function buildSettingsSections({
     { id: "notifications", label: "Notifications" },
     ...(hasAuditAccess ? [{ id: "audit-log", label: "Audit log" }] : []),
     { id: "calendar-subscription", label: "Calendar subscription" },
+    { id: "scheduling", label: "Scheduling", href: "/scheduling" },
     { id: "export", label: "Import / Export" },
     ...(isAdmin ? [{ id: "storage", label: "Storage" }] : []),
     { id: "appearance", label: "Appearance" },
