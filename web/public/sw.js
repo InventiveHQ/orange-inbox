@@ -1,7 +1,7 @@
 // orange mail service worker.
 // VERSION is the source of truth for the cache key; rewritten by
 // scripts/bump-version.mjs alongside src/lib/version.ts.
-const VERSION = 'v0.2.6';
+const VERSION = 'v0.2.7';
 const CACHE = `orange-${VERSION}`;
 // Separate runtime cache for stale-while-revalidate'd thread/message JSON.
 // Keeping it out of the precache means a SKIP_WAITING bump doesn't blow away
@@ -684,3 +684,50 @@ async function openThread(url) {
   }
   self.clients.openWindow(url);
 }
+
+// ─── Push subscription renewal ──────────────────────────────────────────────
+// Browsers — iOS Safari especially — periodically rotate or expire the push
+// subscription, particularly after a PWA has sat unused for a while. When
+// that happens the old endpoint starts returning 404/410, the server prunes
+// the stored row (see api/internal/notify-new-message), and with nothing to
+// re-create it, notifications silently stop for good.
+//
+// This handler re-subscribes and re-registers the fresh subscription with
+// the server. iOS doesn't reliably fire `pushsubscriptionchange`, so the app
+// also re-syncs on launch from the page side (see usePushResync) — the two
+// together cover both engines.
+
+function b64uToBytes(b64u) {
+  const pad = b64u.length % 4 === 0 ? '' : '='.repeat(4 - (b64u.length % 4));
+  const bin = atob(b64u.replace(/-/g, '+').replace(/_/g, '/') + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function renewPushSubscription(existing) {
+  // Prefer a subscription the event handed us; otherwise re-create one with
+  // the server's VAPID key.
+  let sub = existing || (await self.registration.pushManager.getSubscription());
+  if (!sub) {
+    const vapidRes = await fetch('/api/push/vapid', { credentials: 'include' });
+    if (!vapidRes.ok) return;
+    const { publicKey } = await vapidRes.json();
+    sub = await self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64uToBytes(publicKey),
+    });
+  }
+  await fetch('/api/push/subscribe', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ subscription: sub.toJSON() }),
+  });
+}
+
+self.addEventListener('pushsubscriptionchange', (e) => {
+  // `newSubscription` is populated on Chromium; absent on others, where
+  // renewPushSubscription re-subscribes from scratch.
+  e.waitUntil(renewPushSubscription(e.newSubscription).catch(() => {}));
+});
