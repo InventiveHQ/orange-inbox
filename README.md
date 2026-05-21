@@ -6,8 +6,8 @@ and want a real inbox UI instead of forwarding everything to a third party.
 
 > Status: actively developed. The core inbox — receive, read, compose, reply,
 > labels, search, scheduled send, undo send, drafts, templates, push
-> notifications, PWA install — is working end-to-end. Versions are still
-> 0.2.x; expect rough edges.
+> notifications, PWA install, and Calendly-style meeting booking — is
+> working end-to-end. Versions are still 0.2.x; expect rough edges.
 
 ## Try it
 
@@ -33,6 +33,9 @@ below.
 - Outbound mail uses the
   [`send_email` binding](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/),
   so SPF/DKIM/DMARC are managed by Cloudflare.
+- A **meeting-booking** layer on the native calendar — public, Calendly-style
+  booking links with multi-calendar availability and Google Calendar + Meet
+  (admin at `/scheduling`; configured in [Post-deploy setup](#post-deploy-setup)).
 
 Multi-domain is a first-class concern: one deployment can serve mail for many
 domains, with both a unified inbox and per-domain silos.
@@ -254,6 +257,44 @@ Send mail to `anything@yourdomain.com`, watch the tail print the parsed
 `from`/`to`/`mailbox`/`thread` IDs, then refresh the app — the thread
 appears at the top of the list.
 
+### 4. Scheduling — meeting booking
+
+The booking feature — admin UI at `/scheduling`, public links at
+`/p/book/<slug>` — works once migration `0053_booking.sql` is applied.
+`./scripts/setup.sh` applies it automatically; or run
+`cd web && npx wrangler d1 migrations apply orange-inbox --remote`. The public
+booking pages live under `/p/*`, so the step-2 Access Bypass already covers
+them — no extra Access config. `/scheduling` and `/api/scheduling/*` (including
+the Google OAuth callback) stay gated behind Access as admin-only.
+
+Two integrations are optional:
+
+**Google Calendar + Meet** — lets booking links pull availability from Google
+calendars and auto-generate Meet links. Create a Google Cloud OAuth client
+(Calendar API enabled; authorized redirect URI
+`https://<host>/api/scheduling/connections/google/callback`), then:
+
+```sh
+cd web
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+Without these, booking links still work with Orange Mail's own calendars —
+Google is simply unavailable. OAuth tokens are stored AES-GCM encrypted.
+
+**Turnstile** — bot protection on the public booking form. Set both with
+`npx wrangler secret put` (run from `web/`):
+
+```sh
+npx wrangler secret put TURNSTILE_SITE_KEY
+npx wrangler secret put TURNSTILE_SECRET_KEY
+```
+
+Until set, the form works without a challenge.
+
+Full reference: [`web/SCHEDULING.md`](./web/SCHEDULING.md).
+
 ## Installing on your phone
 
 orange-inbox ships as a Progressive Web App. Once installed it launches with
@@ -363,6 +404,7 @@ manual `byte_estimate` refresh — live in
 - [x] Two-tier roles (Admin/User) + per-mailbox member management.
 - [x] Mobile shell + in-app help.
 - [x] One-click deploy button.
+- [x] Calendly-style meeting booking — multi-calendar availability, Google Calendar + Meet, public booking pages.
 
 ## License
 
