@@ -8,6 +8,12 @@ export interface Env {
   // Optional Slack-compatible webhook for operational alerts. Set via
   // `wrangler secret put ALERT_WEBHOOK_URL` to enable; unset = no-op.
   ALERT_WEBHOOK_URL?: string;
+  // The authserv-id our trusted MX (Cloudflare) stamps into the
+  // Authentication-Results header it prepends — i.e. the token before the
+  // first `;` in that header. parse.ts pins auth-results selection to this
+  // value so an attacker-embedded Authentication-Results header is ignored.
+  // Empty/unset = fall back to "only the first header" (Cloudflare prepends).
+  TRUSTED_AUTHSERV_ID?: string;
 }
 
 export interface AddressInfo {

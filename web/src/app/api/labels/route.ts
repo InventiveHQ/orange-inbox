@@ -51,14 +51,20 @@ export async function POST(req: NextRequest) {
     if (mailboxId && !user.is_admin) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
-    // Global labels (mailbox_id null) — v1: any signed-in user can create.
-    // See web/src/lib/labels.ts header for the multi-user gap.
+    // Global labels (mailbox_id null): any signed-in user may create one, but
+    // they become its owner via created_by_user_id, so only they (or an
+    // admin) can later rename/delete it — see canManageLabel(). Mailbox-scoped
+    // labels are admin-only (gated above); their owner column stays NULL since
+    // they're managed via mailbox access rather than label ownership.
+    const createdByUserId = mailboxId == null ? user.id : null;
 
     const id = crypto.randomUUID();
     try {
       await getDb()
-        .prepare("INSERT INTO labels (id, name, color, mailbox_id) VALUES (?, ?, ?, ?)")
-        .bind(id, name, color, mailboxId)
+        .prepare(
+          "INSERT INTO labels (id, name, color, mailbox_id, created_by_user_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(id, name, color, mailboxId, createdByUserId)
         .run();
     } catch (err) {
       // UNIQUE(mailbox_id, name) violation surfaces as a SQLite constraint

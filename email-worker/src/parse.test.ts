@@ -197,6 +197,128 @@ describe("parseEmail", () => {
     expect(parsed.attachments[0].bytes.byteLength).toBeGreaterThan(0);
   });
 
+  // ─── Authentication-Results spoofing defense ──────────────────────────────
+  //
+  // The raw message is fully attacker-controlled. A spoofer can prepend their
+  // own Authentication-Results header(s) with forged "pass" verdicts. parse.ts
+  // must consider only the header stamped by the trusted MX — Cloudflare
+  // prepends its own, so the *first* Authentication-Results header is trusted.
+
+  it("ignores an attacker-embedded Authentication-Results header (no trusted id configured)", async () => {
+    // First header = trusted MX (Cloudflare). It fails DMARC. The attacker's
+    // second header claims a green pass for a domain they don't own. Because
+    // we never merge headers and trust only the first, the forged pass must
+    // not leak through.
+    const eml = [
+      "Authentication-Results: mx.cloudflare.net; spf=fail smtp.mailfrom=evil.test;" +
+        " dkim=fail; dmarc=fail header.from=victim-bank.example",
+      "Authentication-Results: attacker-controlled; spf=pass smtp.mailfrom=victim-bank.example;" +
+        " dkim=pass header.d=victim-bank.example; dmarc=pass header.from=victim-bank.example",
+      "From: Support <support@victim-bank.example>",
+      "To: bob@example.org",
+      "Subject: Forged",
+      "Message-ID: <spoof@evil.test>",
+      "Date: Fri, 9 May 2026 10:00:00 +0000",
+      "",
+      "body",
+      "",
+    ].join("\r\n");
+
+    const parsed = await parseEmail(streamOf(eml));
+    // Only the first (trusted) header is honored — all three verdicts fail.
+    expect(parsed.authResults?.spf).toBe("fail");
+    expect(parsed.authResults?.dkim).toBe("fail");
+    expect(parsed.authResults?.dmarc).toBe("fail");
+  });
+
+  it("does not let an attacker fill a method the trusted header omits", async () => {
+    // Classic bypass: Cloudflare's header omits dmarc; the attacker supplies
+    // a dmarc=pass in their own header. Merging would accept it — selecting a
+    // single header must instead leave dmarc as the default "none".
+    const eml = [
+      "Authentication-Results: mx.cloudflare.net; spf=pass smtp.mailfrom=evil.test;" +
+        " dkim=pass header.d=evil.test",
+      "Authentication-Results: forged.invalid; dmarc=pass header.from=victim-bank.example",
+      "From: support@victim-bank.example",
+      "To: bob@example.org",
+      "Subject: Forged dmarc",
+      "Message-ID: <spoof2@evil.test>",
+      "Date: Fri, 9 May 2026 10:00:00 +0000",
+      "",
+      "body",
+      "",
+    ].join("\r\n");
+
+    const parsed = await parseEmail(streamOf(eml));
+    expect(parsed.authResults?.dmarc).toBe("none");
+    // from_domain comes only from the trusted header (no header.from there).
+    expect(parsed.authResults?.from_domain).not.toBe("victim-bank.example");
+  });
+
+  it("selects the header matching the configured TRUSTED_AUTHSERV_ID", async () => {
+    // Here the attacker's header is listed FIRST. Pinning to the trusted
+    // authserv-id must still pick Cloudflare's header, not headers[0].
+    const eml = [
+      "Authentication-Results: attacker.invalid; spf=pass smtp.mailfrom=victim.example;" +
+        " dkim=pass header.d=victim.example; dmarc=pass header.from=victim.example",
+      "Authentication-Results: mx.cloudflare.net; spf=fail smtp.mailfrom=evil.test;" +
+        " dkim=fail; dmarc=fail header.from=evil.test",
+      "From: support@victim.example",
+      "To: bob@example.org",
+      "Subject: Forged with id",
+      "Message-ID: <spoof3@evil.test>",
+      "Date: Fri, 9 May 2026 10:00:00 +0000",
+      "",
+      "body",
+      "",
+    ].join("\r\n");
+
+    const parsed = await parseEmail(streamOf(eml), "mx.cloudflare.net");
+    expect(parsed.authResults?.spf).toBe("fail");
+    expect(parsed.authResults?.dmarc).toBe("fail");
+    expect(parsed.authResults?.from_domain).toBe("evil.test");
+  });
+
+  it("returns no trusted auth results when TRUSTED_AUTHSERV_ID matches nothing", async () => {
+    // The configured trusted authserv-id appears in no header — we must NOT
+    // fall back to attacker data; auth results become null (unknown).
+    const eml = [
+      "Authentication-Results: attacker.invalid; spf=pass; dkim=pass; dmarc=pass",
+      "From: support@victim.example",
+      "To: bob@example.org",
+      "Subject: No trusted header",
+      "Message-ID: <spoof4@evil.test>",
+      "Date: Fri, 9 May 2026 10:00:00 +0000",
+      "",
+      "body",
+      "",
+    ].join("\r\n");
+
+    const parsed = await parseEmail(streamOf(eml), "mx.cloudflare.net");
+    expect(parsed.authResults).toBeNull();
+  });
+
+  it("parses a genuine single Authentication-Results header", async () => {
+    const eml = [
+      "Authentication-Results: mx.cloudflare.net; spf=pass smtp.mailfrom=good.example;" +
+        " dkim=pass header.d=good.example; dmarc=pass header.from=good.example",
+      "From: Alice <alice@good.example>",
+      "To: bob@example.org",
+      "Subject: Legit",
+      "Message-ID: <legit@good.example>",
+      "Date: Fri, 9 May 2026 10:00:00 +0000",
+      "",
+      "body",
+      "",
+    ].join("\r\n");
+
+    const parsed = await parseEmail(streamOf(eml), "mx.cloudflare.net");
+    expect(parsed.authResults?.spf).toBe("pass");
+    expect(parsed.authResults?.dkim).toBe("pass");
+    expect(parsed.authResults?.dmarc).toBe("pass");
+    expect(parsed.authResults?.from_domain).toBe("good.example");
+  });
+
   it("falls back to a sane date when the Date header is missing or malformed", async () => {
     const eml = [
       "From: alice@example.com",

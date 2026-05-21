@@ -25,6 +25,20 @@ import { createShareLink, DEFAULT_SHARE_TTL_SECONDS } from "./share-links";
 // of that). Single constant so it's trivial to tune later.
 const MAIL_DROP_THRESHOLD_BYTES = 10 * 1024 * 1024;
 
+// #66 Confidential mode — server-side ceiling on how far in the future a
+// confidential message may be set to expire. `expires_at` is client-supplied,
+// so without a cap a caller could mint an effectively-permanent off-server
+// store. 30 days matches the longest option the composer offers (1/7/30d).
+const CONFIDENTIAL_MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+// #66 Confidential passcode alphabet. Uppercase letters + digits with the
+// visually ambiguous glyphs removed (no O/0, I/1/L) so a recipient reading
+// the code off a phone screen or sticky note can't fat-finger it. 31 symbols.
+const CONFIDENTIAL_PASSCODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+// 8 chars from a 31-symbol alphabet ≈ log2(31^8) ≈ 39.6 bits of entropy —
+// ~4.3 billion combinations, vs. 10,000 for the old 4-digit PIN.
+const CONFIDENTIAL_PASSCODE_LENGTH = 8;
+
 // Cloudflare's send_email binding has a structured-builder overload, so we
 // don't need the `cloudflare:email` runtime module or mimetext at all — the
 // binding builds MIME for us. Avoiding `cloudflare:email` also dodges a chain
@@ -54,8 +68,10 @@ export interface SendInput {
   // placeholder body ("{sender} sent you a confidential message — view at
   // <url>") rather than `body` itself; the real body lives in the
   // confidential_messages row keyed by the generated token, viewable only
-  // via the public /c/<token> URL. expiresAt is unix seconds; passcode is
-  // an optional 4-digit string the recipient must enter on the view page.
+  // via the public /c/<token> URL. expiresAt is unix seconds (capped at
+  // CONFIDENTIAL_MAX_TTL_SECONDS in the future); passcode is an optional
+  // high-entropy alphanumeric string the recipient must enter on the view
+  // page. When omitted, the helper here can mint one.
   confidential?: {
     expiresAt: number;
     passcode?: string | null;
@@ -234,9 +250,18 @@ export async function sendMessage(userId: string, input: SendInput): Promise<Sen
     if (!Number.isFinite(cExpires) || cExpires <= now) {
       throw new SendError("invalid", "Confidential expiry must be in the future.");
     }
+    if (cExpires > now + CONFIDENTIAL_MAX_TTL_SECONDS) {
+      throw new SendError(
+        "invalid",
+        "Confidential expiry can be at most 30 days in the future.",
+      );
+    }
     const cPasscode = normaliseConfidentialPasscode(input.confidential.passcode);
     if (cPasscode === "invalid") {
-      throw new SendError("invalid", "Passcode must be 4 digits.");
+      throw new SendError(
+        "invalid",
+        `Passcode must be ${CONFIDENTIAL_PASSCODE_LENGTH} characters (letters and digits).`,
+      );
     }
     const wasHtml = looksLikeHtml(input.body);
     confidentialRecord = {
@@ -767,17 +792,45 @@ function generateOpaqueToken(): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-// Returns the validated 4-digit string, null when the caller didn't pass one,
-// or the literal string "invalid" so the caller can distinguish "not set"
-// from "set but malformed". Trims so a trailing newline from a copy-paste
-// doesn't reject the input.
+// Generate a confidential-message passcode with a CSPRNG. Draws
+// CONFIDENTIAL_PASSCODE_LENGTH characters uniformly from
+// CONFIDENTIAL_PASSCODE_ALPHABET (uppercase, unambiguous). We over-sample
+// random bytes and reject any byte >= the largest multiple of the alphabet
+// size so every symbol is equally likely (no modulo bias).
+export function generateConfidentialPasscode(): string {
+  const alphabet = CONFIDENTIAL_PASSCODE_ALPHABET;
+  const n = alphabet.length;
+  const limit = 256 - (256 % n); // largest multiple of n that fits in a byte
+  let out = "";
+  while (out.length < CONFIDENTIAL_PASSCODE_LENGTH) {
+    const buf = new Uint8Array(CONFIDENTIAL_PASSCODE_LENGTH);
+    crypto.getRandomValues(buf);
+    for (const b of buf) {
+      if (b >= limit) continue; // reject to avoid modulo bias
+      out += alphabet[b % n];
+      if (out.length === CONFIDENTIAL_PASSCODE_LENGTH) break;
+    }
+  }
+  return out;
+}
+
+// Returns the validated, canonicalised (uppercased) passcode string, null
+// when the caller didn't pass one, or the literal string "invalid" so the
+// caller can distinguish "not set" from "set but malformed". Trims so a
+// trailing newline from a copy-paste doesn't reject the input, and uppercases
+// so lowercase entry is accepted while storage stays canonical. The accepted
+// shape is CONFIDENTIAL_PASSCODE_LENGTH characters drawn from the unambiguous
+// alphabet (A–Z minus I/O/L, 2–9).
 function normaliseConfidentialPasscode(
   raw: string | null | undefined,
 ): string | null | "invalid" {
   if (raw == null) return null;
-  const trimmed = String(raw).trim();
+  const trimmed = String(raw).trim().toUpperCase();
   if (trimmed === "") return null;
-  if (!/^\d{4}$/.test(trimmed)) return "invalid";
+  const re = new RegExp(
+    `^[${CONFIDENTIAL_PASSCODE_ALPHABET}]{${CONFIDENTIAL_PASSCODE_LENGTH}}$`,
+  );
+  if (!re.test(trimmed)) return "invalid";
   return trimmed;
 }
 
@@ -800,7 +853,7 @@ function buildConfidentialPlaceholderHtml(
     minute: "2-digit",
   });
   const passLine = hasPasscode
-    ? `<p style="margin:0 0 8px 0;color:#374151;font-size:13px;">The sender will share a 4-digit passcode out-of-band — you'll be prompted for it.</p>`
+    ? `<p style="margin:0 0 8px 0;color:#374151;font-size:13px;">The sender will share a passcode out-of-band — you'll be prompted for it.</p>`
     : "";
   return `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:520px;">
   <p style="margin:0 0 12px 0;"><strong>${escapeHtml(senderLabel)}</strong> sent you a confidential message.</p>

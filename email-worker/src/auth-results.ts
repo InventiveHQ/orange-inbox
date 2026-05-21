@@ -1,10 +1,17 @@
 // RFC 8601 Authentication-Results parser.
 //
+// SECURITY: this parser operates on exactly ONE Authentication-Results
+// header value — the one stamped by our trusted mail receiver. The caller
+// (parse.ts) is responsible for selecting that single header and MUST NOT
+// pass an attacker-influenced or `;`-merged value. An inbound message can
+// carry attacker-authored Authentication-Results lines; merging them would
+// let a forged "pass" verdict win. Keep this function single-header.
+//
 // We only care about the spf / dkim / dmarc verdicts and the from-domain
 // reported by DMARC (header.from=…). The header has a fairly forgiving
-// grammar — methods are separated by `;`, each method has the form
-// `method=result key=val key=val …`, and `(comments)` can show up at most
-// places. We tolerate:
+// grammar — the value starts with an authserv-id, then methods separated
+// by `;`, each method has the form `method=result key=val key=val …`, and
+// `(comments)` can show up at most places. We tolerate:
 //   * leading authserv-id segment (the first `;`-delimited chunk that has
 //     no `=` outside parens)
 //   * arbitrary whitespace/folding (postal-mime already unfolds for us)
@@ -151,9 +158,35 @@ function parseChunk(chunk: string): MethodChunk | null {
 }
 
 /**
- * Parse one or more Authentication-Results header values. Pass either a
- * single header value or pre-joined values (separated by `\n` or `;` —
- * the function splits on `;` either way).
+ * Extract the authserv-id from a SINGLE Authentication-Results header
+ * value — the first `;`-delimited segment, which per RFC 8601 is the
+ * authserv-id (an unkeyed token, optionally followed by an ` 1` version).
+ * Comments are stripped first. Returned lowercased for case-insensitive
+ * comparison; null when the header has no leadable authserv-id token.
+ *
+ * Note: a method chunk (`spf=pass …`) contains `=`, so if the first
+ * segment contains `=` the header has no authserv-id and we return null.
+ */
+export function extractAuthservId(headerValue: string | undefined | null): string | null {
+  if (!headerValue) return null;
+  const cleaned = stripComments(headerValue).trim();
+  if (!cleaned) return null;
+  const first = cleaned.split(";", 1)[0]?.trim();
+  if (!first) return null;
+  // A method chunk has `key=value`; the authserv-id segment does not.
+  if (first.includes("=")) return null;
+  // The authserv-id may be followed by an optional version token
+  // (`authserv-id 1`). Take the first whitespace-delimited token.
+  const token = first.split(/\s+/)[0];
+  return token ? token.toLowerCase() : null;
+}
+
+/**
+ * Parse a SINGLE Authentication-Results header value. The caller MUST
+ * pass exactly one header value (the one stamped by the trusted MX) —
+ * never a `;`-merge of multiple headers, since attacker-supplied headers
+ * would then be honored. The function splits the value on `;` to walk
+ * the leading authserv-id segment and each `method=result` chunk.
  *
  * Returns null when there is no spf / dkim / dmarc verdict at all.
  * Otherwise missing methods default to "none" — this keeps the UI's
@@ -164,8 +197,9 @@ export function parseAuthenticationResults(headerValue: string | undefined | nul
   const cleaned = stripComments(headerValue).trim();
   if (!cleaned) return null;
 
-  // Split on `;`. The first segment is typically the authserv-id and has
-  // no `=` (e.g. "mx.example.com"). Method chunks all contain `=`.
+  // Split on `;`. The first segment is the authserv-id and has no `=`
+  // (e.g. "mx.example.com"); parseChunk returns null for it so it is
+  // skipped. Method chunks all contain `=`.
   const segments = cleaned.split(";").map(s => s.trim()).filter(Boolean);
 
   const verdicts: Record<string, AuthVerdict> = {};

@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { UnauthenticatedError, requireUser } from "@/lib/auth";
 import { SendError, sendMessage } from "@/lib/send";
 
+// #66 Confidential mode — defence-in-depth upper bound on the client-supplied
+// `expires_at`. send.ts enforces the same 30-day cap as the authoritative
+// check (it covers every confidential creation path); we mirror it here so an
+// obviously-out-of-range value is rejected with a clean 400 before send.ts.
+const CONFIDENTIAL_MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 interface Body {
   from_mailbox_id?: string;
   // Optional promoted-alias id. When set, the From line uses the alias's
@@ -17,8 +23,9 @@ interface Body {
   reply_to_message_id?: string;
   draft_id?: string;
   attachment_ids?: string[];
-  // #66 Confidential mode. expires_at is unix seconds, passcode is an
-  // optional 4-digit string. Empty/missing passcode means "no prompt".
+  // #66 Confidential mode. expires_at is unix seconds (capped at 30 days
+  // out), passcode is an optional high-entropy alphanumeric string.
+  // Empty/missing passcode means "no prompt".
   confidential?: {
     expires_at?: number;
     passcode?: string | null;
@@ -44,10 +51,17 @@ export async function POST(req: NextRequest) {
     // malformed input here to keep the SendError path clean.
     let confidential: { expiresAt: number; passcode?: string | null } | undefined;
     if (b.confidential) {
+      const nowSec = Math.floor(Date.now() / 1000);
       const expires = Number(b.confidential.expires_at);
-      if (!Number.isFinite(expires) || expires <= Math.floor(Date.now() / 1000)) {
+      if (!Number.isFinite(expires) || expires <= nowSec) {
         return NextResponse.json(
           { error: "confidential.expires_at must be a future unix timestamp" },
+          { status: 400 },
+        );
+      }
+      if (expires > nowSec + CONFIDENTIAL_MAX_TTL_SECONDS) {
+        return NextResponse.json(
+          { error: "confidential.expires_at can be at most 30 days in the future" },
           { status: 400 },
         );
       }

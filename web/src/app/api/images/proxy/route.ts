@@ -13,6 +13,18 @@ const FETCH_TIMEOUT_MS = 10_000;
 // more metadata than this even when heavily compressed).
 const TRACKER_BYTE_THRESHOLD = 200;
 
+// Strict allowlist of raster image MIME types we are willing to relay.
+// Deliberately excludes image/svg+xml: an SVG is an XML document that can
+// embed <script>, and since the proxy serves bytes from the app's own
+// origin, a top-level-loaded malicious SVG would execute script as us.
+const ALLOWED_CONTENT_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+]);
+
 // GET /api/images/proxy?url=<encoded http(s) url>
 //
 // Authenticated image relay used to render <img src="http://..."> in email
@@ -98,8 +110,14 @@ export async function GET(req: Request) {
     );
   }
 
-  const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
-  if (!contentType.startsWith("image/")) {
+  // Normalise the upstream content type: lowercase, strip any `;`-parameter
+  // suffix (e.g. "image/jpeg; charset=..."), and trim whitespace before
+  // checking it against the raster allowlist.
+  const contentType = (upstream.headers.get("content-type") || "")
+    .toLowerCase()
+    .split(";")[0]
+    .trim();
+  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
     return NextResponse.json({ error: "not_an_image" }, { status: 415 });
   }
 
@@ -144,6 +162,12 @@ export async function GET(req: Request) {
       "Cross-Origin-Resource-Policy": "cross-origin",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
+      // Defence in depth: even though the allowlist already excludes SVG,
+      // neuter any script/active content if a proxied byte stream is ever
+      // loaded as a top-level document, and force the browser to render
+      // (not download) the asset.
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Content-Disposition": "inline",
     },
   });
 }

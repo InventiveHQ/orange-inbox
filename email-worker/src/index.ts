@@ -19,7 +19,7 @@ export default {
       const [forParse, forRaw] = message.raw.tee();
       const rawBytes = await new Response(forRaw).arrayBuffer();
 
-      const parsed = await parseEmail(forParse);
+      const parsed = await parseEmail(forParse, env.TRUSTED_AUTHSERV_ID);
       const thread = await findOrCreateThread(env, recipient.mailboxId, parsed);
       const result = await storeMessage(env, ctx, recipient, thread, parsed, rawBytes);
 

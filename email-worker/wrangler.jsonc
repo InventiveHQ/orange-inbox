@@ -46,4 +46,22 @@
   // but we still gate /api/internal/dispatch-scheduled with this so a future
   // misconfiguration doesn't expose it. For local dev, put a matching value
   // in web/.dev.vars and email-worker/.dev.vars.
+
+  "vars": {
+    // SECURITY: authserv-id of the trusted mail receiver. parse.ts pins
+    // Authentication-Results selection to this value so an attacker who
+    // embeds their own Authentication-Results header in the raw message
+    // cannot forge SPF/DKIM/DMARC verdicts.
+    //
+    // Set this to the authserv-id your MX stamps — the token immediately
+    // before the first `;` in the Authentication-Results header your
+    // receiver (Cloudflare Email Routing) prepends to inbound mail. Inspect
+    // a delivered message's raw source to find it.
+    //
+    // Leave empty ONLY if you accept the weaker fallback: parse.ts will then
+    // trust whichever Authentication-Results header appears first (Cloudflare
+    // prepends its own, so that is normally the trusted one). Setting an
+    // explicit value is strongly recommended.
+    "TRUSTED_AUTHSERV_ID": ""
+  }
 }
