@@ -1738,7 +1738,7 @@ interface IcsTokenInfo {
 // "Calendar subscription" card — exposes the user's webcal:// feed URL so
 // they can paste it into Google Calendar, Apple Calendar, Outlook, etc.
 //
-// Lazy-mints on first view (the GET /api/calendar/ics/tokens endpoint
+// Lazy-mints on first view (the GET /api/calendar/subscription endpoint
 // auto-creates a token if there isn't one). Rotation revokes the old token
 // and mints a new one in a single POST.
 function CalendarSubscriptionSection({ id }: { id: string }) {
@@ -1753,7 +1753,7 @@ function CalendarSubscriptionSection({ id }: { id: string }) {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/calendar/ics/tokens");
+        const res = await fetch("/api/calendar/subscription");
         if (cancelled) return;
         if (!res.ok) {
           setError(`Load failed (${res.status})`);
@@ -1784,7 +1784,7 @@ function CalendarSubscriptionSection({ id }: { id: string }) {
     setConfirmingRotate(false);
     setError(null);
     startTransition(async () => {
-      const res = await fetch("/api/calendar/ics/tokens", { method: "POST" });
+      const res = await fetch("/api/calendar/subscription", { method: "POST" });
       if (!res.ok) {
         setError(`Rotate failed (${res.status})`);
         return;

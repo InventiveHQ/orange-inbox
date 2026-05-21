@@ -9,13 +9,21 @@ import {
 
 // Token management for the calendar subscription feed (#83).
 //
-// GET   /api/calendar/ics/tokens   → returns the active token (lazy-mints if
-//                                    none exists) plus the webcal:// URL.
-// POST  /api/calendar/ics/tokens   → rotates: revokes the old, mints a new.
+// GET   /api/calendar/subscription        → returns the active token (lazy-
+//                                           mints if none exists) plus the
+//                                           webcal:// URL.
+// POST  /api/calendar/subscription        → rotates: revokes the old, mints
+//                                           a new.
 //
 // DELETE for revoke-without-replace lives at the per-token route at
-// /api/calendar/ics/tokens/[token] so the URL identifies what's being
+// /api/calendar/subscription/[token] so the URL identifies what's being
 // revoked.
+//
+// These routes are deliberately NOT under /api/calendar/ics/ — that prefix
+// carries a Cloudflare Access *Bypass* policy so external calendar apps can
+// fetch the public feed without an Access account. A bypass there would
+// strip the Access JWT that requireUser() needs, turning every call here
+// into a 401.
 
 export async function GET() {
   try {
