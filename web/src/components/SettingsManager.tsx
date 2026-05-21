@@ -1726,28 +1726,38 @@ function NotificationsSection({ id }: { id: string }) {
   );
 }
 
-interface IcsTokenInfo {
-  token: string;
+interface IcsFeed {
   scope: string;
+  label: string;
+  token: string;
   created_at: number;
   last_used_at: number | null;
   webcal_url: string;
   https_url: string;
 }
 
-// "Calendar subscription" card — exposes the user's webcal:// feed URL so
-// they can paste it into Google Calendar, Apple Calendar, Outlook, etc.
+interface IcsSubscriptionState {
+  mode: "single" | "per_mailbox";
+  feeds: IcsFeed[];
+}
+
+// "Calendar subscription" card — exposes the user's webcal:// feed URL(s) so
+// they can paste them into Google Calendar, Apple Calendar, Outlook, etc.
 //
-// Lazy-mints on first view (the GET /api/calendar/subscription endpoint
-// auto-creates a token if there isn't one). Rotation revokes the old token
-// and mints a new one in a single POST.
+// Two modes, toggled on the card: "single" is one URL for the whole
+// calendar; "per_mailbox" is a separate URL for Personal and each mailbox.
+// GET lazy-mints whatever the current mode is missing; switching modes
+// (POST set_mode) revokes the old URLs and mints the new set.
 function CalendarSubscriptionSection({ id }: { id: string }) {
-  const [info, setInfo] = useState<IcsTokenInfo | null>(null);
+  const [state, setState] = useState<IcsSubscriptionState | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copyMsg, setCopyMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const [confirmingRotate, setConfirmingRotate] = useState(false);
+  // Two-click confirm for the destructive mode switch — holds the mode we're
+  // about to switch TO, or null.
+  const [confirmingMode, setConfirmingMode] = useState<
+    "single" | "per_mailbox" | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1760,9 +1770,9 @@ function CalendarSubscriptionSection({ id }: { id: string }) {
           setLoaded(true);
           return;
         }
-        const j = (await res.json()) as IcsTokenInfo;
+        const j = (await res.json()) as IcsSubscriptionState;
         if (cancelled) return;
-        setInfo(j);
+        setState(j);
         setLoaded(true);
       } catch {
         if (!cancelled) {
@@ -1776,34 +1786,53 @@ function CalendarSubscriptionSection({ id }: { id: string }) {
     };
   }, []);
 
-  function rotate() {
-    if (!confirmingRotate) {
-      setConfirmingRotate(true);
+  function switchMode(target: "single" | "per_mailbox") {
+    if (state?.mode === target) return;
+    // First click arms the confirm; second click (here or via "Switch
+    // anyway") goes through.
+    if (confirmingMode !== target) {
+      setConfirmingMode(target);
       return;
     }
-    setConfirmingRotate(false);
+    setConfirmingMode(null);
     setError(null);
     startTransition(async () => {
-      const res = await fetch("/api/calendar/subscription", { method: "POST" });
-      if (!res.ok) {
-        setError(`Rotate failed (${res.status})`);
-        return;
+      try {
+        const res = await fetch("/api/calendar/subscription", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "set_mode", mode: target }),
+        });
+        if (!res.ok) {
+          setError(`Switch failed (${res.status})`);
+          return;
+        }
+        setState((await res.json()) as IcsSubscriptionState);
+      } catch {
+        setError("Switch failed");
       }
-      const j = (await res.json()) as IcsTokenInfo;
-      setInfo(j);
-      setCopyMsg("New URL minted — old subscribers will stop syncing.");
     });
   }
 
-  async function copyUrl() {
-    if (!info) return;
+  // Rotate one feed's token. Returns whether it succeeded so the row can
+  // show its own confirmation message.
+  async function rotateFeed(scope: string): Promise<boolean> {
+    setError(null);
     try {
-      await navigator.clipboard.writeText(info.webcal_url);
-      setCopyMsg("Copied.");
+      const res = await fetch("/api/calendar/subscription", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "rotate", scope }),
+      });
+      if (!res.ok) {
+        setError(`Rotate failed (${res.status})`);
+        return false;
+      }
+      setState((await res.json()) as IcsSubscriptionState);
+      return true;
     } catch {
-      // Clipboard write rejected (insecure context, or permission). Surface
-      // a fallback prompt so the URL is still reachable.
-      setCopyMsg("Copy failed — long-press the URL above to copy manually.");
+      setError("Rotate failed");
+      return false;
     }
   }
 
@@ -1813,96 +1842,207 @@ function CalendarSubscriptionSection({ id }: { id: string }) {
         title="Calendar subscription"
         description="Mirror your calendar into Google, Apple, or Outlook by subscribing to this URL. The link is read-only and rotates with one click if you ever need to revoke access."
       />
-      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 space-y-3">
-        {!loaded && (
-          <p className="text-xs text-neutral-500">Loading…</p>
-        )}
-        {loaded && info && (
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4 space-y-4">
+        {!loaded && <p className="text-xs text-neutral-500">Loading…</p>}
+        {loaded && state && (
           <>
-            <label className="block text-xs uppercase tracking-wider text-neutral-500">
-              Subscription URL
-            </label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                readOnly
-                value={info.webcal_url}
-                onFocus={e => e.currentTarget.select()}
-                className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 px-3 py-1.5 text-xs font-mono select-all focus:outline-none focus:border-[var(--color-brand)]"
-              />
-              <button
-                type="button"
-                onClick={copyUrl}
-                className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
-              >
-                Copy
-              </button>
-            </div>
-            <p className="text-xs text-neutral-500">
-              Click below if your calendar app doesn&rsquo;t recognise <code>webcal://</code>:
-              {" "}
-              <a
-                href={info.https_url}
-                className="underline text-[var(--color-brand)]"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {info.https_url}
-              </a>
-            </p>
-            <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-neutral-500 pt-2 border-t border-neutral-200 dark:border-neutral-800">
-              <span>
-                Created{" "}
-                <span className="text-neutral-700 dark:text-neutral-300">
-                  {formatRelativeTimestamp(info.created_at)}
-                </span>
-              </span>
-              <span>
-                Last used{" "}
-                <span className="text-neutral-700 dark:text-neutral-300">
-                  {info.last_used_at
-                    ? formatRelativeTimestamp(info.last_used_at)
-                    : "never"}
-                </span>
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={rotate}
-                disabled={isPending}
-                className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                  confirmingRotate
-                    ? "border-red-500 text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-                    : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
-                }`}
-              >
-                {isPending
-                  ? "Rotating…"
-                  : confirmingRotate
-                    ? "Confirm: revoke and mint new"
-                    : "Rotate token"}
-              </button>
-              {confirmingRotate && (
-                <button
-                  type="button"
-                  onClick={() => setConfirmingRotate(false)}
-                  className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-                >
-                  Cancel
-                </button>
+            <div className="space-y-2">
+              <div className="inline-flex rounded-md border border-neutral-300 dark:border-neutral-700 p-0.5 text-xs">
+                {(["single", "per_mailbox"] as const).map(m => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => switchMode(m)}
+                    disabled={isPending}
+                    className={`rounded px-3 py-1 font-medium transition-colors disabled:opacity-50 ${
+                      state.mode === m
+                        ? "bg-[var(--color-brand)] text-white"
+                        : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                    }`}
+                  >
+                    {m === "single" ? "Single feed" : "One per mailbox"}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-neutral-500">
+                {state.mode === "single"
+                  ? "One URL covers every calendar."
+                  : "A separate URL for Personal and each mailbox — subscribe only the ones you want."}
+              </p>
+              {confirmingMode && (
+                <p className="text-xs text-red-600">
+                  Switching revokes your current subscription URL
+                  {state.feeds.length > 1 ? "s" : ""} — anything already
+                  subscribed stops syncing.{" "}
+                  <button
+                    type="button"
+                    onClick={() => switchMode(confirmingMode)}
+                    className="font-medium underline"
+                  >
+                    Switch anyway
+                  </button>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingMode(null)}
+                    className="underline"
+                  >
+                    Cancel
+                  </button>
+                </p>
               )}
-              {copyMsg && (
-                <span className="text-xs text-neutral-500">{copyMsg}</span>
-              )}
+            </div>
+            <div className="space-y-3">
+              {state.feeds.map(f => (
+                <CalendarFeedRow
+                  key={f.scope}
+                  feed={f}
+                  showLabel={state.mode === "per_mailbox"}
+                  busy={isPending}
+                  onRotate={rotateFeed}
+                />
+              ))}
             </div>
           </>
         )}
-        {error && (
-          <p className="text-xs text-red-600">{error}</p>
-        )}
+        {error && <p className="text-xs text-red-600">{error}</p>}
       </div>
     </section>
+  );
+}
+
+// One subscription URL within the card — its own copy / rotate controls and
+// confirmation state so several can render stacked in per-mailbox mode.
+function CalendarFeedRow({
+  feed,
+  showLabel,
+  busy,
+  onRotate,
+}: {
+  feed: IcsFeed;
+  showLabel: boolean;
+  busy: boolean;
+  onRotate: (scope: string) => Promise<boolean>;
+}) {
+  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
+  async function copyUrl() {
+    try {
+      await navigator.clipboard.writeText(feed.webcal_url);
+      setCopyMsg("Copied.");
+    } catch {
+      // Clipboard write rejected (insecure context, or permission). Surface
+      // a fallback prompt so the URL is still reachable.
+      setCopyMsg("Copy failed — long-press the URL above to copy manually.");
+    }
+  }
+
+  async function rotate() {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
+    setCopyMsg(null);
+    setRotating(true);
+    const ok = await onRotate(feed.scope);
+    setRotating(false);
+    if (ok) setCopyMsg("New URL minted — old subscribers will stop syncing.");
+  }
+
+  return (
+    <div
+      className={
+        showLabel
+          ? "rounded-md border border-neutral-200 dark:border-neutral-800 px-3 py-3 space-y-2"
+          : "space-y-2"
+      }
+    >
+      {showLabel && (
+        <div className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+          {feed.label}
+        </div>
+      )}
+      <label className="block text-xs uppercase tracking-wider text-neutral-500">
+        Subscription URL
+      </label>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input
+          type="text"
+          readOnly
+          value={feed.webcal_url}
+          onFocus={e => e.currentTarget.select()}
+          className="flex-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 px-3 py-1.5 text-xs font-mono select-all focus:outline-none focus:border-[var(--color-brand)]"
+        />
+        <button
+          type="button"
+          onClick={copyUrl}
+          className="rounded-md bg-[var(--color-brand)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+        >
+          Copy
+        </button>
+      </div>
+      <p className="text-xs text-neutral-500">
+        Click below if your calendar app doesn&rsquo;t recognise <code>webcal://</code>:
+        {" "}
+        <a
+          href={feed.https_url}
+          className="underline text-[var(--color-brand)]"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {feed.https_url}
+        </a>
+      </p>
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-neutral-500 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+        <span>
+          Created{" "}
+          <span className="text-neutral-700 dark:text-neutral-300">
+            {formatRelativeTimestamp(feed.created_at)}
+          </span>
+        </span>
+        <span>
+          Last used{" "}
+          <span className="text-neutral-700 dark:text-neutral-300">
+            {feed.last_used_at
+              ? formatRelativeTimestamp(feed.last_used_at)
+              : "never"}
+          </span>
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 pt-2">
+        <button
+          type="button"
+          onClick={rotate}
+          disabled={busy || rotating}
+          className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+            confirming
+              ? "border-red-500 text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+              : "border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          }`}
+        >
+          {rotating
+            ? "Rotating…"
+            : confirming
+              ? "Confirm: revoke and mint new"
+              : "Rotate token"}
+        </button>
+        {confirming && (
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+          >
+            Cancel
+          </button>
+        )}
+        {copyMsg && (
+          <span className="text-xs text-neutral-500">{copyMsg}</span>
+        )}
+      </div>
+    </div>
   );
 }
 

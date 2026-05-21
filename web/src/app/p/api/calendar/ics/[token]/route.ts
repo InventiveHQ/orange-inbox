@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { headers } from "next/headers";
 import { buildVCalendar } from "@/lib/ical";
 import {
+  feedCalendarName,
   getActiveTokenRow,
   listEventsForFeed,
   touchTokenUsed,
@@ -34,7 +35,10 @@ export async function GET(
       return new Response("not found", { status: 404 });
     }
 
-    const { rows, lastModified } = await listEventsForFeed(tokenRow.user_id);
+    const { rows, lastModified } = await listEventsForFeed(
+      tokenRow.user_id,
+      tokenRow.scope,
+    );
 
     // ETag is the MAX(updated_at) wrapped in quotes per RFC 7232. When the
     // calendar has zero rows we fall back to the token's own created_at so
@@ -82,7 +86,7 @@ export async function GET(
     const host = await resolveHost();
     const body = buildVCalendar(rows, {
       uidDomain: host,
-      calendarName: "Orange Inbox",
+      calendarName: await feedCalendarName(tokenRow.user_id, tokenRow.scope),
     });
 
     void touchTokenUsed(token);
