@@ -10,14 +10,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 //   • Registers /sw.js on mount.
 //   • Watches for an installing/waiting worker. If a new SW becomes
 //     'installed' while another SW is already controlling the page, that's
-//     an update — we send SKIP_WAITING and either auto-reload (if we're
-//     within the first 5 s of page load — silent update on cold start) or
-//     surface needRefresh so the UI can show a toast.
+//     an update — we surface needRefresh so the UI can show a toast.
 //   • checkForUpdate() forces reg.update() and resolves true if a new SW
 //     is now waiting (10 s cap).
 //   • applyUpdate() posts SKIP_WAITING and reloads.
-
-const PAGE_LOAD_AUTO_APPLY_MS = 5_000;
+//
+// We deliberately never auto-reload the page on our own. The deploy script
+// bumps the SW version on *every* deploy, so an auto-reload would yank the
+// page out from under a returning user mid-launch — which reads as "the app
+// just closed itself". The toast is a one-tap, place-preserving opt-in
+// instead; the only reload we trigger is the one the user asked for via
+// applyUpdate().
 
 export interface PWAUpdate {
   needRefresh: boolean;
@@ -31,6 +34,10 @@ export default function usePWAUpdate(): PWAUpdate {
   const [needRefresh, setNeedRefresh] = useState(false);
   const needRefreshRef = useRef(false);
   const onNeedRefreshResolve = useRef<(() => void) | null>(null);
+  // True once applyUpdate() has fired. The controllerchange listener only
+  // reloads when this is set — so a SW *claiming* the page for the first
+  // time (its own controllerchange) doesn't trigger a spurious reload.
+  const updateInitiatedRef = useRef(false);
   const supported =
     typeof window !== "undefined" && "serviceWorker" in navigator;
 
@@ -38,24 +45,18 @@ export default function usePWAUpdate(): PWAUpdate {
     if (!supported) return;
     let cancelled = false;
 
-    const trackInstalling = (reg: ServiceWorkerRegistration, sw: ServiceWorker) => {
+    const trackInstalling = (sw: ServiceWorker) => {
       sw.addEventListener("statechange", () => {
         if (cancelled) return;
         if (sw.state === "installed" && navigator.serviceWorker.controller) {
-          handleWaiting(reg);
+          showRefreshPrompt();
         }
       });
     };
 
-    const handleWaiting = (reg: ServiceWorkerRegistration) => {
-      if (performance.now() < PAGE_LOAD_AUTO_APPLY_MS) {
-        try {
-          sessionStorage.setItem("orange_pre_update_path", window.location.pathname + window.location.search);
-        } catch {}
-        reg.waiting?.postMessage({ type: "SKIP_WAITING" });
-        // controllerchange below triggers the reload.
-        return;
-      }
+    // A new SW finished installing while an old one still controls the page.
+    // Surface the toast and let the user decide — never reload on our own.
+    const showRefreshPrompt = () => {
       needRefreshRef.current = true;
       setNeedRefresh(true);
       onNeedRefreshResolve.current?.();
@@ -66,17 +67,20 @@ export default function usePWAUpdate(): PWAUpdate {
       .register("/sw.js", { scope: "/" })
       .then((reg) => {
         if (cancelled) return;
-        if (reg.waiting && navigator.serviceWorker.controller) handleWaiting(reg);
-        if (reg.installing) trackInstalling(reg, reg.installing);
+        if (reg.waiting && navigator.serviceWorker.controller) showRefreshPrompt();
+        if (reg.installing) trackInstalling(reg.installing);
         reg.addEventListener("updatefound", () => {
-          if (reg.installing) trackInstalling(reg, reg.installing);
+          if (reg.installing) trackInstalling(reg.installing);
         });
       })
       .catch((e) => console.warn("sw registration failed", e));
 
     let reloading = false;
     const onCtrlChange = () => {
-      if (reloading) return;
+      // Only reload when the user opted into the update via applyUpdate().
+      // controllerchange also fires the first time a freshly-installed SW
+      // claims the page — reloading on that is a pointless flash.
+      if (!updateInitiatedRef.current || reloading) return;
       reloading = true;
       window.location.reload();
     };
@@ -89,6 +93,7 @@ export default function usePWAUpdate(): PWAUpdate {
   }, [supported]);
 
   const applyUpdate = useCallback(() => {
+    updateInitiatedRef.current = true;
     try {
       sessionStorage.setItem("orange_pre_update_path", window.location.pathname + window.location.search);
     } catch {}
