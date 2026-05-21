@@ -7,7 +7,7 @@ and want a real inbox UI instead of forwarding everything to a third party.
 > Status: actively developed. The core inbox — receive, read, compose, reply,
 > labels, search, scheduled send, undo send, drafts, templates, push
 > notifications, PWA install — is working end-to-end. Versions are still
-> 0.1.x; expect rough edges.
+> 0.2.x; expect rough edges.
 
 ## Try it
 
@@ -197,8 +197,7 @@ These path prefixes must be exempted with a **Bypass** policy:
 Exposing these without Access is safe: the static files are content-hashed
 build artifacts with no secrets, and each dynamic route is guarded by its
 own unguessable URL token (plus an optional passcode for confidential
-messages) — the token is the credential, not the Access login. (`/d/*` is a
-decommissioned route that returns `410` for everything; it needs no bypass.)
+messages) — the token is the credential, not the Access login.
 
 A self-hosted Access application takes **at most five destinations**, which
 is fewer than the list above, so split it across two Bypass applications.

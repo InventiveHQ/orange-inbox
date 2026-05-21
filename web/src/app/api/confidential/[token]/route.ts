@@ -13,8 +13,8 @@ import { getDb } from "@/lib/db";
 //     code in constant-ish time and return the body. Throttled per-IP with a
 //     token bucket.
 //
-// We intentionally use a per-IP throttle (same shape as /d/[token]/route.ts)
-// rather than a per-token attempt cap. A per-token cap would let an attacker
+// We intentionally use a per-IP token-bucket throttle rather than a
+// per-token attempt cap. A per-token cap would let an attacker
 // brick a confidential message by attempting it 10 times — denial-of-message
 // against the legitimate recipient. The per-IP throttle slows brute-force
 // without enabling that. The passcode is an 8-character code drawn from a
