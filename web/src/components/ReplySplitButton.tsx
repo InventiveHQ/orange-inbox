@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useCompose } from "./ComposeProvider";
 import { htmlToQuotedText } from "@/lib/html-text";
+import { sanitizeQuotedHtml } from "@/lib/quoted-html";
 
 // Combined Reply / Reply-all primary CTA. The label-only main button
 // runs Reply; the chevron beside it opens a tiny menu offering Reply
@@ -127,15 +128,22 @@ export default function ReplySplitButton({
       return;
     }
     setLoading(true);
+    // Prefer quoting the original HTML body so tables/lists/formatting
+    // survive into the composer; fall back to a plain-text quote when the
+    // body is text-only, too large, or the fetch fails.
     let quotedText = quoted.text;
+    let quotedBodyHtml: string | null = null;
     try {
       const res = await fetch(`/api/messages/${replyToMessageId}/html`, {
         cache: "no-store",
       });
       if (res.ok) {
         const html = await res.text();
-        const stripped = htmlToQuotedText(html);
-        if (stripped) quotedText = stripped;
+        quotedBodyHtml = sanitizeQuotedHtml(html);
+        if (!quotedBodyHtml) {
+          const stripped = htmlToQuotedText(html);
+          if (stripped) quotedText = stripped;
+        }
       }
     } catch {
       // Network hiccup — fall through with the snippet/text we already had.
@@ -144,7 +152,11 @@ export default function ReplySplitButton({
     }
     compose.open({
       ...baseArgs,
-      quotedHtml: buildQuotedHtml({ ...quoted, text: quotedText }),
+      quotedHtml: buildQuotedHtml({
+        ...quoted,
+        text: quotedText,
+        bodyHtml: quotedBodyHtml,
+      }),
     });
   }
 
@@ -304,13 +316,22 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function buildQuotedHtml({ fromAddr, fromName, date, text }: QuotedOriginal): string {
+function buildQuotedHtml({
+  fromAddr,
+  fromName,
+  date,
+  text,
+  bodyHtml,
+}: QuotedOriginal & { bodyHtml?: string | null }): string {
   const dateStr = new Date(date * 1000).toLocaleString();
   const senderRaw = fromName?.trim()
     ? `${fromName.trim()} <${fromAddr}>`
     : fromAddr;
   const intro = `On ${escapeHtml(dateStr)}, ${escapeHtml(senderRaw)} wrote:`;
-  const body = escapeHtml(text || "").replace(/\r?\n/g, "<br>");
+  // bodyHtml is a sanitised fragment of the original message — embed it
+  // verbatim so the editor imports real tables/lists. Otherwise quote the
+  // plain text, escaped, with newlines as <br>.
+  const body = bodyHtml ?? escapeHtml(text || "").replace(/\r?\n/g, "<br>");
   return (
     `<p>${intro}</p>` +
     `<blockquote type="cite" style="margin:0 0 0 0.8ex;border-left:2px solid #ccc;padding-left:1ex;">` +
