@@ -405,6 +405,7 @@ manual `byte_estimate` refresh — live in
 - [x] Mobile shell + in-app help.
 - [x] One-click deploy button.
 - [x] Calendly-style meeting booking — multi-calendar availability, Google Calendar + Meet, public booking pages.
+- [x] Per-mailbox Kanban board view — customizable columns, drag-to-triage.
 
 ## License
 

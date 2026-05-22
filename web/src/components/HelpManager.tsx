@@ -14,6 +14,7 @@ export const HELP_SECTIONS: { id: string; label: string }[] = [
   { id: "compose", label: "Compose" },
   { id: "scheduling", label: "Scheduling" },
   { id: "organizing", label: "Organizing" },
+  { id: "board", label: "Board view" },
   { id: "search", label: "Search" },
   { id: "mobile", label: "Mobile" },
   { id: "troubleshooting", label: "Troubleshooting" },
@@ -81,6 +82,7 @@ export default function HelpManager() {
           <div data-help-section><ComposeSection /></div>
           <div data-help-section><SchedulingSection /></div>
           <div data-help-section><OrganizingSection /></div>
+          <div data-help-section><BoardSection /></div>
           <div data-help-section><SearchSection /></div>
           <div data-help-section><MobileSection /></div>
           <div data-help-section><TroubleshootingSection /></div>
@@ -405,6 +407,53 @@ function OrganizingSection() {
           <Link className="mx-1 text-[var(--color-brand)] underline" href="/inbox/contacts">Contacts</Link>.
         </li>
       </ul>
+    </Section>
+  );
+}
+
+function BoardSection() {
+  return (
+    <Section id="board" title="Board view">
+      <p>
+        Every mailbox can be viewed as a Kanban board instead of a list — handy
+        for a shared mailbox where the team needs to see what&apos;s untouched,
+        in progress, and done at a glance. Open a mailbox and use the
+        {" "}<span className="font-medium">List / Board</span> toggle in the
+        inbox header to switch.
+      </p>
+      <ul className="ml-5 list-disc space-y-1.5">
+        <li>
+          <span className="font-medium">Cards and columns</span> — each
+          conversation is a card; columns are statuses. A new board starts with
+          {" "}<span className="font-medium">New</span>,{" "}
+          <span className="font-medium">In progress</span>, and{" "}
+          <span className="font-medium">Done</span>. Drag a card to another
+          column to change its status.
+        </li>
+        <li>
+          <span className="font-medium">Customizable columns</span> — add one
+          with the &quot;+ Add column&quot; button, and use a column&apos;s
+          {" "}<span className="font-medium">⋯</span> menu to rename or delete
+          it. Drag a column header to reorder. Deleting a column moves its cards
+          back to the first column.
+        </li>
+        <li>
+          <span className="font-medium">Shared by the team</span> — columns and
+          card placement belong to the mailbox, so everyone with access sees the
+          same board.
+        </li>
+        <li>
+          <span className="font-medium">Filters</span> — the{" "}
+          <span className="font-medium">All / Unassigned / Assigned to me</span>
+          {" "}chips narrow the board to the cards you care about. Assignment
+          itself is unchanged — claim or assign a conversation from its header
+          as usual; the board just reflects it.
+        </li>
+      </ul>
+      <p className="text-neutral-500 text-xs">
+        The board is per-mailbox. Cross-mailbox views like{" "}
+        <span className="font-medium">All inboxes</span> stay list-only.
+      </p>
     </Section>
   );
 }
