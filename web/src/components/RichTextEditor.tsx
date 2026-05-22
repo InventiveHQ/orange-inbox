@@ -9,10 +9,12 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { ListPlugin } from "@lexical/react/LexicalListPlugin";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
+import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { ListItemNode, ListNode, INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND } from "@lexical/list";
 import { LinkNode, AutoLinkNode, TOGGLE_LINK_COMMAND } from "@lexical/link";
+import { TableNode, TableRowNode, TableCellNode, INSERT_TABLE_COMMAND } from "@lexical/table";
 import { $generateHtmlFromNodes, $generateNodesFromDOM } from "@lexical/html";
 import {
   $getRoot,
@@ -108,6 +110,12 @@ const editorTheme = {
   },
   link: "text-[var(--color-brand)] underline",
   quote: "border-l-2 border-neutral-300 dark:border-neutral-700 pl-3 my-2 text-neutral-600 dark:text-neutral-400",
+  // Tables: structural borders only. We don't try to reproduce a source
+  // email's cell styling (background, fonts) — quoted tables keep their
+  // rows/columns, not their original look. See TablePlugin below.
+  table: "border-collapse my-2",
+  tableCell: "border border-neutral-300 dark:border-neutral-700 px-2 py-1 align-top text-left",
+  tableCellHeader: "bg-neutral-100 dark:bg-neutral-800 font-semibold",
 };
 
 export default function RichTextEditor({
@@ -128,7 +136,17 @@ export default function RichTextEditor({
           // Surface lexical errors in the console, but don't blow up the form.
           console.error("[lexical]", e);
         },
-        nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, AutoLinkNode],
+        nodes: [
+          HeadingNode,
+          QuoteNode,
+          ListNode,
+          ListItemNode,
+          LinkNode,
+          AutoLinkNode,
+          TableNode,
+          TableRowNode,
+          TableCellNode,
+        ],
       }}
     >
       <div className="flex flex-col">
@@ -162,6 +180,10 @@ export default function RichTextEditor({
         <HistoryPlugin />
         <ListPlugin />
         <LinkPlugin />
+        {/* hasCellBackgroundColor off: we don't preserve a source email's
+            cell colours (text colour isn't kept either, so a dark header
+            cell would land as dark-on-dark). Structure only. */}
+        <TablePlugin hasCellBackgroundColor={false} />
         <InitialHtmlPlugin html={initialHtml} resetKey={resetKey} />
         <OnChangePlugin
           onChange={(_state: EditorState, editor: LexicalEditor) => {
@@ -586,6 +608,23 @@ function Toolbar() {
     editor.dispatchCommand(TOGGLE_LINK_COMMAND, href);
   }, [editor, isLink]);
 
+  // Size prompt, same low-ceremony pattern as the link button. Accepts
+  // "3x3", "3 × 3", etc.; clamped so a fat-fingered "300x300" can't wedge
+  // the editor.
+  const insertTable = useCallback(() => {
+    const input = window.prompt("Table size as rows × columns", "3 × 3");
+    if (!input) return;
+    const m = input.match(/(\d+)\s*[x×*]\s*(\d+)/i);
+    if (!m) return;
+    const rows = Math.min(Math.max(parseInt(m[1], 10) || 1, 1), 20);
+    const columns = Math.min(Math.max(parseInt(m[2], 10) || 1, 1), 10);
+    editor.dispatchCommand(INSERT_TABLE_COMMAND, {
+      rows: String(rows),
+      columns: String(columns),
+      includeHeaders: false,
+    });
+  }, [editor]);
+
   return (
     <div className="flex flex-wrap items-center gap-0.5 border-y border-neutral-200 dark:border-neutral-800 px-2 py-1.5 bg-neutral-50 dark:bg-neutral-900/40">
       <ToolbarButton
@@ -625,6 +664,9 @@ function Toolbar() {
       <ToolbarSep />
       <ToolbarButton active={isLink} title={isLink ? "Remove link" : "Insert link"} onClick={toggleLink}>
         🔗
+      </ToolbarButton>
+      <ToolbarButton title="Insert table" onClick={insertTable}>
+        ▦
       </ToolbarButton>
       <div className="ml-auto flex items-center gap-0.5">
         <ToolbarButton title="Undo (⌘Z)" onClick={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}>
