@@ -1,19 +1,24 @@
 // Cheap HTML → plain text. Runs in any environment (Workers, Node, browser) —
 // no DOM required. Used by the send pipeline to derive a text/plain alternative
-// from the Lexical HTML the composer produces, and by the drafts list to make
-// a readable snippet from a stored HTML body.
+// from the Lexical HTML the composer produces, by the drafts list to make a
+// readable snippet from a stored HTML body, and by `htmlToQuotedText` to turn
+// an inbound message's HTML body into a Gmail-style reply quote.
 //
-// We don't try to be a full HTML renderer — Lexical's output is well-formed
-// and has a small tag vocabulary (p, br, ul/ol/li, a, b/i/u/strong/em,
-// blockquote, h1–h3). This handles those cases and falls back to "drop the
-// tag" for anything else, which is good enough for plain-text alternatives.
+// We don't try to be a full HTML renderer — Lexical's own output has a small
+// tag vocabulary (p, br, ul/ol/li, a, b/i/u/strong/em, blockquote, h1–h3).
+// Inbound email HTML is messier: most notably it leans on tables for layout,
+// so we give td/th/tr/table their own cell/row breaks — without this, a
+// minified table collapses into one unreadable run of text. Anything else
+// falls back to "drop the tag", which is good enough for plain-text output.
 export function htmlToText(html: string): string {
   if (!html) return "";
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, "\n")
+    // Table cells → tab-separated; rows and table boundaries → newline.
+    .replace(/<\/(td|th)>\s*/gi, "\t")
+    .replace(/<\/(p|div|h[1-6]|li|blockquote|tr|table|caption)>/gi, "\n")
     .replace(/<li[^>]*>/gi, "• ")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/gi, " ")
