@@ -169,7 +169,10 @@ export default function ThreadView({
                 replyToMessageId={lastInbound.id}
                 preferredMailboxId={mailboxId}
                 threadId={thread.id}
-                replyToAddrs={[lastInbound.from_addr]}
+                // Reply goes to the Reply-To header when the sender set one
+                // (e.g. a form notification whose Reply-To is the submitter),
+                // falling back to the From address otherwise.
+                replyToAddrs={[lastInbound.reply_to_addr || lastInbound.from_addr]}
                 fromAddr={lastInbound.from_addr}
                 originalToAddrs={originalTo}
                 originalCcAddrs={originalCc}
