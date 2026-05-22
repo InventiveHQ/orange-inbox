@@ -28,7 +28,8 @@ export type AuditAction =
   | "unpin"
   | "star"
   | "unstar"
-  | "mark_unread";
+  | "mark_unread"
+  | "kanban_move";
 
 export interface LogAuditInput {
   userId: string;

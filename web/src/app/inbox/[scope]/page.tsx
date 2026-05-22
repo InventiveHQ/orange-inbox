@@ -24,13 +24,14 @@ import StorageManager from "@/components/StorageManager";
 import SubscriptionsList from "@/components/SubscriptionsList";
 import VipsManager from "@/components/VipsManager";
 import MultiInboxLayout from "@/components/MultiInboxLayout";
+import KanbanBoard from "@/components/KanbanBoard";
 
 export default async function InboxIndex({
   params,
   searchParams,
 }: {
   params: Promise<{ scope: string }>;
-  searchParams: Promise<{ mailbox?: string }>;
+  searchParams: Promise<{ mailbox?: string; view?: string }>;
 }) {
   const { scope } = await params;
 
@@ -46,6 +47,12 @@ export default async function InboxIndex({
   if (scope === "aliases") return <AliasesRoute />;
   if (scope === "calendar") return <CalendarRoute />;
   if (scope.startsWith("layout:")) return <LayoutRoute scope={scope} />;
+
+  // Board view (`?view=board`). Reached only for non-special scopes; for a
+  // real mailbox id KanbanBoard renders the board, and for anything else
+  // loadBoard returns null and the board shows its own "unavailable" notice.
+  const { view } = await searchParams;
+  if (view === "board") return <KanbanBoard mailboxId={scope} />;
 
   const message =
     scope === "drafts" ? "Select a draft to edit it." : "Select a thread to read it.";

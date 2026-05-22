@@ -41,6 +41,7 @@ import MobileShell from "@/components/MobileShell";
 import AppBadgeSync from "@/components/AppBadgeSync";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import CommandPaletteShortcut from "@/components/CommandPaletteShortcut";
+import KanbanViewToggle from "@/components/KanbanViewToggle";
 import { CalendarUIProvider } from "@/components/CalendarUIContext";
 import { ContactsUIProvider } from "@/components/ContactsUIContext";
 import CalendarSidebarBody from "@/components/sidebar/CalendarSidebarBody";
@@ -99,6 +100,9 @@ export default async function InboxLayout({
   // Assignment status tab (#99). Same next-url workaround — `?status=resolved`
   // on /inbox/assigned switches the list query from active to resolved.
   const assignmentStatus = readAssignmentStatusFromHeaders(headerStore);
+  // Board view. `?view=board` on a mailbox scope swaps the chronological list
+  // for the Kanban board — a full-page view, the same shape as layout:<id>.
+  const boardViewRequested = readViewParamFromHeaders(headerStore) === "board";
   // Default open: this section is the whole point of the saved-search feature,
   // and it's empty for new users so collapsing-by-default would hide the
   // discoverability hint. Toggling writes a cookie that flips the default.
@@ -162,6 +166,10 @@ export default async function InboxLayout({
   const isStarred = effectiveScope === "starred";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
+  // Board view is only offered on a single mailbox scope — the board owns a
+  // mailbox-specific column set (see lib/kanban.ts).
+  const isMailboxScope = mailboxes.some(mb => mb.id === effectiveScope);
+  const isBoardView = isMailboxScope && boardViewRequested;
   // Full-page scopes own the main area — no middle column, no thread/draft fetch.
   // `layout:<id>` is treated as full-page too: the multi-pane MultiInboxLayout
   // *is* the main column, and children (thread reader) takes over once a row
@@ -176,7 +184,8 @@ export default async function InboxLayout({
     effectiveScope === "aliases" ||
     effectiveScope === "calendar" ||
     effectiveScope === "scheduled" ||
-    isLayoutScope;
+    isLayoutScope ||
+    isBoardView;
   const mailboxId =
     effectiveScope === "all" ||
     isDrafts ||
@@ -367,8 +376,13 @@ export default async function InboxLayout({
 
   const listContent = isFullPage ? null : (
     <>
-      <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 text-sm font-medium">
-        {scopeLabel}
+      <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2">
+        <span className="text-sm font-medium truncate">{scopeLabel}</span>
+        {isMailboxScope && (
+          <div className="ml-auto">
+            <KanbanViewToggle />
+          </div>
+        )}
       </header>
       {isAssigned && <AssignmentStatusTabs />}
       {isDrafts ? (
@@ -516,6 +530,20 @@ function readAssignmentStatusFromHeaders(
     return parseAssignmentStatus(u.searchParams.get("status"));
   } catch {
     return "active";
+  }
+}
+
+function readViewParamFromHeaders(
+  headerStore: Awaited<ReturnType<typeof headers>>,
+): string | null {
+  const candidate =
+    headerStore.get("next-url") ?? headerStore.get("referer") ?? null;
+  if (!candidate) return null;
+  try {
+    const u = new URL(candidate, "http://localhost");
+    return u.searchParams.get("view");
+  } catch {
+    return null;
   }
 }
 
