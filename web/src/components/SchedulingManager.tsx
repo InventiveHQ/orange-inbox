@@ -165,6 +165,12 @@ export default function SchedulingManager({ userId }: { userId: string }) {
               ← Inbox
             </a>
             <h1 className="text-2xl font-semibold">Scheduling</h1>
+            <a
+              href="/inbox/help#scheduling"
+              className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+            >
+              How booking links work →
+            </a>
           </div>
           <button
             onClick={() => openEditor(null)}

@@ -12,6 +12,7 @@ export const HELP_SECTIONS: { id: string; label: string }[] = [
   { id: "domains", label: "Mail domains" },
   { id: "sharing", label: "Sharing" },
   { id: "compose", label: "Compose" },
+  { id: "scheduling", label: "Scheduling" },
   { id: "organizing", label: "Organizing" },
   { id: "search", label: "Search" },
   { id: "mobile", label: "Mobile" },
@@ -78,6 +79,7 @@ export default function HelpManager() {
           <div data-help-section><DomainsSection /></div>
           <div data-help-section><SharingSection /></div>
           <div data-help-section><ComposeSection /></div>
+          <div data-help-section><SchedulingSection /></div>
           <div data-help-section><OrganizingSection /></div>
           <div data-help-section><SearchSection /></div>
           <div data-help-section><MobileSection /></div>
@@ -330,6 +332,56 @@ function ComposeSection() {
           Find them in the sidebar under <Link className="text-[var(--color-brand)] underline" href="/inbox/drafts">Drafts</Link>.
         </li>
       </ul>
+    </Section>
+  );
+}
+
+function SchedulingSection() {
+  return (
+    <Section id="scheduling" title="Scheduling — booking links">
+      <p>
+        Booking links let people pick a time with you without the email
+        back-and-forth: a public page shows your open slots and writes the
+        confirmed meeting straight to your calendar. Manage them at
+        <Link className="mx-1 text-[var(--color-brand)] underline" href="/scheduling">Scheduling</Link>
+        — also linked from
+        <Link className="mx-1 text-[var(--color-brand)] underline" href="/inbox/settings#scheduling">Settings → Scheduling</Link>.
+      </p>
+
+      <div>
+        <div className="font-medium text-neutral-900 dark:text-neutral-100 mb-1">
+          Create a booking link
+        </div>
+        <ol className="space-y-1">
+          <Step>
+            Open <Link className="text-[var(--color-brand)] underline" href="/scheduling">Scheduling</Link> and
+            click <span className="font-medium">New booking link</span>.
+          </Step>
+          <Step>Give it a name and a meeting length, and choose which calendars feed availability — confirmed bookings are written there too.</Step>
+          <Step>Set the booking window (how far ahead people can book), then save.</Step>
+        </ol>
+      </div>
+
+      <div>
+        <div className="font-medium text-neutral-900 dark:text-neutral-100 mb-1">
+          Share it
+        </div>
+        <p>
+          Every link has a public address like
+          <code className="mx-1 px-1 rounded bg-neutral-100 dark:bg-neutral-900">/p/book/your-slug</code>.
+          In the Scheduling list, click that path to copy the full URL, or
+          click <span className="font-medium">Open</span> to preview the
+          booking page. Anyone with the URL can book — no sign-in needed.
+        </p>
+      </div>
+
+      <p className="text-neutral-500 text-xs">
+        Availability uses your built-in calendars by default. If the
+        deployment has Google Calendar enabled, you can connect it under
+        <span className="font-medium"> Connected calendars</span> on the
+        Scheduling page to also block out Google events and add a Meet link
+        to every booking.
+      </p>
     </Section>
   );
 }
