@@ -84,16 +84,25 @@ export interface ThreadIndexUpsert {
   lastFromName: string | null;
   lastSnippet: string | null;
   createdAt?: number;
-  // When set, both INSERT and UPDATE branches force archived=1 — used for
-  // muted threads (and blocked senders) so a new inbound doesn't surface
-  // the thread in the inbox listing.
+  // Three-state on UPDATE (INSERT only honours `true` — new rows default to
+  // archived = 0):
+  //   true       — set archived = 1 (muted / blocked-sender stays out of inbox)
+  //   false      — set archived = 0 (new inbound re-surfaces a previously
+  //                archived thread; matches the store.ts comments that only
+  //                muted/blocked threads stay archived on new activity)
+  //   undefined  — leave the existing archived value alone (no caller today)
   forceArchived?: boolean;
 }
 
 export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise<void> {
   const created = p.createdAt ?? Math.floor(Date.now() / 1000);
-  const archivedClause = p.forceArchived ? ", archived = 1" : "";
-  const insertArchived = p.forceArchived ? 1 : 0;
+  const archivedClause =
+    p.forceArchived === true
+      ? ", archived = 1"
+      : p.forceArchived === false
+        ? ", archived = 0"
+        : "";
+  const insertArchived = p.forceArchived === true ? 1 : 0;
   await env.DB
     .prepare(
       `INSERT INTO threads_index
