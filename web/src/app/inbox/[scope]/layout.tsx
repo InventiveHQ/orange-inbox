@@ -348,6 +348,8 @@ export default async function InboxLayout({
           ? "Spam"
           : isStarred
           ? "Starred"
+          : isArchived
+          ? "Archived"
           : effectiveScope === "all"
           ? "All inboxes"
           : isDomainScope
