@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { ThreadListItem } from "@/lib/queries";
 import { dateBucket, formatThreadDate, senderLabel } from "@/lib/format";
 import {
@@ -70,11 +70,36 @@ function showsCategoryTabs(scope: string): boolean {
   return true;
 }
 
-export default function ThreadList({ threads, scope, activeThreadId, showDomain }: Props) {
+export default function ThreadList({ threads: rawThreads, scope, activeThreadId, showDomain }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const quadrant = parseQuadrant(searchParams.get("view"));
+  // Tab toggling and bulk actions feel laggy when the router blocks on the
+  // RSC roundtrip. React's transition primitive marks those navigations as
+  // non-blocking so the rest of the UI stays interactive in the meantime.
+  const [, startTransition] = useTransition();
+  // Optimistic-archive UX. We add a thread id here the moment the user
+  // archives (or bulk-archives/deletes) so the row disappears immediately
+  // instead of waiting on the server roundtrip and router.refresh() cycle.
+  // Single archive rolls back on failure; bulk actions surface the error
+  // via the existing bulkError banner and leave the dismissal in place
+  // (the user can reload to recover failed ids).
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  // Filter the server-supplied threads through dismissedIds so every
+  // downstream `threads.x` reference (selection, counts, render groups)
+  // sees the optimistic view automatically.
+  const threads = useMemo(
+    () => (dismissedIds.size === 0 ? rawThreads : rawThreads.filter(t => !dismissedIds.has(t.id))),
+    [rawThreads, dismissedIds],
+  );
+  // Clear optimistic dismissals when the user changes scope. The ThreadList
+  // component instance persists across scope nav, so without this an item
+  // archived from /inbox/all would still be hidden when the user visits
+  // /inbox/archived where it legitimately belongs.
+  useEffect(() => {
+    setDismissedIds(new Set());
+  }, [scope]);
   const triageEnabled = showsTriageBar(scope);
   const categoryTabsEnabled = showsCategoryTabs(scope);
 
@@ -175,13 +200,18 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
     if (next === DEFAULT_QUADRANT) params.delete("view");
     else params.set("view", next);
     const qs = params.toString();
-    router.push(qs ? `/inbox/${scope}?${qs}` : `/inbox/${scope}`);
-    // Force the layout's server fetch to re-read the ?view= param. App
-    // Router otherwise serves the cached RSC payload for the same route
-    // when only the search params change, leaving the quadrant filter
-    // visually inert. Other handlers in this file already pair push +
-    // refresh for the same reason.
-    router.refresh();
+    const url = qs ? `/inbox/${scope}?${qs}` : `/inbox/${scope}`;
+    // Wrap in startTransition so the tab toggle stays responsive — React
+    // keeps the page interactive during the navigation rather than
+    // blocking the click. router.refresh() forces the layout's server
+    // fetch to re-read the ?view= param (App Router otherwise serves the
+    // cached RSC payload for the same route when only search params change,
+    // leaving the quadrant filter visually inert — other handlers in this
+    // file already pair push + refresh for the same reason).
+    startTransition(() => {
+      router.push(url);
+      router.refresh();
+    });
   }
 
   function toggleOne(id: string, on: boolean) {
@@ -221,6 +251,15 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
   }
 
   function bulkArchive() {
+    // Optimistically dismiss the selected ids so the rows vanish instantly.
+    // runBulk's router.refresh() re-syncs from the server; any failures are
+    // surfaced via the bulkError banner.
+    const ids = Array.from(selected);
+    setDismissedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
     void runBulk(id =>
       fetch(`/api/threads/${id}`, {
         method: "PATCH",
@@ -233,6 +272,12 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
   function bulkDelete() {
     if (selected.size === 0 || bulkBusy) return;
     if (!confirm(`Permanently delete ${selected.size} conversation${selected.size === 1 ? "" : "s"}?`)) return;
+    const ids = Array.from(selected);
+    setDismissedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
     void runBulk(id => fetch(`/api/threads/${id}`, { method: "DELETE" }));
   }
 
@@ -270,12 +315,24 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
   }
 
   function archiveOneFromSwipe(threadId: string) {
+    // Optimistically dismiss so the swipe-to-archive feels instant. Roll
+    // back on failure since a single archive has a clear blast radius.
+    setDismissedIds(prev => {
+      const next = new Set(prev);
+      next.add(threadId);
+      return next;
+    });
     void fetch(`/api/threads/${threadId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ archived: true }),
     }).then(res => {
       if (!res.ok) {
+        setDismissedIds(prev => {
+          const next = new Set(prev);
+          next.delete(threadId);
+          return next;
+        });
         setBulkError("Archive failed");
         return;
       }
@@ -296,6 +353,14 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
       setBulkError("Undo failed");
       return;
     }
+    // Bring the row back into view; otherwise the optimistic dismiss from
+    // archiveOneFromSwipe keeps it hidden client-side even though the
+    // server has re-surfaced it.
+    setDismissedIds(prev => {
+      const next = new Set(prev);
+      next.delete(threadId);
+      return next;
+    });
     router.refresh();
   }
 
