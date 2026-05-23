@@ -175,13 +175,19 @@ export async function listThreads(
     // "Show all" should truly show all — including archived threads. Other
     // views (per-mailbox inbox, triage quadrants) keep archived hidden.
     includeArchived?: boolean;
+    // Dedicated Archived view — show ONLY archived threads, overriding
+    // includeArchived. Used by the /inbox/archived scope so users can browse
+    // and restore archived mail.
+    archivedOnly?: boolean;
     category?: MessageCategory;
     triage?: TriageFilter;
   } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const where = ["uma.user_id = ?"];
-  if (!opts.includeArchived) {
+  if (opts.archivedOnly) {
+    where.push("ti.archived = 1");
+  } else if (!opts.includeArchived) {
     where.push("ti.archived = 0");
   }
   const binds: unknown[] = [userId];
