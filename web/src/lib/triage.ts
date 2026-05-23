@@ -72,6 +72,9 @@ export async function listThreadsForTriage(
     mailboxId?: string;
     limit?: number;
     includeMuted?: boolean;
+    // "Show all" callers pass true so archived threads surface alongside
+    // everything else — the button is meant to be a true escape hatch.
+    includeArchived?: boolean;
     // #68 category tabs are orthogonal to the triage classifier; passed
     // straight through to listThreads.
     category?: MessageCategory;
@@ -81,6 +84,7 @@ export async function listThreadsForTriage(
     mailboxId: opts.mailboxId,
     limit: opts.limit,
     includeMuted: opts.includeMuted,
+    includeArchived: opts.includeArchived,
     category: opts.category,
     triage: quadrantPredicate(opts.quadrant) ?? undefined,
   });

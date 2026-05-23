@@ -172,15 +172,18 @@ export async function listThreads(
     domainId?: string;
     limit?: number;
     includeMuted?: boolean;
+    // "Show all" should truly show all — including archived threads. Other
+    // views (per-mailbox inbox, triage quadrants) keep archived hidden.
+    includeArchived?: boolean;
     category?: MessageCategory;
     triage?: TriageFilter;
   } = {},
 ): Promise<ThreadListItem[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  const where = [
-    "uma.user_id = ?",
-    "ti.archived = 0",
-  ];
+  const where = ["uma.user_id = ?"];
+  if (!opts.includeArchived) {
+    where.push("ti.archived = 0");
+  }
   const binds: unknown[] = [userId];
 
   // Muted threads are visible in the unified "all" view but hidden from

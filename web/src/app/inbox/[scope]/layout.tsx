@@ -250,6 +250,10 @@ export default async function InboxLayout({
             listThreadsForTriage(user.id, {
               quadrant: quadrantParam,
               includeMuted: true,
+              // "Show all" is the true escape hatch — include archived
+              // threads too, otherwise it can't surface a thread the user
+              // archived once and that subsequently received new messages.
+              includeArchived: quadrantParam === "all",
               category: quadrantParam === "all" ? undefined : categoryParam,
             })
           : listThreads(user.id, {
