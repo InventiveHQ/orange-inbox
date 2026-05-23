@@ -176,6 +176,12 @@ export default function ThreadList({ threads, scope, activeThreadId, showDomain 
     else params.set("view", next);
     const qs = params.toString();
     router.push(qs ? `/inbox/${scope}?${qs}` : `/inbox/${scope}`);
+    // Force the layout's server fetch to re-read the ?view= param. App
+    // Router otherwise serves the cached RSC payload for the same route
+    // when only the search params change, leaving the quadrant filter
+    // visually inert. Other handlers in this file already pair push +
+    // refresh for the same reason.
+    router.refresh();
   }
 
   function toggleOne(id: string, on: boolean) {

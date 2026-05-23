@@ -139,6 +139,10 @@ export default async function InboxLayout({
     // Starred: threads the user has hit ★ on. Cross-mailbox, includes
     // archived rows (starring is how users save things to revisit).
     "starred",
+    // Archived view (issue #125): dedicated browse / restore surface for
+    // archived threads. The default inbox listing hides archived, so this
+    // scope is the only place to see them on their own.
+    "archived",
   ]);
   // `domain:<id>` is a unified view across every mailbox the user can read on
   // a given domain — picked up below in the listThreads filter. `layout:<id>`
@@ -164,6 +168,7 @@ export default async function InboxLayout({
   const isAssigned = effectiveScope === "assigned";
   const isSpam = effectiveScope === "spam";
   const isStarred = effectiveScope === "starred";
+  const isArchived = effectiveScope === "archived";
   const isDomainScope = matchedDomain !== null && effectiveScope === scope;
   const isLayoutScope = matchedLayout !== null && effectiveScope === scope;
   // Board view is only offered on a single mailbox scope — the board owns a
@@ -194,6 +199,7 @@ export default async function InboxLayout({
     isAssigned ||
     isSpam ||
     isStarred ||
+    isArchived ||
     isFullPage ||
     isDomainScope ||
     isLayoutScope
@@ -230,6 +236,11 @@ export default async function InboxLayout({
           // has hit ★ on. Includes archived rows so it doubles as a
           // "saved for later" stash. See listStarredThreads.
           listStarredThreads(user.id)
+        : isArchived
+        ? // Archived view (#125): only archived threads — cross-mailbox so
+          // anything the user has previously archived is findable in one
+          // place, with includeMuted so muted-and-archived rows surface too.
+          listThreads(user.id, { archivedOnly: true, includeMuted: true })
         : isVips
         ? // VIPs view spans every mailbox the user can read — see
           // listVipThreads. Cross-mailbox by design: VIPs are a per-user

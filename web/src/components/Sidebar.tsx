@@ -597,6 +597,13 @@ function MailNavBody({
           icon={<SpamIcon />}
           collapsed={collapsed}
         />
+        <SpecialLink
+          href="/inbox/archived"
+          label="Archived"
+          active={scope === "archived"}
+          icon={<ArchivedIcon />}
+          collapsed={collapsed}
+        />
 
         {!collapsed && domainEntries.length > 0 && (
           <div className="mt-5 mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
@@ -1445,6 +1452,16 @@ function ScheduledIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
       <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm.75 3.5v3.69l2.53 1.46a.75.75 0 1 1-.75 1.3L7.625 9.16A.75.75 0 0 1 7.25 8.5v-4a.75.75 0 0 1 1.5 0Z" />
+    </svg>
+  );
+}
+
+function ArchivedIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="1.5" y="2.5" width="13" height="3" rx="0.5" />
+      <path d="M2.5 5.5v7a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-7" />
+      <path d="M6 8.5h4" />
     </svg>
   );
 }
