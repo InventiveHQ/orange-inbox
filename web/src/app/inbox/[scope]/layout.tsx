@@ -261,11 +261,20 @@ export default async function InboxLayout({
             listThreadsForTriage(user.id, {
               quadrant: quadrantParam,
               includeMuted: true,
-              // "Show all" is the true escape hatch — include archived
-              // threads too, otherwise it can't surface a thread the user
-              // archived once and that subsequently received new messages.
-              includeArchived: quadrantParam === "all",
-              category: quadrantParam === "all" ? undefined : categoryParam,
+              // The unified "All inboxes" scope is meant to surface every
+              // thread the user has access to — archived included. Deriving
+              // this from quadrantParam was unreliable: layouts can't see
+              // searchParams, and the next-url/referer header workaround
+              // doesn't survive every router.refresh() so the layout often
+              // saw a stale quadrant and gated archived back out. Always
+              // including archived here keeps the listing consistent; the
+              // triage tabs still narrow the result by content (Primary
+              // action filters by (is_marketing=0, is_action_item=1) etc.).
+              includeArchived: true,
+              // Same rationale for category: the unified view doesn't apply
+              // the implicit category=primary default — the triage tabs are
+              // what should narrow this view.
+              category: undefined,
             })
           : listThreads(user.id, {
               mailboxId,
