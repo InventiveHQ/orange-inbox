@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "./ToastProvider";
+import { useDismissedThreads } from "./DismissedThreadsProvider";
 import AssignButton from "./AssignButton";
 import UndoToast from "./UndoToast";
 
@@ -78,6 +79,11 @@ export default function ThreadActions({
 }: Props) {
   const router = useRouter();
   const { toast } = useToast();
+  // Shared optimistic-dismissal set — lets the detail-pane Archive button
+  // hide the row from ThreadList immediately. Without this the row stays
+  // visible on /inbox/all (which intentionally includes archived threads)
+  // until the user navigates away. See DismissedThreadsProvider.
+  const dismissed = useDismissedThreads();
   const [starred, setStarred] = useState(initialStarred);
   const [archived, setArchived] = useState(initialArchived);
   const [muted, setMuted] = useState(initialMuted);
@@ -309,6 +315,11 @@ export default function ThreadActions({
     const previousArchived = archived;
     const next = !previousArchived;
     setArchived(next);
+    // Hide the row from any ThreadList rendered alongside this view. The
+    // dismissal is shared via DismissedThreadsProvider so /inbox/all
+    // (which keeps archived rows in its listing query) doesn't keep
+    // showing the just-archived thread.
+    dismissed.dismiss(threadId);
     setError(null);
     setPending({ kind: "archive", previousArchived });
     // Fire the PATCH immediately — the inbox list reflects the new state on
@@ -320,6 +331,7 @@ export default function ThreadActions({
     }).then(async res => {
       if (!res.ok) {
         setArchived(previousArchived);
+        dismissed.restore(threadId);
         setPending(null);
         const b = (await res.json().catch(() => ({}))) as { error?: string };
         setError(b.error ?? `Failed (${res.status})`);
@@ -345,6 +357,7 @@ export default function ThreadActions({
       return;
     }
     setArchived(previousArchived);
+    dismissed.restore(threadId);
     setPending(null);
     router.refresh();
   }
@@ -363,6 +376,10 @@ export default function ThreadActions({
   function deleteThread() {
     if (pending) return;
     setError(null);
+    // Hide the row from the list while the toast counts down — same
+    // rationale as archive(). Without this the user sees "Conversation
+    // deleted" on the toast but the row keeps sitting in the inbox list.
+    dismissed.dismiss(threadId);
     // Defer the DELETE until the toast expires so the user can back out.
     setPending({ kind: "delete" });
   }
@@ -371,6 +388,8 @@ export default function ThreadActions({
     const res = await fetch(`/api/threads/${threadId}`, { method: "DELETE" });
     setPending(null);
     if (!res.ok) {
+      // DELETE failed — bring the row back so the user can retry.
+      dismissed.restore(threadId);
       const b = (await res.json().catch(() => ({}))) as { error?: string };
       setError(b.error ?? `Failed (${res.status})`);
       return;
@@ -380,6 +399,7 @@ export default function ThreadActions({
   }
 
   function undoDelete() {
+    dismissed.restore(threadId);
     setPending(null);
   }
 
