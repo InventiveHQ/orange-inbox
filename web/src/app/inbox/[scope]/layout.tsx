@@ -33,6 +33,7 @@ import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
+import { DismissedThreadsProvider } from "@/components/DismissedThreadsProvider";
 import { ToastProvider } from "@/components/ToastProvider";
 import ComposeFromUrl from "@/components/ComposeFromUrl";
 import SearchBar from "@/components/SearchBar";
@@ -432,6 +433,7 @@ export default async function InboxLayout({
         undoSendSeconds={user.undo_send_seconds}
         defaultTrackOpens={prefs.default_track_opens}
       >
+        <DismissedThreadsProvider>
         <ComposeFromUrl />
         <AppBadgeSync />
         <KeyboardShortcuts />
@@ -468,6 +470,7 @@ export default async function InboxLayout({
             main={children}
           />
         </SectionDrawerWrap>
+        </DismissedThreadsProvider>
       </ComposeProvider>
     </ToastProvider>
   );

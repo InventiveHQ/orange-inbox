@@ -13,6 +13,7 @@ import {
 } from "@/lib/triage";
 import Avatar, { hashHue } from "./Avatar";
 import CategoryTabs from "./CategoryTabs";
+import { useDismissedThreads } from "./DismissedThreadsProvider";
 import EmptyState from "./EmptyState";
 import LabelChip from "./LabelChip";
 import UndoToast from "./UndoToast";
@@ -79,27 +80,35 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
   // RSC roundtrip. React's transition primitive marks those navigations as
   // non-blocking so the rest of the UI stays interactive in the meantime.
   const [, startTransition] = useTransition();
-  // Optimistic-archive UX. We add a thread id here the moment the user
-  // archives (or bulk-archives/deletes) so the row disappears immediately
-  // instead of waiting on the server roundtrip and router.refresh() cycle.
+  // Optimistic-archive UX. We add a thread id to the shared dismissed set
+  // the moment the user archives (or bulk-archives/deletes) so the row
+  // disappears immediately instead of waiting on the server roundtrip and
+  // router.refresh() cycle. The set is shared (DismissedThreadsProvider) so
+  // the detail-pane Archive button in ThreadActions can dismiss too —
+  // otherwise /inbox/all (which intentionally includes archived threads)
+  // keeps showing the just-archived row until the user navigates away.
   // Single archive rolls back on failure; bulk actions surface the error
   // via the existing bulkError banner and leave the dismissal in place
   // (the user can reload to recover failed ids).
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  // Filter the server-supplied threads through dismissedIds so every
+  const dismissed = useDismissedThreads();
+  // Filter the server-supplied threads through the dismissed set so every
   // downstream `threads.x` reference (selection, counts, render groups)
   // sees the optimistic view automatically.
   const threads = useMemo(
-    () => (dismissedIds.size === 0 ? rawThreads : rawThreads.filter(t => !dismissedIds.has(t.id))),
-    [rawThreads, dismissedIds],
+    () =>
+      dismissed.hasDismissed
+        ? rawThreads.filter(t => !dismissed.isDismissed(t.id))
+        : rawThreads,
+    [rawThreads, dismissed],
   );
-  // Clear optimistic dismissals when the user changes scope. The ThreadList
-  // component instance persists across scope nav, so without this an item
-  // archived from /inbox/all would still be hidden when the user visits
-  // /inbox/archived where it legitimately belongs.
+  // Clear optimistic dismissals when the user changes scope. The provider
+  // persists across scope nav (it lives in the layout), so without this an
+  // item archived from /inbox/all would still be hidden when the user
+  // visits /inbox/archived where it legitimately belongs.
+  const clearDismissed = dismissed.clear;
   useEffect(() => {
-    setDismissedIds(new Set());
-  }, [scope]);
+    clearDismissed();
+  }, [scope, clearDismissed]);
   const triageEnabled = showsTriageBar(scope);
   const categoryTabsEnabled = showsCategoryTabs(scope);
 
@@ -255,11 +264,7 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
     // runBulk's router.refresh() re-syncs from the server; any failures are
     // surfaced via the bulkError banner.
     const ids = Array.from(selected);
-    setDismissedIds(prev => {
-      const next = new Set(prev);
-      ids.forEach(id => next.add(id));
-      return next;
-    });
+    dismissed.dismissMany(ids);
     void runBulk(id =>
       fetch(`/api/threads/${id}`, {
         method: "PATCH",
@@ -273,11 +278,7 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
     if (selected.size === 0 || bulkBusy) return;
     if (!confirm(`Permanently delete ${selected.size} conversation${selected.size === 1 ? "" : "s"}?`)) return;
     const ids = Array.from(selected);
-    setDismissedIds(prev => {
-      const next = new Set(prev);
-      ids.forEach(id => next.add(id));
-      return next;
-    });
+    dismissed.dismissMany(ids);
     void runBulk(id => fetch(`/api/threads/${id}`, { method: "DELETE" }));
   }
 
@@ -317,22 +318,14 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
   function archiveOneFromSwipe(threadId: string) {
     // Optimistically dismiss so the swipe-to-archive feels instant. Roll
     // back on failure since a single archive has a clear blast radius.
-    setDismissedIds(prev => {
-      const next = new Set(prev);
-      next.add(threadId);
-      return next;
-    });
+    dismissed.dismiss(threadId);
     void fetch(`/api/threads/${threadId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ archived: true }),
     }).then(res => {
       if (!res.ok) {
-        setDismissedIds(prev => {
-          const next = new Set(prev);
-          next.delete(threadId);
-          return next;
-        });
+        dismissed.restore(threadId);
         setBulkError("Archive failed");
         return;
       }
@@ -356,11 +349,7 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
     // Bring the row back into view; otherwise the optimistic dismiss from
     // archiveOneFromSwipe keeps it hidden client-side even though the
     // server has re-surfaced it.
-    setDismissedIds(prev => {
-      const next = new Set(prev);
-      next.delete(threadId);
-      return next;
-    });
+    dismissed.restore(threadId);
     router.refresh();
   }
 
