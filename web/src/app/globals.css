@@ -48,6 +48,9 @@
   --color-brand: var(--brand);
   --color-brand-fg: #ffffff;
   --font-sans: var(--font-geist-sans);
+  /* Brand/display face — drives the `font-display` utility. Only used on the
+     wordmark and empty-state headlines; everything else stays on --font-sans. */
+  --font-display: var(--font-fraunces);
 }
 
 /* Theme override.
@@ -109,6 +112,75 @@
 }
 [data-orange-modal] {
   animation: orange-modal-in 100ms ease-out;
+}
+
+/* Thread-list entrance — one orchestrated reveal on first paint (issue #UX).
+   Each row fades and rises with a stepped delay set inline by ThreadList
+   (capped, so a long list doesn't ripple forever). CSS animations only fire
+   on mount, so surviving rows don't re-animate when the list re-renders after
+   an archive. The global prefers-reduced-motion rule at the top of this file
+   suppresses it entirely. `both` holds the from-state during the delay so a
+   row never flashes at full opacity before its turn. */
+@keyframes orange-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+[data-thread-enter] {
+  animation: orange-row-in 220ms ease-out both;
+}
+
+/* Archive/delete exit — collapse the row's height and fade as it leaves so the
+   list closes the gap smoothly instead of snapping (the archive action is the
+   most frequent interaction in the app). `grid-template-rows: 1fr → 0fr`
+   collapses to the row's exact height regardless of the density preset, with
+   no JS measurement. The child needs `min-height: 0` + `overflow: hidden` to
+   shrink below its content. Actual removal from the list is driven by a timer
+   in ThreadList — NOT animationend — so reduced-motion users (for whom this
+   animation is suppressed and animationend never fires) still get the row
+   dropped; on browsers that don't interpolate grid tracks it degrades to a
+   fade + instant collapse, which is no worse than the previous snap. */
+@keyframes orange-row-out {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+[data-thread-exit] {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: orange-row-out 150ms ease-out forwards;
+}
+[data-thread-exit] > * {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Inbox-zero celebration (issue #UX). The unified inbox reaching empty is the
+   payoff of a triage tool, so its empty state gets a warm brand-tinted entrance
+   distinct from the neutral "no drafts" / "no matches" states. Suppressed under
+   reduced-motion by the global rule. */
+@keyframes orange-celebrate-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+[data-inbox-zero] {
+  animation: orange-celebrate-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Print rules (issue #46). The on-screen chrome (sidebar, top bar, action

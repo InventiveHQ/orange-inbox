@@ -6,6 +6,7 @@
 
 export type EmptyStateVariant =
   | "inbox"
+  | "inbox_zero"
   | "drafts"
   | "contacts"
   | "search"
@@ -25,14 +26,49 @@ interface Props {
 
 export default function EmptyState({ variant, title, body, action }: Props) {
   const copy = DEFAULT_COPY[variant];
+  // Inbox-zero is the emotional payoff of a triage tool, so it gets a warmer,
+  // brand-led treatment: a soft radial glow behind a brand-coloured glyph, a
+  // larger display headline, and a gentle scale-in. Every other variant keeps
+  // the quiet neutral styling — an empty mailbox or "no matches" isn't an
+  // achievement to celebrate.
+  const celebrate = variant === "inbox_zero";
   return (
-    <div className="flex-1 flex items-center justify-center px-6 py-12 text-center">
-      <div className="max-w-sm flex flex-col items-center">
+    <div
+      className="relative flex-1 flex items-center justify-center px-6 py-12 text-center"
+      {...(celebrate ? { "data-inbox-zero": "" } : {})}
+    >
+      {celebrate && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+        >
+          <div
+            className="h-72 w-72 rounded-full opacity-60 blur-3xl"
+            style={{
+              background:
+                "radial-gradient(circle, color-mix(in srgb, var(--color-brand) 45%, transparent) 0%, transparent 70%)",
+            }}
+          />
+        </div>
+      )}
+      <div className="relative max-w-sm flex flex-col items-center">
         <Illustration variant={variant} />
-        <h2 className="mt-4 text-base font-semibold text-neutral-800 dark:text-neutral-200">
+        <h2
+          className={
+            celebrate
+              ? "font-display mt-5 text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50"
+              : "font-display mt-4 text-lg font-semibold text-neutral-800 dark:text-neutral-200"
+          }
+        >
           {title ?? copy.title}
         </h2>
-        <p className="mt-1.5 text-sm text-neutral-500 dark:text-neutral-400">
+        <p
+          className={`mt-1.5 text-sm ${
+            celebrate
+              ? "text-neutral-600 dark:text-neutral-300"
+              : "text-neutral-500 dark:text-neutral-400"
+          }`}
+        >
           {body ?? copy.body}
         </p>
         {action && (
@@ -50,8 +86,12 @@ export default function EmptyState({ variant, title, body, action }: Props) {
 
 const DEFAULT_COPY: Record<EmptyStateVariant, { title: string; body: string }> = {
   inbox: {
-    title: "Inbox zero",
+    title: "Nothing here",
     body: "No mail in this view yet. New messages appear here as they arrive.",
+  },
+  inbox_zero: {
+    title: "All clear",
+    body: "You've handled everything that needs you. Enjoy the quiet.",
   },
   drafts: {
     title: "No drafts",
@@ -89,6 +129,31 @@ function Illustration({ variant }: { variant: EmptyStateVariant }) {
     className: "text-neutral-300 dark:text-neutral-700",
   };
   switch (variant) {
+    case "inbox_zero":
+      // Celebratory glyph — an envelope sealed with a check, haloed by short
+      // rays. Drawn in the brand colour (overriding the neutral `common`
+      // stroke) so it reads as a reward, not an absence. Slightly larger than
+      // the other glyphs to anchor the moment.
+      return (
+        <svg
+          {...common}
+          width={104}
+          height={104}
+          strokeWidth={2}
+          className="text-[var(--color-brand)]"
+        >
+          <rect x="14" y="22" width="36" height="26" rx="3" />
+          <path d="M14 25l18 13 18-13" />
+          <circle cx="46" cy="20" r="9" fill="currentColor" stroke="none" />
+          <path
+            d="M42 20l3 3 5-6"
+            stroke="#ffffff"
+            strokeWidth={2.2}
+          />
+          {/* rays */}
+          <path d="M46 4v4M58 8l-2.8 2.8M62 20h-4M58 32l-2.8-2.8" opacity={0.7} />
+        </svg>
+      );
     case "inbox":
     case "search":
       // Envelope outline — the universal "mail" glyph. For "search" we add a

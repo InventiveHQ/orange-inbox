@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { ThreadListItem } from "@/lib/queries";
 import { dateBucket, formatThreadDate, senderLabel } from "@/lib/format";
 import {
@@ -91,15 +91,59 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
   // via the existing bulkError banner and leave the dismissal in place
   // (the user can reload to recover failed ids).
   const dismissed = useDismissedThreads();
-  // Filter the server-supplied threads through the dismissed set so every
-  // downstream `threads.x` reference (selection, counts, render groups)
-  // sees the optimistic view automatically.
+  // Animated removal. A dismissed thread is NOT dropped from the DOM
+  // immediately — it stays mounted and plays a collapse-and-fade exit (see
+  // [data-thread-exit] in globals.css), then a per-row timer adds its id to
+  // `removed`, which is the set that actually drops it from render. Timer-driven
+  // (not animationend) so reduced-motion users — for whom the animation is
+  // suppressed — still get the row removed after the same short beat.
+  const [removed, setRemoved] = useState<Set<string>>(() => new Set());
+  const onExited = useCallback((id: string) => {
+    setRemoved(prev => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+  const rawIdSet = useMemo(() => new Set(rawThreads.map(t => t.id)), [rawThreads]);
+  // Self-heal `removed`: keep an id flagged removed only while it's still both
+  // present in the server data AND dismissed. This resurrects a row when an
+  // archive is undone (dismissed.restore flips it back) — without it the undo
+  // would leave the row hidden forever — and prunes ids the server has since
+  // dropped so the set can't grow unbounded across a session.
+  useEffect(() => {
+    // Reconciling local removal state against server data + the dismissed set
+    // is a genuine external-sync effect; the functional updater no-ops (returns
+    // prev) when nothing changed, so it can't cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRemoved(prev => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (rawIdSet.has(id) && dismissed.isDismissed(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [rawIdSet, dismissed]);
+  // What we actually render: server threads minus the fully-removed ones. This
+  // still includes rows mid-exit (dismissed but not yet timed out) so they can
+  // animate. Groups, the select-all header, and the empty-state check all key
+  // off this so an exiting row keeps its place until the collapse finishes.
+  const renderThreads = useMemo(
+    () => rawThreads.filter(t => !removed.has(t.id)),
+    [rawThreads, removed],
+  );
+  // Logical view (exiting rows excluded) — drives selection and counts so a row
+  // on its way out can't be (de)selected or counted.
   const threads = useMemo(
     () =>
       dismissed.hasDismissed
-        ? rawThreads.filter(t => !dismissed.isDismissed(t.id))
-        : rawThreads,
-    [rawThreads, dismissed],
+        ? renderThreads.filter(t => !dismissed.isDismissed(t.id))
+        : renderThreads,
+    [renderThreads, dismissed],
   );
   // Clear optimistic dismissals when the user changes scope. The provider
   // persists across scope nav (it lives in the layout), so without this an
@@ -108,6 +152,9 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
   const clearDismissed = dismissed.clear;
   useEffect(() => {
     clearDismissed();
+    // Reset removal state alongside the dismissed set on scope change.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRemoved(new Set());
   }, [scope, clearDismissed]);
   const triageEnabled = showsTriageBar(scope);
   const categoryTabsEnabled = showsCategoryTabs(scope);
@@ -365,7 +412,9 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
   const groups = useMemo(() => {
     const now = Date.now();
     const out: { label: string; items: ThreadListItem[] }[] = [];
-    for (const t of threads) {
+    // Group `renderThreads` (not the logical `threads`) so a row mid-exit keeps
+    // its place in its date bucket while it collapses.
+    for (const t of renderThreads) {
       const label = dateBucket(t.last_message_at, now);
       const last = out[out.length - 1];
       if (last && last.label === label) {
@@ -375,7 +424,14 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
       }
     }
     return out;
-  }, [threads]);
+  }, [renderThreads]);
+
+  // Flat position of each rendered row, used to stagger the entrance animation.
+  const orderIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    renderThreads.forEach((t, i) => m.set(t.id, i));
+    return m;
+  }, [renderThreads]);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -478,9 +534,12 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
         </div>
       )}
 
-      {threads.length === 0 ? (
+      {renderThreads.length === 0 ? (
         <EmptyState
-          variant={scope === "vips" ? "inbox" : "inbox"}
+          // The unified inbox reaching empty is the triage payoff, so it gets
+          // the celebratory inbox_zero treatment. Per-mailbox / VIP empties are
+          // ordinary states and keep the quiet neutral styling.
+          variant={scope === "all" ? "inbox_zero" : "inbox"}
           title={scope === "vips" ? "No VIP mail yet" : undefined}
           body={
             scope === "vips"
@@ -531,6 +590,9 @@ export default function ThreadList({ threads: rawThreads, scope, activeThreadId,
                   showDomain={showDomain}
                   isActive={activeThreadId === t.id}
                   isSelected={selected.has(t.id)}
+                  isExiting={dismissed.isDismissed(t.id)}
+                  enterIndex={orderIndex.get(t.id) ?? 0}
+                  onExited={onExited}
                   onToggleSelect={on => toggleOne(t.id, on)}
                   onSwipeArchive={() => archiveOneFromSwipe(t.id)}
                 />
@@ -594,12 +656,27 @@ function TriageBar({
   );
 }
 
+// Exit timing. Slightly longer than the [data-thread-exit] CSS animation
+// (150ms) so the collapse visually finishes before the row unmounts. Drives
+// removal even under prefers-reduced-motion, where the animation is suppressed.
+const EXIT_REMOVE_MS = 170;
+// Entrance stagger. Each row's delay = index * STEP, capped at MAX_STEPS so a
+// long list reveals over ~0.25s rather than rippling indefinitely.
+const ENTER_STEP_MS = 18;
+const ENTER_MAX_STEPS = 14;
+
 interface ThreadRowProps {
   thread: ThreadListItem;
   scope: string;
   showDomain: boolean;
   isActive: boolean;
   isSelected: boolean;
+  // True once the thread is optimistically dismissed (archived/deleted). The
+  // row stays mounted to play its collapse animation; `onExited` then drops it.
+  isExiting: boolean;
+  // Flat position in the list, used to stagger the entrance animation.
+  enterIndex: number;
+  onExited: (id: string) => void;
   onToggleSelect: (on: boolean) => void;
   onSwipeArchive: () => void;
 }
@@ -610,9 +687,21 @@ function ThreadRow({
   showDomain,
   isActive,
   isSelected,
+  isExiting,
+  enterIndex,
+  onExited,
   onToggleSelect,
   onSwipeArchive,
 }: ThreadRowProps) {
+  // Once exiting, schedule the actual removal. Timer-based (not animationend)
+  // so reduced-motion users — whose collapse animation is suppressed — still
+  // get the row dropped. Cancels if the dismissal is undone before it fires.
+  useEffect(() => {
+    if (!isExiting) return;
+    const id = t.id;
+    const timer = setTimeout(() => onExited(id), EXIT_REMOVE_MS);
+    return () => clearTimeout(timer);
+  }, [isExiting, t.id, onExited]);
   const sender = senderLabel(t.last_from_addr, t.last_from_name);
   const subject = t.last_subject || "(no subject)";
   const isUnread = t.unread_count > 0;
@@ -714,6 +803,17 @@ function ThreadRow({
   return (
     <li
       data-thread-id={t.id}
+      // Exit (collapse+fade) vs entrance (staggered fade-rise) are mutually
+      // exclusive — see the [data-thread-exit] / [data-thread-enter] rules in
+      // globals.css. The entrance delay is set inline from the row's position.
+      {...(isExiting
+        ? { "data-thread-exit": "" }
+        : { "data-thread-enter": "" })}
+      style={
+        isExiting
+          ? undefined
+          : { animationDelay: `${Math.min(enterIndex, ENTER_MAX_STEPS) * ENTER_STEP_MS}ms` }
+      }
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}

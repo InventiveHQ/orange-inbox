@@ -297,7 +297,9 @@ export default function Sidebar({
         {!collapsed && (
           <>
             <span className="inline-block w-3 h-3 rounded-full bg-[var(--color-brand)]" />
-            <span className="font-semibold tracking-tight truncate">Orange Inbox</span>
+            <span className="font-display text-[1.0625rem] font-semibold tracking-tight truncate">
+              Orange Inbox
+            </span>
           </>
         )}
         <button

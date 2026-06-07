@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist } from "next/font/google";
+import { Geist, Fraunces } from "next/font/google";
 import { cookies } from "next/headers";
 import "./globals.css";
 import PWAClient from "@/components/PWAClient";
@@ -12,6 +12,18 @@ import {
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+});
+
+// Display face for brand-bearing surfaces only — the wordmark and empty-state
+// headlines — wired through `--font-display` (see globals.css @theme inline,
+// utility `font-display`). Geist still owns all body/UI text; Fraunces is a
+// warm optical-sized serif that gives those few brand moments character
+// without touching the dense list legibility Geist handles well. `opsz` is
+// exposed so headlines can lean into the high-contrast display cut.
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+  axes: ["opsz", "SOFT", "WONK"],
 });
 
 export const metadata: Metadata = {
@@ -55,7 +67,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${fraunces.variable} h-full antialiased`}
       data-theme={prefs.theme}
       data-density={prefs.density}
       style={{ ["--brand" as string]: prefs.accent_hex }}
