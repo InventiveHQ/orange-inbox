@@ -328,7 +328,7 @@ export default function Sidebar({
       <nav
         id="orange-sidebar-nav"
         aria-label={sectionBody ? sectionLabel(scope) : "Mailboxes"}
-        className={`flex-1 overflow-y-auto pb-2 ${collapsed ? "px-1.5 pr-2.5" : "px-2"}`}
+        className={`flex-1 overflow-y-auto overflow-x-hidden pb-2 ${collapsed ? "px-1.5 pr-2.5" : "px-2"}`}
       >
         {sectionBody ? sectionBody : (
           <MailNavBody
