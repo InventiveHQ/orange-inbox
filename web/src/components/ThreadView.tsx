@@ -328,8 +328,8 @@ function MessageBlock({
 
   return (
     <section className="px-4 py-4 sm:px-6 sm:py-5">
-      <div className="flex items-baseline justify-between gap-3">
-        <div className="flex items-start gap-3 min-w-0">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
           <Avatar seed={avatarSeed} label={senderText} size="lg" title={m.from_addr} vip={isVip} />
           <div className="min-w-0">
             <div className="text-sm font-medium break-words flex flex-wrap items-center gap-x-2 gap-y-1">
