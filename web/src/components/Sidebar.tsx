@@ -13,6 +13,24 @@ const SMART_MAILBOXES_COOKIE = "smart-mailboxes-open";
 const LAYOUTS_OPEN_COOKIE = "inbox-layouts-open";
 const DOMAIN_EXPANDED_PREFIX = "sidebar-domain-expanded:";
 
+// Read the persisted collapse state from the cookie on the client.
+// Navigating to /inbox/calendar or /inbox/contacts swaps the layout's
+// SectionDrawerWrap between a Fragment and a context Provider, which
+// changes the element type above this component and forces React to
+// remount it. A plain useState(initialCollapsed) would then reset from
+// the layout's *cached* RSC prop (captured at first load, before the
+// user collapsed the rail) and the drawer would spring back open. By
+// seeding from the live cookie we keep the user's choice across that
+// remount. Returns null during SSR (no document) so the initializer
+// falls back to the server-provided prop and hydration stays stable.
+function readCollapsedCookie(): boolean | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${COLLAPSED_COOKIE}=([^;]*)`),
+  );
+  return match ? match[1] === "1" : null;
+}
+
 // MIME types used by the native HTML5 DnD payload. We carry only an opaque
 // id string; the actual reorder logic reads it from React state, not from
 // the DataTransfer object (the browser strips data on dragover in some
@@ -152,7 +170,9 @@ export default function Sidebar({
   assignedCount = 0,
   sectionBody,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const [collapsed, setCollapsed] = useState(
+    () => readCollapsedCookie() ?? initialCollapsed,
+  );
   const [smartOpen, setSmartOpen] = useState(initialSmartOpen);
   // Layouts section open/closed pref. Same cookie-driven SSR hydration as
   // the Smart Mailboxes section above; default open so empty-state
