@@ -288,6 +288,32 @@ export async function listThreads(
   return (results ?? []).map(parseThreadListRow);
 }
 
+// Digest count for the auto-archive banner (0055). How many threads the
+// opt-in sweep has filed to Archive across the user's accessible mailboxes
+// within the last `windowSeconds`. Drives the "N filed in the last day ·
+// Review" reassurance banner; only counts threads still archived so a thread
+// the user has since pulled back into the inbox doesn't inflate the number.
+// The time window is evaluated in SQL (unixepoch()) so callers don't need a
+// clock — keeps server components free of impure Date.now() reads.
+export async function countRecentAutoArchived(
+  userId: string,
+  windowSeconds: number,
+): Promise<number> {
+  const row = await getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM threads_index ti
+         INNER JOIN user_mailbox_access uma ON uma.mailbox_id = ti.mailbox_id
+        WHERE uma.user_id = ?
+          AND ti.auto_archived_at IS NOT NULL
+          AND ti.auto_archived_at >= unixepoch() - ?
+          AND ti.archived = 1`,
+    )
+    .bind(userId, windowSeconds)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 function parseThreadListRow(row: ThreadListRow): ThreadListItem {
   let labels: ThreadListItem["labels"] = [];
   if (row.labels_json) {

@@ -622,11 +622,19 @@ function TriageBar({
   current: TriageQuadrant;
   onChange: (q: TriageQuadrant) => void;
 }) {
-  // Two-button triage: "Primary action" (default) and "Show all" (escape
-  // hatch). The other quadrants live in the sidebar's smart-mailbox section,
-  // not here — keeps the unified inbox header focused on "what do I act on
-  // now?" vs. "show me everything."
-  const items: TriageQuadrant[] = ["action_needed", "all"];
+  // Split-inbox strip: one tab per triage quadrant, ordered by how often you
+  // act on it. "Primary action" (humans who need a reply) leads; "Quiet"
+  // (humans, no action — the FYI lane); "Newsletters" (marketing, no action);
+  // "Bulk action" (marketing that still wants something — receipts/verifies);
+  // and "Show all" as the escape hatch. Mirrors Superhuman's Split Inbox:
+  // several small, intent-scoped inboxes instead of one firehose.
+  const items: TriageQuadrant[] = [
+    "action_needed",
+    "quiet_humans",
+    "marketing_quiet",
+    "marketing_action",
+    "all",
+  ];
   return (
     <div
       role="tablist"
@@ -652,6 +660,15 @@ function TriageBar({
           </button>
         );
       })}
+      {/* Mobile-only launcher for the swipe-through Triage deck. Desktop users
+          have j/k + keyboard actions; the card deck is the touch equivalent. */}
+      <button
+        type="button"
+        onClick={() => document.dispatchEvent(new CustomEvent("orange:open-triage"))}
+        className="sm:hidden ml-auto shrink-0 rounded-full bg-[var(--color-brand)] px-3 py-1 text-xs font-medium text-white"
+      >
+        Triage
+      </button>
     </div>
   );
 }

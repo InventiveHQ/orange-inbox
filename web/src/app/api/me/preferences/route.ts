@@ -55,6 +55,7 @@ export async function PATCH(req: NextRequest) {
       accent_hex: body.accent_hex,
       density: body.density,
       default_track_opens: body.default_track_opens,
+      auto_archive_marketing: body.auto_archive_marketing,
     };
     const next = await updateUserPreferences(user.id, prefsPatch);
     if (!next) {

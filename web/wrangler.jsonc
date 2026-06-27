@@ -48,6 +48,12 @@
     }
   ],
 
+  // Workers AI — one-line thread summaries (lazy, on thread open; cached on
+  // threads_index). Pay-per-use; usage is bounded by threads the user opens.
+  "ai": {
+    "binding": "AI"
+  },
+
   // Outbound email. Sender domain must have Email Routing active in your account.
   // Without `destination_address` / `allowed_destination_addresses` this binding is
   // unrestricted, so any verified destination works.

@@ -169,12 +169,23 @@ function KeyboardShortcutsSection() {
           </h3>
           <ul className="space-y-1">
             <ShortcutRow keys={["e"]} desc="Archive" />
+            <ShortcutRow keys={["h"]} desc="Follow-up on / off" />
             <ShortcutRow keys={["#"]} desc="Delete" />
             <ShortcutRow keys={["s"]} desc="Star / unstar" />
             <ShortcutRow keys={["l"]} desc="Apply label" />
             <ShortcutRow keys={["r"]} desc="Reply" />
             <ShortcutRow keys={["c"]} desc="Compose" />
             <ShortcutRow keys={["?"]} desc="Show this section" />
+          </ul>
+        </div>
+        <div>
+          <h3 className="mt-2 mb-1 text-xs uppercase tracking-wider text-neutral-500">
+            Selection
+          </h3>
+          <ul className="space-y-1">
+            <ShortcutRow keys={["x"]} desc="Select / deselect conversation" />
+            <ShortcutRow keys={["a"]} desc="Select all" />
+            <ShortcutRow keys={["Esc"]} desc="Clear selection" />
           </ul>
         </div>
         <div className="sm:col-span-2">

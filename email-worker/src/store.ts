@@ -161,6 +161,18 @@ export async function storeMessage(
   const triageCtx = await loadTriageContext(env, recipient.mailboxId, fromAddrLower, firstContact);
   const triage = classify(parsed, triageCtx);
 
+  // Opt-in auto-archive (0055). If the mailbox owner turned it on, file new
+  // marketing/quiet threads straight to archived — same inbox suppression as
+  // muted mail (no unread bump, no push), plus a timestamp the digest banner
+  // reads. Restricted to NEW threads so a stray bulk message can never sweep
+  // an active human conversation, and to (marketing & !action) so receipts /
+  // verifies that still want a click (the "Bulk action" lane) stay visible.
+  const autoArchive =
+    thread.isNew &&
+    triage.isMarketing &&
+    !triage.isActionItem &&
+    (await ownerWantsAutoArchive(env, recipient.mailboxId));
+
   stmts.push(
     mailDb
       .prepare(
@@ -345,8 +357,9 @@ export async function storeMessage(
       // Muted threads and mail from blocked senders don't bump unread and
       // stay archived — they shouldn't re-surface in the inbox just because
       // a new message arrived.
-      unreadDelta: suppress ? 0 : 1,
-      forceArchived: suppress,
+      unreadDelta: suppress || autoArchive ? 0 : 1,
+      forceArchived: suppress || autoArchive,
+      autoArchivedAt: autoArchive ? dateSeconds : undefined,
       lastMessageId: messageId,
       lastSubject: parsed.subject || null,
       lastFromAddr: parsed.from.addr,
@@ -403,7 +416,7 @@ export async function storeMessage(
   // If a terminal rule fired (archive/delete), the thread row is either
   // archived or gone — neither case wants a push notification. Detect by
   // re-reading threads_index; missing or archived = suppress.
-  let suppressPush = suppress;
+  let suppressPush = suppress || autoArchive;
   if (ruleApplied && !suppressPush) {
     const post = await env.DB
       .prepare("SELECT archived FROM threads_index WHERE thread_id = ?")
@@ -587,6 +600,31 @@ async function loadTriageContext(
     firstContact,
     mailboxIsOwned,
   };
+}
+
+// Auto-archive opt-in (0055). True when an OWNER of this mailbox has turned on
+// auto_archive_marketing in their preferences. Best-effort: a lookup failure
+// degrades to "off" so a transient DB hiccup never silently files mail away.
+// Scoped to role='owner' so a shared viewer's preference can't change what the
+// owner sees in their own inbox.
+async function ownerWantsAutoArchive(env: Env, mailboxId: string): Promise<boolean> {
+  try {
+    const row = await env.DB
+      .prepare(
+        `SELECT up.auto_archive_marketing AS v
+           FROM user_mailbox_access uma
+           JOIN user_preferences up ON up.user_id = uma.user_id
+          WHERE uma.mailbox_id = ? AND uma.role = 'owner'
+            AND up.auto_archive_marketing = 1
+          LIMIT 1`,
+      )
+      .bind(mailboxId)
+      .first<{ v: number }>();
+    return row?.v === 1;
+  } catch (err) {
+    console.error("ownerWantsAutoArchive lookup failed", err);
+    return false;
+  }
 }
 
 async function notifyWebOfNewMessage(

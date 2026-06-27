@@ -77,6 +77,26 @@ export default function KeyboardShortcuts() {
       if (link) link.click();
     }
 
+    // `x` toggles the row's selection checkbox (Gmail parity). Clicking the
+    // input fires its onChange, so this reuses ThreadList's selection state
+    // and bulk-action bar without re-implementing anything.
+    function toggleSelectCurrent() {
+      const els = listEl();
+      const idx = selectedIndexRef.current;
+      if (idx < 0 || idx >= els.length) return;
+      const box = els[idx].querySelector<HTMLInputElement>('input[type="checkbox"]');
+      if (box) box.click();
+    }
+
+    // `a` toggles the list's "Select all" checkbox (rendered whenever the
+    // list is non-empty), driving ThreadList's toggleAll.
+    function toggleSelectAll() {
+      const box = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Select all"]',
+      );
+      if (box) box.click();
+    }
+
     function clickAction(name: string) {
       // Prefer a button inside the current main viewport (thread detail);
       // otherwise click the first matching one anywhere on the page.
@@ -171,6 +191,24 @@ export default function KeyboardShortcuts() {
           clickAction("archive");
           e.preventDefault();
           return;
+        case "h":
+          // Follow-up — the feature that replaced the removed snooze. Toggles
+          // tracking on the open thread (data-action="follow-up").
+          clickAction("follow-up");
+          e.preventDefault();
+          return;
+        case "x":
+          toggleSelectCurrent();
+          e.preventDefault();
+          return;
+        case "a":
+          toggleSelectAll();
+          e.preventDefault();
+          return;
+        case "Escape":
+          clearSelection();
+          e.preventDefault();
+          return;
         case "#":
           clickAction("delete");
           e.preventDefault();
@@ -214,6 +252,18 @@ export default function KeyboardShortcuts() {
     return () => {
       document.removeEventListener("keydown", handleKey);
     };
+  }, [router]);
+
+  // The command palette's "Show keyboard shortcuts" action dispatches this
+  // event. The cheat sheet lives as a Help section (not a modal), so route
+  // there — same destination as the `?` shortcut. Previously nothing listened
+  // and the action was inert.
+  useEffect(() => {
+    function onShow() {
+      router.push("/inbox/help#shortcuts");
+    }
+    document.addEventListener("orange:show-shortcuts", onShow);
+    return () => document.removeEventListener("orange:show-shortcuts", onShow);
   }, [router]);
 
   // Reset the selection when the route changes — selection-by-index is only

@@ -36,6 +36,7 @@ export function buildSettingsSections({
     { id: "labels", label: "Labels" },
     { id: "rules", label: "Rules" },
     { id: "inbox-layouts", label: "Inbox layouts" },
+    { id: "inbox", label: "Inbox" },
     { id: "blocked-senders", label: "Blocked senders" },
     { id: "sending", label: "Sending" },
     { id: "notifications", label: "Notifications" },

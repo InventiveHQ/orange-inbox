@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import {
   countAssignedToUser,
+  countRecentAutoArchived,
   listAssignedToUser,
   listDomainsForUser,
   listDueFollowups,
@@ -31,6 +32,8 @@ import { listInboxLayouts } from "@/lib/inbox-layouts";
 import { getUserPreferences } from "@/lib/preferences";
 import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
+import AutoArchiveDigest from "@/components/AutoArchiveDigest";
+import TriageDeck from "@/components/TriageDeck";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
 import { DismissedThreadsProvider } from "@/components/DismissedThreadsProvider";
@@ -401,6 +404,13 @@ export default async function InboxLayout({
   ) : null;
   const initialContactsMailbox = readMailboxParamFromHeaders(headerStore);
 
+  // Auto-archive digest (0055). Only meaningful on the unified inbox and only
+  // for users who opted in — skip the extra count query otherwise. 24h window.
+  const autoArchivedDigestCount =
+    effectiveScope === "all" && prefs.auto_archive_marketing
+      ? await countRecentAutoArchived(user.id, 24 * 60 * 60)
+      : 0;
+
   const listContent = isFullPage ? null : (
     <>
       <header className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2">
@@ -417,11 +427,14 @@ export default async function InboxLayout({
       ) : showResolvedAssignments ? (
         <ResolvedAssignmentsList items={resolvedAssignments} />
       ) : (
-        <ThreadList
-          threads={threads}
-          scope={effectiveScope}
-          showDomain={effectiveScope === "all"}
-        />
+        <>
+          <AutoArchiveDigest count={autoArchivedDigestCount} />
+          <ThreadList
+            threads={threads}
+            scope={effectiveScope}
+            showDomain={effectiveScope === "all"}
+          />
+        </>
       )}
     </>
   );
@@ -438,6 +451,7 @@ export default async function InboxLayout({
         <AppBadgeSync />
         <KeyboardShortcuts />
         <CommandPaletteShortcut />
+        <TriageDeck />
         <SectionDrawerWrap
           mode={
             calendarMode

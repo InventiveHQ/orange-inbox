@@ -92,6 +92,11 @@ export interface ThreadIndexUpsert {
   //                muted/blocked threads stay archived on new activity)
   //   undefined  — leave the existing archived value alone (no caller today)
   forceArchived?: boolean;
+  // Opt-in auto-archive (0055). When set, stamps threads_index.auto_archived_at
+  // on INSERT so the digest banner can count "filed in the last day" and the
+  // UI can offer undo. Only ever passed for new marketing/quiet threads, which
+  // always take the INSERT branch — so we don't touch it in the conflict UPDATE.
+  autoArchivedAt?: number;
 }
 
 export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise<void> {
@@ -110,8 +115,8 @@ export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise
           last_message_at, message_count, unread_count,
           archived, starred,
           last_message_id, last_subject, last_from_addr, last_from_name, last_snippet,
-          created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+          created_at, auto_archived_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (thread_id) DO UPDATE SET
          last_message_at  = MAX(threads_index.last_message_at, excluded.last_message_at),
          message_count    = threads_index.message_count + 1,
@@ -126,7 +131,7 @@ export async function upsertThreadIndex(env: Env, p: ThreadIndexUpsert): Promise
       p.threadId, p.mailboxId, p.mailDbId, p.subjectNormalized,
       p.lastMessageAt, p.unreadDelta, insertArchived,
       p.lastMessageId, p.lastSubject, p.lastFromAddr, p.lastFromName, p.lastSnippet,
-      created,
+      created, p.autoArchivedAt ?? null,
       p.unreadDelta,
     )
     .run();

@@ -15,6 +15,7 @@ import ReplySplitButton from "./ReplySplitButton";
 import RelativeTime from "./RelativeTime";
 import ThreadActions from "./ThreadActions";
 import ThreadNotes from "./ThreadNotes";
+import ThreadSummary from "./ThreadSummary";
 import MessageHtmlFrame from "./MessageHtmlFrame";
 import MessageMenu from "./MessageMenu";
 import UnsubscribeButton from "./UnsubscribeButton";
@@ -50,6 +51,12 @@ export default function ThreadView({
   const { thread, messages } = detail;
   const subject = messages[0]?.subject || thread.subject_normalized;
   const lastInbound = [...messages].reverse().find(m => m.direction === "inbound");
+  // Only attempt a summary for threads where one earns its keep — a multi-
+  // message conversation, or a single long message. Short single notes are
+  // already their own summary, so we skip the fetch entirely. Mirrors the
+  // server-side guard in getThreadSummary.
+  const worthSummarising =
+    messages.length > 1 || (messages[0]?.text_body?.length ?? 0) >= 600;
 
   return (
     <article className="flex-1 overflow-y-auto">
@@ -183,6 +190,8 @@ export default function ThreadView({
           })()}
         </div>
       </header>
+
+      {worthSummarising && <ThreadSummary threadId={thread.id} />}
 
       {thread.muted === 1 && (
         <div className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50 px-4 py-2 sm:px-6 text-xs text-neutral-600 dark:text-neutral-400">

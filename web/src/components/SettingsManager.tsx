@@ -185,6 +185,9 @@ export default function SettingsManager({
             />
           </div>
           <div data-settings-section>
+            <InboxSection id="inbox" />
+          </div>
+          <div data-settings-section>
             <BlockedSendersSection id="blocked-senders" />
           </div>
           <div data-settings-section>
@@ -402,6 +405,97 @@ function ProfileSection({ id }: { id: string }) {
         <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
           {isPending && <span>Saving…</span>}
           {!isPending && savedAt && <span>Saved</span>}
+          {error && <span className="text-red-600">{error}</span>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Inbox automation (#auto-archive). Today this is the opt-in auto-archive of
+// the marketing/no-action lane; future inbox-side automation toggles can join
+// it here. Off by default — the email-worker reads the saved preference and
+// files new (marketing & !action) threads straight to archived on arrival.
+function InboxSection({ id }: { id: string }) {
+  const [autoArchive, setAutoArchive] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startSaveTransition] = useTransition();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/me/preferences");
+        if (cancelled || !res.ok) {
+          setLoaded(true);
+          return;
+        }
+        const j = (await res.json()) as {
+          preferences: { auto_archive_marketing?: boolean };
+        };
+        if (!cancelled) {
+          setAutoArchive(!!j.preferences.auto_archive_marketing);
+          setLoaded(true);
+        }
+      } catch {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function change(next: boolean) {
+    setError(null);
+    setAutoArchive(next);
+    startSaveTransition(async () => {
+      const res = await fetch("/api/me/preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ auto_archive_marketing: next }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(b.error ?? `Save failed (${res.status})`);
+        // Roll back the optimistic flip so the toggle matches server truth.
+        setAutoArchive(!next);
+        return;
+      }
+      setSavedAt(Date.now());
+    });
+  }
+
+  return (
+    <section id={id} className="scroll-mt-4">
+      <SectionHeader
+        title="Inbox"
+        description="How new mail is triaged before you see it."
+      />
+      <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-4">
+        <label className="flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={autoArchive}
+            onChange={e => change(e.target.checked)}
+            disabled={!loaded || pending}
+            className="mt-0.5"
+          />
+          <span className="flex-1">
+            <span className="font-medium">Auto-archive newsletters &amp; promotions</span>
+            <span className="mt-1 block text-xs text-neutral-500">
+              When on, brand-new threads classified as marketing with no action needed (the &ldquo;Newsletters&rdquo; lane) skip the inbox and go straight to Archive — no unread badge, no notification. Receipts and verifications that still want a click (the &ldquo;Bulk action&rdquo; lane) are left alone.
+            </span>
+            <span className="mt-1 block text-xs text-neutral-500">
+              Nothing is deleted: archived mail stays searchable and shows up under <span className="font-medium">Archived</span>. Only applies to mailboxes you own.
+            </span>
+          </span>
+        </label>
+        <div className="mt-2 text-xs text-neutral-500 flex items-center gap-2">
+          {pending && <span>Saving…</span>}
+          {!pending && savedAt && <span>Saved</span>}
           {error && <span className="text-red-600">{error}</span>}
         </div>
       </div>

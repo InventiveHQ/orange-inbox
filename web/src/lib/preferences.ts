@@ -17,6 +17,10 @@ export interface UserPreferences {
   // compose modals start with the toggle on. The toggle itself still lives
   // per-message — the user can override either way before hitting Send.
   default_track_opens: boolean;
+  // 0055: opt-in auto-archive of the marketing/no-action lane. When true, new
+  // inbound threads classified (marketing & !action) for mailboxes this user
+  // owns are filed straight to archived on ingest (email-worker reads this).
+  auto_archive_marketing: boolean;
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -24,6 +28,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   accent_hex: "#f97316",
   density: "comfortable",
   default_track_opens: false,
+  auto_archive_marketing: false,
 };
 
 interface PreferencesRow {
@@ -31,6 +36,7 @@ interface PreferencesRow {
   accent_hex: string;
   density: string | null;
   default_track_opens: number | null;
+  auto_archive_marketing: number | null;
 }
 
 // Returns defaults if no row exists for the user yet — the table is sparsely
@@ -38,7 +44,7 @@ interface PreferencesRow {
 export async function getUserPreferences(userId: string): Promise<UserPreferences> {
   const row = await getDb()
     .prepare(
-      "SELECT theme, accent_hex, density, default_track_opens FROM user_preferences WHERE user_id = ?",
+      "SELECT theme, accent_hex, density, default_track_opens, auto_archive_marketing FROM user_preferences WHERE user_id = ?",
     )
     .bind(userId)
     .first<PreferencesRow>();
@@ -48,6 +54,7 @@ export async function getUserPreferences(userId: string): Promise<UserPreference
     accent_hex: normaliseHex(row.accent_hex) ?? DEFAULT_PREFERENCES.accent_hex,
     density: normaliseDensity(row.density),
     default_track_opens: row.default_track_opens === 1,
+    auto_archive_marketing: row.auto_archive_marketing === 1,
   };
 }
 
@@ -56,6 +63,7 @@ export interface PreferencesPatch {
   accent_hex?: string;
   density?: Density;
   default_track_opens?: boolean;
+  auto_archive_marketing?: boolean;
 }
 
 // Upsert-shaped: merge the patch over current values, then INSERT or UPDATE.
@@ -83,19 +91,31 @@ export async function updateUserPreferences(
     if (typeof patch.default_track_opens !== "boolean") return null;
     next.default_track_opens = patch.default_track_opens;
   }
+  if (patch.auto_archive_marketing !== undefined) {
+    if (typeof patch.auto_archive_marketing !== "boolean") return null;
+    next.auto_archive_marketing = patch.auto_archive_marketing;
+  }
 
   await getDb()
     .prepare(
-      `INSERT INTO user_preferences (user_id, theme, accent_hex, density, default_track_opens, updated_at)
-       VALUES (?, ?, ?, ?, ?, unixepoch())
+      `INSERT INTO user_preferences (user_id, theme, accent_hex, density, default_track_opens, auto_archive_marketing, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, unixepoch())
        ON CONFLICT(user_id) DO UPDATE SET
          theme = excluded.theme,
          accent_hex = excluded.accent_hex,
          density = excluded.density,
          default_track_opens = excluded.default_track_opens,
+         auto_archive_marketing = excluded.auto_archive_marketing,
          updated_at = excluded.updated_at`,
     )
-    .bind(userId, next.theme, next.accent_hex, next.density, next.default_track_opens ? 1 : 0)
+    .bind(
+      userId,
+      next.theme,
+      next.accent_hex,
+      next.density,
+      next.default_track_opens ? 1 : 0,
+      next.auto_archive_marketing ? 1 : 0,
+    )
     .run();
   return next;
 }
@@ -183,8 +203,10 @@ export function decodePreferencesCookie(raw: string | undefined): UserPreference
       accent_hex: accent,
       density,
       // Cookie only carries theme + accent + density (SSR no-flash chrome);
-      // track-opens default isn't needed for first paint — composer fetches it.
+      // track-opens and auto-archive defaults aren't needed for first paint —
+      // the composer / settings fetch them from /api/me/preferences.
       default_track_opens: DEFAULT_PREFERENCES.default_track_opens,
+      auto_archive_marketing: DEFAULT_PREFERENCES.auto_archive_marketing,
     };
   } catch {
     return null;
