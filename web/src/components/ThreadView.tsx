@@ -16,6 +16,7 @@ import RelativeTime from "./RelativeTime";
 import ThreadActions from "./ThreadActions";
 import ThreadNotes from "./ThreadNotes";
 import ThreadSummary from "./ThreadSummary";
+import AddToCalendarButton from "./AddToCalendarButton";
 import MessageHtmlFrame from "./MessageHtmlFrame";
 import MessageMenu from "./MessageMenu";
 import UnsubscribeButton from "./UnsubscribeButton";
@@ -154,6 +155,7 @@ export default function ThreadView({
             }
           />
           <ApplyLabelButton threadId={thread.id} />
+          <AddToCalendarButton threadId={thread.id} subject={subject} />
           {lastInbound && thread.user_role !== "reader" && (() => {
             const originalTo = parseAddrs(lastInbound.to_json).map(a => a.addr);
             const originalCc = lastInbound.cc_json

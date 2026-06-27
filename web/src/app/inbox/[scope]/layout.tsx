@@ -34,6 +34,7 @@ import Sidebar from "@/components/Sidebar";
 import ThreadList from "@/components/ThreadList";
 import AutoArchiveDigest from "@/components/AutoArchiveDigest";
 import TriageDeck from "@/components/TriageDeck";
+import EventComposerProvider from "@/components/EventComposerProvider";
 import DraftsList from "@/components/DraftsList";
 import ComposeProvider from "@/components/ComposeProvider";
 import { DismissedThreadsProvider } from "@/components/DismissedThreadsProvider";
@@ -452,6 +453,7 @@ export default async function InboxLayout({
         <KeyboardShortcuts />
         <CommandPaletteShortcut />
         <TriageDeck />
+        <EventComposerProvider>
         <SectionDrawerWrap
           mode={
             calendarMode
@@ -484,6 +486,7 @@ export default async function InboxLayout({
             main={children}
           />
         </SectionDrawerWrap>
+        </EventComposerProvider>
         </DismissedThreadsProvider>
       </ComposeProvider>
     </ToastProvider>

@@ -24,12 +24,17 @@ import {
 
 interface Props {
   event: CalendarEvent | null; // null = create new
-  // For new events: prefill start/end/all-day from a click on the grid.
-  // Ignored when `event` is non-null (edit mode uses the row's values).
+  // For new events: prefill start/end/all-day from a click on the grid, plus
+  // optional title/location/description so callers like "add to calendar from
+  // an email" can seed the form. Ignored when `event` is non-null (edit mode
+  // uses the row's values).
   defaults?: {
     startsAt?: number;
     endsAt?: number;
     allDay?: boolean;
+    summary?: string;
+    location?: string;
+    description?: string;
   };
   // Calendars the user can post to (#78). Personal is always present;
   // mailbox calendars come from the API. Pre-existing callers (none today)
@@ -117,9 +122,11 @@ export default function CalendarEventForm({
     event?.ends_at ?? defaults?.endsAt ?? (event ? null : initialStartSec + 3600);
   const initialAllDay = event ? event.all_day === 1 : !!defaults?.allDay;
 
-  const [summary, setSummary] = useState(event?.summary ?? "");
-  const [location, setLocation] = useState(event?.location ?? "");
-  const [description, setDescription] = useState(event?.description ?? "");
+  const [summary, setSummary] = useState(event?.summary ?? defaults?.summary ?? "");
+  const [location, setLocation] = useState(event?.location ?? defaults?.location ?? "");
+  const [description, setDescription] = useState(
+    event?.description ?? defaults?.description ?? "",
+  );
   const [allDay, setAllDay] = useState(initialAllDay);
   // Edit mode preserves the row's calendar attribution; create mode picks
   // from the prop (typically the sidebar's current scope, defaulting to

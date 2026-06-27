@@ -175,6 +175,7 @@ function KeyboardShortcutsSection() {
             <ShortcutRow keys={["l"]} desc="Apply label" />
             <ShortcutRow keys={["r"]} desc="Reply" />
             <ShortcutRow keys={["c"]} desc="Compose" />
+            <ShortcutRow keys={["t"]} desc="Add to calendar" />
             <ShortcutRow keys={["?"]} desc="Show this section" />
           </ul>
         </div>

@@ -229,6 +229,12 @@ export default function KeyboardShortcuts() {
           clickAction("compose");
           e.preventDefault();
           return;
+        case "t":
+          // Add to calendar — extract a date from the open thread and open a
+          // prefilled event composer (data-action="add-event" in ThreadView).
+          clickAction("add-event");
+          e.preventDefault();
+          return;
         case "/":
           focusSearch();
           e.preventDefault();
